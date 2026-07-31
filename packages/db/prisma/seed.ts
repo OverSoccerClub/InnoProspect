@@ -238,7 +238,12 @@ async function seedCities(populationByIbgeCode: Map<string, number>) {
 async function seedAdmin() {
   console.log('\n[4/4] Garantindo usuário admin...');
 
-  const email = process.env.ADMIN_EMAIL?.trim() || 'admin@innoprospect.local';
+  // `.toLowerCase()` é OBRIGATÓRIO aqui, não estilo: o `authorize` de
+  // apps/web/src/lib/auth.ts normaliza com `.trim().toLowerCase()` antes do
+  // findUnique. Gravar "Admin@Empresa.com" e procurar "admin@empresa.com" faz
+  // o login falhar para sempre, com a senha certa, sem mensagem que ajude —
+  // o Auth.js só devolve CredentialsSignin genérico.
+  const email = (process.env.ADMIN_EMAIL?.trim() || 'admin@innoprospect.local').toLowerCase();
   const existing = await prisma.user.findUnique({ where: { email } });
 
   if (existing) {
