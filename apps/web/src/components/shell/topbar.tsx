@@ -4,14 +4,14 @@ import { useRouter } from 'next/navigation';
 import { LogOut } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { mockLogout } from '@/lib/auth-client';
+import { logout } from '@/lib/auth-client';
 import { MobileNav } from './mobile-nav';
 
 export function Topbar() {
   const router = useRouter();
 
-  function handleLogout() {
-    mockLogout();
+  async function handleLogout() {
+    await logout();
     router.push('/login');
   }
 

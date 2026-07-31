@@ -32,15 +32,48 @@ Postgres nem Redis subiram. **Nenhum lead real foi coletado até agora.**
 
 1. **Subir Postgres + Redis** — bloqueado: Docker não instalado. Ver "Decisões em aberto".
 2. **Rodar `db:migrate` + `db:seed`** contra banco vivo (a migração nunca foi aplicada de fato).
-3. **Trocar o mock da Lyra pelo backend real:** `NEXT_PUBLIC_USE_MOCKS=false` e, em
-   `lib/auth-client.ts`, trocar o `login()` por
-   `signIn('credentials', { email, password, redirect: false })` — **não** usar
-   fetch cru para `/api/auth/callback/credentials` (o NextAuth exige csrfToken).
+3. ~~Trocar o mock da Lyra pelo backend real~~ — **feito em 2026-07-31.**
+   `login()` e `logout()` agora usam `signIn`/`signOut` do `next-auth/react`.
+   Falta apenas garantir `NEXT_PUBLIC_USE_MOCKS=false` no ambiente (o
+   `apps/web/Dockerfile` já define isso).
 4. **Preencher `.env.local`**: hoje só tem as variáveis do painel de missões.
    Faltam `DATABASE_URL`, `REDIS_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`.
 5. **Íris (item 1.7)** — e2e "criar busca → ver leads". Só faz sentido depois do passo 1.
 6. **Critério de aceite ainda não verificado:** buscar "clínica odontológica" em
    Campinas-SP retornar ≥ 30 leads com nome e telefone em < 3 minutos, sem duplicatas.
+
+---
+
+## Auditoria de segurança (Órion, 2026-07-31)
+
+Veredito inicial: **NÃO PODE IR AO AR**. Os dois bloqueios foram corrigidos no
+mesmo dia:
+
+- ✅ **Next.js 15.1.4 → 15.5.22** — a 15.1.4 tem a CVE-2025-29927 (bypass de
+  autorização do middleware via header `x-middleware-subrequest`), corrigida a
+  partir da 15.2.3. Impacto era limitado porque `api-handler.ts` revalida a
+  sessão dentro de cada rota, independente do middleware — mas o bypass do
+  redirect de login era real e trivial.
+- ✅ **Login e logout quebrados em produção** — `auth-client.ts` fazia POST cru
+  para `/api/auth/callback/credentials` sem csrfToken (o Auth.js v5 exige) e
+  ainda devolvia `{ ok: true }` sem olhar o status da resposta, ou seja,
+  reportava sucesso com senha errada. O logout limpava só o cookie de mock e
+  deixava a sessão real de pé. Ambos passaram a usar `signIn`/`signOut`.
+
+Dívidas aceitas conscientemente para a Fase 1 (não bloqueiam, mas têm dono):
+
+| Item | Quando |
+|---|---|
+| Sem rate limit no login (só mitigação de timing attack) | Fase 5 — **decidir se aceita expor o domínio público antes disso** |
+| Sem headers de segurança (CSP, X-Frame-Options, Referrer-Policy) | Fase 5.2 |
+| `--shamefully-hoist` nos Dockerfiles (perde isolamento estrito do pnpm) | aceito; só afeta imagem de runtime |
+| `next-auth` em beta (`5.0.0-beta.32`) | monitorar |
+| `pnpm audit` nunca rodou (sem rede na sessão do Órion) | rodar no primeiro ambiente com rede |
+
+**Bloqueio de LGPD para a Fase 3:** não existe canal de opt-out
+(`POST /api/v1/optouts`, `/descadastro/:token`). Hoje o risco é baixo porque
+nenhuma mensagem é enviada — mas **nenhum disparo pode ser habilitado antes
+disso existir**. É o "portão inegociável" da §6.7 da arquitetura.
 
 ---
 

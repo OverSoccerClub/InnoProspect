@@ -1,5 +1,6 @@
+import { signIn, signOut } from 'next-auth/react';
+
 import { USE_MOCKS } from '@/lib/config';
-import { ApiRequestError } from '@/lib/fetcher';
 import { mockDelay } from '@/mocks/utils';
 
 export type LoginInput = { email: string; password: string };
@@ -8,10 +9,14 @@ export type LoginResult = { ok: true } | { ok: false; message: string };
 const MOCK_SESSION_COOKIE = 'inno_mock_session';
 
 /**
- * Cliente de login. Hoje fala só com o mock local — a Fase 1 não inclui o
- * fluxo real de Auth.js (ARQUITETURA.md §1.4, `lib/auth.ts`), que é do Vega
- * (hash de senha, Prisma Adapter, cookie httpOnly). Quando isso existir,
- * troque o corpo por `signIn('credentials', input)` do next-auth/react.
+ * Cliente de login.
+ *
+ * Em produção usa `signIn('credentials')` do next-auth/react — e NÃO um POST
+ * cru para `/api/auth/callback/credentials`. O Auth.js v5 exige um csrfToken
+ * nesse POST; sem ele o login falha SEMPRE. O `signIn` busca o token e monta
+ * a requisição sozinho. (Achado do Órion na auditoria pré-deploy: a versão
+ * anterior deste arquivo fazia o fetch cru e, pior, devolvia `{ ok: true }`
+ * sem nunca olhar o status da resposta — reportava sucesso em senha errada.)
  */
 export async function login({ email, password }: LoginInput): Promise<LoginResult> {
   if (USE_MOCKS) {
@@ -29,17 +34,18 @@ export async function login({ email, password }: LoginInput): Promise<LoginResul
   }
 
   try {
-    // TODO(Vega): apontar para o endpoint real de credenciais do Auth.js
-    // quando `apps/web/src/app/api/auth/[...nextauth]/route.ts` existir.
-    await fetch('/api/auth/callback/credentials', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
+    // `redirect: false` para tratarmos o erro na própria tela, em vez de o
+    // Auth.js navegar para /api/auth/error e perder o formulário preenchido.
+    const result = await signIn('credentials', { email, password, redirect: false });
+
+    // Credencial inválida NÃO lança — volta em `result.error`. Tratar o
+    // retorno é o que impede o bug antigo de dar "entrou" com senha errada.
+    if (!result || result.error) {
+      return { ok: false, message: 'E-mail ou senha incorretos.' };
+    }
     return { ok: true };
-  } catch (err) {
-    if (err instanceof ApiRequestError) return { ok: false, message: err.message };
+  } catch {
+    // Só cai aqui em falha de rede ou indisponibilidade do servidor de auth.
     return { ok: false, message: 'Não foi possível entrar. Tente novamente.' };
   }
 }
@@ -49,7 +55,16 @@ export function hasMockSession(): boolean {
   return document.cookie.split('; ').some((c) => c.startsWith(`${MOCK_SESSION_COOKIE}=`));
 }
 
-export function mockLogout(): void {
-  if (typeof document === 'undefined') return;
-  document.cookie = `${MOCK_SESSION_COOKIE}=; path=/; max-age=0`;
+/**
+ * Encerra a sessão. Em produção precisa ser o `signOut` do Auth.js: limpar o
+ * cookie de mock não derruba a sessão real, e o usuário continuaria logado
+ * depois de clicar em "Sair" (o middleware o mandaria de volta ao dashboard).
+ */
+export async function logout(): Promise<void> {
+  if (USE_MOCKS) {
+    if (typeof document === 'undefined') return;
+    document.cookie = `${MOCK_SESSION_COOKIE}=; path=/; max-age=0`;
+    return;
+  }
+  await signOut({ redirect: false });
 }
