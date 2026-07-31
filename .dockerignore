@@ -1,0 +1,53 @@
+# .dockerignore (raiz do monorepo)
+#
+# Build context de TODOS os Dockerfiles do projeto é a raiz (apps/web/Dockerfile
+# e apps/worker/Dockerfile fazem `COPY <caminho>` relativo a ela). Este arquivo
+# vale para qualquer `docker build` disparado a partir daqui.
+#
+# Requisito de SEGURANÇA (não é otimização): segredos e a memória dos agentes
+# NUNCA podem entrar no contexto de build, porque um COPY largo demais (ou um
+# `.next/standalone` que arrasta `.env` da raiz) poderia vazar isso pra dentro
+# de uma camada da imagem — mesmo que a camada seja removida depois, ela fica
+# no histórico da imagem e é recuperável.
+
+# --- Segredos — NUNCA entram no contexto de build ---
+.env
+.env.*
+!.env.example
+
+# --- Dependências e artefatos de build locais (o build acontece DENTRO do container) ---
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+out
+**/out
+.turbo
+**/.turbo
+*.tsbuildinfo
+**/*.tsbuildinfo
+coverage
+**/coverage
+playwright-report
+test-results
+
+# --- Metadados que não pertencem à imagem ---
+# (nenhum Dockerfile daqui faz `COPY . .` — todos copiam caminhos explícitos —
+# então isto é defesa em profundidade, não uma dependência real do build.)
+.git
+.gitignore
+.dockerignore
+.claude
+**/.claude
+*.md
+
+# --- SO / editor ---
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
+# --- Prisma Client gerado localmente (é gerado DENTRO do container, nunca copiado do host) ---
+packages/db/src/generated

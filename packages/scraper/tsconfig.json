@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../config/tsconfig.json",
+  "compilerOptions": {
+    // Necessário só para o tipo dos callbacks de `page.evaluate(...)`
+    // (código que roda DENTRO do browser, ex.: engine/navigate.ts,
+    // antidetect/humanize.ts) — o resto deste pacote roda em Node e não usa
+    // API de DOM fora desses callbacks.
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src"]
+}

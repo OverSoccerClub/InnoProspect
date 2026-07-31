@@ -1,0 +1,57 @@
+# infra/docker-compose.dev.yml
+#
+# Apenas as DEPENDÊNCIAS de infra para rodar apps/web e apps/worker localmente
+# via `pnpm dev` (fora de container). NÃO containeriza a aplicação — isso é
+# tratado depois em infra/docker-compose.yml (Fase 3.3 / Fase 5.5).
+#
+# Uso:
+#   docker compose -f infra/docker-compose.dev.yml up -d
+#   docker compose -f infra/docker-compose.dev.yml down          # mantém os volumes
+#   docker compose -f infra/docker-compose.dev.yml down -v       # apaga os dados também
+#
+# Credenciais abaixo são fixas de DESENVOLVIMENTO LOCAL (não são secrets reais,
+# não saem da máquina do dev). Nunca reutilizar em produção.
+
+name: innoprospect
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: innoprospect-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: innoprospect
+      POSTGRES_PASSWORD: innoprospect
+      POSTGRES_DB: innoprospect
+    ports:
+      - "5432:5432"
+    volumes:
+      - innoprospect_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U innoprospect -d innoprospect"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: innoprospect-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - innoprospect_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+
+volumes:
+  innoprospect_postgres_data:
+    name: innoprospect_postgres_data
+  innoprospect_redis_data:
+    name: innoprospect_redis_data

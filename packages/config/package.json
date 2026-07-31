@@ -1,0 +1,7 @@
+{
+  "name": "@inno/config",
+  "private": true,
+  "version": "0.0.0",
+  "description": "tsconfig e eslint-preset compartilhados entre apps e packages do monorepo.",
+  "type": "module"
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+    // "DOM" aqui não é porque o worker roda no browser (não roda) — é porque
+    // `tsc` inclui no MESMO programa de compilação os arquivos-fonte de
+    // `@inno/scraper` importados (sem project references/composite, o
+    // `moduleResolution: Bundler` resolve direto pro `.ts` fonte). Alguns
+    // arquivos de lá (`engine/navigate.ts`, `antidetect/humanize.ts`) usam
+    // tipos de DOM só nos callbacks que rodam DENTRO do browser via
+    // `page.evaluate(...)` — sem isso, `tsc --noEmit` aqui falha em arquivo
+    // que o worker nem executa diretamente. Ver o mesmo comentário em
+    // packages/scraper/tsconfig.json.
+    "lib": ["ES2022", "DOM"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "noEmit": true
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,6 @@
+- [InnoProspect — visão geral do projeto](project_innoprospect.md) — stack, arquitetura CONTRATO, fases, papéis
+- [Monorepo pnpm+Turborepo — decisões do esqueleto](infra_monorepo_scaffold.md) — layout real, versões pinadas, scripts
+- [Armadilhas TS/ESLint no monorepo](feedback_ts_eslint_monorepo_gotchas.md) — rootDir herdado, lint type-aware em configs
+- [infra/docker-compose.dev.yml — deps de dev](infra_docker_compose_dev.md) — postgres+redis local, sem Docker validado na máquina
+- [Deploy EasyPanel (Fase 5.5)](infra_deploy_easypanel.md) — Dockerfiles, compose completo, DEPLOY.md, pendências (backup, alertas)
+- [Bug pnpm hoisting em Docker monorepo](feedback_pnpm_docker_monorepo_gotchas.md) — node_modules não consolida na raiz sem --shamefully-hoist

@@ -1,0 +1,417 @@
+// ─────────────────────────────────────────────────────────────────────────
+// InnoProspect — packages/db/prisma/schema.prisma
+// Dono: Cronos. Escopo: FASE 1 apenas (ver ARQUITETURA.md §8).
+//
+// Fora de escopo aqui (fases futuras, NÃO adicionar sem alinhar com Nova):
+//   Fase 2 — ScraperHealthEvent, RawCapture, campos extra de origem LGPD
+//   Fase 3 — WhatsAppInstance, InstanceDailyStat, MessageTemplate, Message, OptOut
+//   Fase 4 — Campaign, CampaignTarget
+//
+// Convenções deste schema:
+//   - Todo id de entidade "operacional" usa cuid2 (@default(cuid(2))), conforme
+//     ARQUITETURA.md §4.0 ("IDs: cuid2 string").
+//   - Tabelas de referência geográfica (Uf, City) usam CHAVE NATURAL como PK
+//     (sigla / ibgeCode) — são importadas do IBGE, imutáveis, e é assim que o
+//     resto do domínio já as referencia (dedupeKey usa cityIbgeCode).
+//   - Todo model que referencia uma UF guarda o campo como `uf String` (2
+//     chars, FK para Uf.sigla) — nome de campo uniforme em Lead/SearchJob/City.
+// ─────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider        = "prisma-client-js"
+  // Output explícito (não o node_modules/.prisma/client implícito, deprecado
+  // nas versões recentes do Prisma) — caminho já previsto no .gitignore raiz.
+  output          = "../src/generated/client"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  // pg_trgm habilita os índices GIN de busca textual (ILIKE) em Lead.name/address.
+  // map: obrigatório — sem ele o Prisma gera `CREATE EXTENSION "pgTrgm"` (nome
+  // errado; a extensão real do Postgres é `pg_trgm`, com underscore).
+  extensions = [pgTrgm(map: "pg_trgm")]
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ENUMS
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Papel do operador. Poucos valores, uso interno — sem enum de permissões
+/// granulares no MVP (over-engineering para 1-20 usuários, ver ARQUITETURA §0).
+enum UserRole {
+  admin
+  operator
+}
+
+/// CONTRATO — ARQUITETURA.md §4. Não pode divergir do enum usado por Vega/Lyra.
+/// Transições validadas em packages/core/leads/status.ts (não aqui, não no front).
+enum LeadStatus {
+  new
+  validated
+  contacted
+  responded
+  negotiating
+  won
+  discarded
+}
+
+/// Não é CONTRATO de API (não aparece em §4 como enum fechado), mas é um
+/// domínio fechado e conhecido hoje. `unknown` cobre telefone ausente/não
+/// classificado — nunca null aqui, para simplificar filtro `phoneType=`.
+enum PhoneType {
+  mobile
+  landline
+  unknown
+}
+
+/// CONTRATO — ARQUITETURA.md §4.2 / SearchJobSummary.status.
+enum SearchJobStatus {
+  queued
+  running
+  paused
+  completed
+  failed
+  cancelled
+}
+
+/// CONTRATO — ARQUITETURA.md §4.2 / SearchTaskItem.status.
+enum SearchTaskStatus {
+  pending
+  running
+  done
+  failed
+  skipped
+}
+
+/// Único valor hoje (scraping próprio do Google Maps, ARQUITETURA §7.1).
+/// Modelado como enum (não string livre) porque `source.type` é uma garantia
+/// jurídica (LGPD §7.2) — quem gravar um Lead é obrigado a escolher de uma
+/// lista fechada, não pode digitar qualquer coisa. Novas fontes = nova entrada
+/// aqui, decisão que passa por Nova/Cronos, não por um `string` solto.
+enum LeadSourceType {
+  google_maps_scrape
+}
+
+/// Quem gerou a entrada na timeline do Lead.
+enum LeadActivityActor {
+  user
+  system
+  lead
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// IDENTIDADE
+// ═══════════════════════════════════════════════════════════════════════
+
+model User {
+  id           String   @id @default(cuid(2))
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         UserRole @default(operator)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  searchJobsCreated SearchJob[]    @relation("SearchJobCreatedBy")
+  leadsOwned        Lead[]         @relation("LeadOwner")
+  leadActivities    LeadActivity[] @relation("LeadActivityActorUser")
+
+  @@map("users")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// GEOGRAFIA — populada 1x pelo seed a partir do IBGE. O scraper NUNCA
+// chama o IBGE em runtime (ARQUITETURA §5.2). PK natural em ambas.
+// ═══════════════════════════════════════════════════════════════════════
+
+model Uf {
+  /// Sigla de 2 letras maiúsculas (ex.: "SP"). Chave natural — nunca muda.
+  sigla  String @id @db.VarChar(2)
+  nome   String
+  regiao String
+
+  cities     City[]
+  searchJobs SearchJob[]
+  leads      Lead[]
+
+  @@map("ufs")
+}
+
+model City {
+  /// Código IBGE de 7 dígitos. Chave natural — é o identificador estável
+  /// usado em toda parte do domínio (inclusive na composição de Lead.dedupeKey:
+  /// `slug(name) + ':' + cityIbgeCode`). String, não Int, para preservar
+  /// zero à esquerda e casar 1:1 com a API do IBGE.
+  ibgeCode String @id @db.VarChar(7)
+  name     String
+  slug     String
+
+  uf    String @db.VarChar(2)
+  ufRef Uf     @relation(fields: [uf], references: [sigla], onDelete: Restrict)
+
+  /// Usada para priorizar o fanout de SearchTask (população decrescente —
+  /// ARQUITETURA §5.2, "o usuário vê leads das capitais primeiro"). 0 =
+  /// população desconhecida/não informada pelo IBGE para o município.
+  population Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  searchTasks SearchTask[]
+  leads       Lead[]
+
+  // Um slug só precisa ser único dentro da mesma UF (duas UFs podem ter
+  // município com nome/slug igual). Suporta o lookup usado no formulário
+  // de busca e na composição do dedupeKey.
+  @@unique([uf, slug])
+  // Suporta o fanout: "todos os municípios pendentes desta UF, maior
+  // população primeiro" sem sort em memória.
+  @@index([uf, population])
+  @@map("cities")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// BUSCA — SearchJob é a intenção do usuário; SearchTask é a unidade real
+// de trabalho (1 nicho × 1 município). Ver ARQUITETURA §3.1 e §5.2.
+// ═══════════════════════════════════════════════════════════════════════
+
+model SearchJob {
+  id    String @id @default(cuid(2))
+  name  String
+  niche String
+
+  uf    String @db.VarChar(2)
+  ufRef Uf     @relation(fields: [uf], references: [sigla], onDelete: Restrict)
+
+  /// Filtro pedido na criação (POST /searches `cityIbgeCodes`). Vazio = fanout
+  /// para TODOS os municípios da UF. Guardado só para auditoria/replay — quem
+  /// manda no fanout de verdade são as SearchTask já criadas.
+  cityIbgeCodes     String[] @default([])
+  maxResultsPerCity Int      @default(120)
+
+  status SearchJobStatus @default(queued)
+
+  /// Contadores agregados, ATUALIZADOS INCREMENTALMENTE por quem fecha cada
+  /// SearchTask (não recalcular por COUNT(*) a cada leitura — a tela de
+  /// progresso faz polling de 3s, ARQUITETURA §4.2, e SP sozinho tem 645
+  /// tasks). Ver PARA O PRÓXIMO no handoff: Vega faz isso dentro da mesma
+  /// transação que fecha a SearchTask.
+  totalTasks  Int @default(0)
+  doneTasks   Int @default(0)
+  failedTasks Int @default(0)
+  leadsFound  Int @default(0)
+  leadsNew    Int @default(0)
+
+  errorMessage String?
+
+  createdById String
+  createdBy   User   @relation("SearchJobCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  tasks SearchTask[]
+  leads Lead[]
+
+  // Suporta GET /searches?status=&... ordenado por createdAt desc (default).
+  @@index([status, createdAt])
+  // Suporta GET /searches?uf=&...
+  @@index([uf, createdAt])
+  // Suporta a checagem de "já existe busca ativa para este niche+uf"
+  // (409 SEARCH_ALREADY_RUNNING). A UNICIDADE de verdade (parcial, só
+  // queued|running) é criada via SQL manual na migração — ver comentário
+  // em prisma/migrations/*/migration.sql — porque Prisma não expressa
+  // índice parcial (WHERE) no schema DSL. Este índice normal aqui só
+  // acelera a leitura que a API faz antes de decidir.
+  @@index([niche, uf, status])
+  @@map("search_jobs")
+}
+
+model SearchTask {
+  id String @id @default(cuid(2))
+
+  searchJobId String
+  searchJob   SearchJob @relation(fields: [searchJobId], references: [id], onDelete: Cascade)
+
+  cityId String
+  city   City   @relation(fields: [cityId], references: [ibgeCode], onDelete: Restrict)
+
+  /// String de consulta materializada — CONTRATO ARQUITETURA §5.2:
+  /// `${niche} em ${city.name}, ${uf}`.
+  queryString String
+
+  status SearchTaskStatus @default(pending)
+
+  /// Snapshot de City.population NO MOMENTO da criação da task. Existe para
+  /// o worker consumir a fila em `ORDER BY priority DESC` sem precisar dar
+  /// join em City a cada dequeue — a fila é lida com muito mais frequência
+  /// do que a população de uma cidade muda (nunca, na prática).
+  priority Int @default(0)
+
+  attempt     Int @default(0)
+  maxAttempts Int @default(3)
+
+  resultCount  Int     @default(0)
+  errorCode    String?
+  errorMessage String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  leads Lead[]
+
+  // 1 job nunca gera 2 tasks para o mesmo município.
+  @@unique([searchJobId, cityId])
+  // Progresso de um job específico: GET /searches/:id lista tasks por status.
+  @@index([searchJobId, status])
+  // Consumo da fila pelo worker: próxima task pendente, maior população primeiro.
+  @@index([status, priority])
+  @@map("search_tasks")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// LEAD — núcleo do CRM. Ver ARQUITETURA §3.2 (regras de domínio, CONTRATO).
+//
+// ⚠️ O model está dividido em 3 blocos visuais de propósito:
+//   1) MÁQUINA   — escrito pelo upsert de (re-)scraping. Idempotente.
+//   2) ORIGEM    — LGPD, obrigatório na criação, IMUTÁVEL depois (nunca há
+//                  um `update` destes campos em nenhum fluxo, nem humano).
+//   3) HUMANO    — só operador (PATCH /leads/:id) ou funil automatizado de
+//                  mensageria (Fase 3+) escrevem aqui. O upsert de scraping
+//                  NUNCA toca nestes campos.
+// ═══════════════════════════════════════════════════════════════════════
+
+model Lead {
+  id String @id @default(cuid(2))
+
+  // ── 1) MÁQUINA — upsert de scraping atualiza estes campos + lastSeenAt ──
+  name      String
+  phoneRaw  String?
+  phoneE164 String?
+  phoneType PhoneType @default(unknown)
+  address   String?
+
+  cityId String
+  city   City   @relation(fields: [cityId], references: [ibgeCode], onDelete: Restrict)
+
+  /// Denormalizado de city.uf, gravado 1x na criação (a cidade de um Lead
+  /// nunca muda). Existe para o filtro `GET /leads?uf=` (ARQUITETURA §4.3)
+  /// não exigir join com City em toda listagem — Lead é a tabela grande do
+  /// sistema (10k-500k linhas no ano 1), City tem ~5.5k linhas fixas.
+  uf    String @db.VarChar(2)
+  ufRef Uf     @relation(fields: [uf], references: [sigla], onDelete: Restrict)
+
+  website     String?
+  category    String?
+  rating      Float?
+  reviewCount Int?
+  latitude    Float?
+  longitude   Float?
+
+  /// cid/place id do Google Maps, quando capturado. Maior precedência na
+  /// composição do dedupeKey (ver abaixo).
+  externalRef String?
+
+  /// CHAVE DE DEDUPLICAÇÃO — materializada (coluna real, não expressão em
+  /// query) e ÚNICA. Precedência (packages/core/leads/dedupe.ts é a fonte
+  /// da regra, este schema só garante a unicidade):
+  ///   1. externalRef (cid/place id), quando capturado;
+  ///   2. senão phoneE164 normalizado;
+  ///   3. senão slug(name) + ':' + cityIbgeCode.
+  /// Upsert por dedupeKey em re-scraping: atualiza rating/reviewCount/
+  /// lastSeenAt. NUNCA sobrescreve status/notes/tags/ownerId (bloco HUMANO
+  /// abaixo) — dado humano vence dado de máquina, sem exceção.
+  dedupeKey String @unique
+
+  firstSeenAt DateTime @default(now())
+  /// Atualizado explicitamente a cada re-scraping que bate no dedupeKey.
+  /// NÃO usar @updatedAt aqui — uma edição humana (PATCH de notes/status)
+  /// não deve mexer em lastSeenAt, que é sinal de "o scraper viu de novo".
+  lastSeenAt  DateTime @default(now())
+
+  // ── 2) ORIGEM — LGPD (ARQUITETURA §7.2). Obrigatório na criação, IMUTÁVEL ──
+  sourceType  LeadSourceType @default(google_maps_scrape)
+  /// URL exata da listagem/ficha de onde veio o dado.
+  sourceUrl   String
+  /// Ex.: "clínica odontológica em Campinas, SP" — a query efetivamente usada.
+  sourceQuery String
+  collectedAt DateTime
+
+  searchJobId String
+  searchJob   SearchJob @relation(fields: [searchJobId], references: [id], onDelete: Restrict)
+
+  /// Qual SearchTask (1 nicho × 1 município) originou este Lead. Opcional só
+  /// porque tecnicamente uma futura fonte de import manual poderia não ter
+  /// task — no fluxo de scraping (único hoje) é sempre preenchido.
+  searchTaskId String?
+  searchTask   SearchTask? @relation(fields: [searchTaskId], references: [id], onDelete: SetNull)
+
+  /// Qual motor de extração gerou o dado (`SearchEngine.id`, ARQUITETURA §5.1
+  /// — hoje só "playwright-maps"). String livre (não enum) porque o motor
+  /// `maps-pb` (Fase 6) chega sem migração de schema.
+  engineId String
+
+  // ── 3) HUMANO — operador (PATCH) ou funil de mensageria escrevem aqui ──
+  status LeadStatus @default(new)
+  tags   String[]   @default([])
+  notes  String?
+
+  ownerId String?
+  owner   User?   @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  activities LeadActivity[]
+
+  // Unicidade da dedupe key — a garantia mais importante deste model.
+  // (@unique acima já cria o índice; listado aqui só como documentação.)
+  // Filtro/join principal da ficha do lead e de busca por telefone.
+  @@index([phoneE164])
+  // Listagem padrão (GET /leads, sort default createdAt:desc) + filtro por status.
+  @@index([status, createdAt])
+  // GET /leads?cityIbgeCode= e fanout reverso (leads de um município).
+  @@index([cityId])
+  // GET /leads?searchJobId= (ficha "quem essa busca trouxe").
+  @@index([searchJobId])
+  // GET /leads?uf= — facet de alto uso na tela de leads (ARQUITETURA §4.3).
+  @@index([uf])
+  // Busca textual (`q=`) via ILIKE em GET /leads — pg_trgm dá índice GIN
+  // trigram, que ILIKE '%termo%' consegue usar (btree normal não serve para
+  // busca por substring no meio da string).
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([address(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@map("leads")
+}
+
+/// Timeline auditável do Lead. Append-only — nunca há UPDATE em uma linha
+/// já criada, só INSERT. Por isso não tem `updatedAt`.
+model LeadActivity {
+  id String @id @default(cuid(2))
+
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// Vocabulário aberto de propósito (não enum fechado): 'status_changed',
+  /// 'note_added', 'message_sent', 'opt_out', etc. — cresce nas fases 3/4 sem
+  /// exigir migração de schema. `payload` carrega o detalhe estruturado de
+  /// cada tipo.
+  type    String
+  payload Json?
+
+  actor       LeadActivityActor
+  actorUserId String?
+  actorUser   User?             @relation("LeadActivityActorUser", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  // Timeline de um lead, mais recente primeiro.
+  @@index([leadId, createdAt])
+  @@map("lead_activities")
+}

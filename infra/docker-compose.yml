@@ -1,0 +1,181 @@
+# infra/docker-compose.yml
+#
+# Stack COMPLETA (web + worker + postgres + redis + Evolution API) para rodar
+# o InnoProspect inteiro containerizado — referência e uso local futuro.
+#
+# NÃO substitui `infra/docker-compose.dev.yml` (que só sobe postgres+redis
+# para rodar `pnpm dev` fora de container, no dia a dia de desenvolvimento).
+# Use este arquivo quando quiser validar a stack real de produção (as mesmas
+# imagens que vão pro EasyPanel) numa máquina com Docker disponível.
+#
+# NÃO é o mecanismo de deploy do EasyPanel — lá cada serviço é criado
+# individualmente pela UI (um container por serviço, cada um com seu próprio
+# Dockerfile/imagem/env), não por este compose. Ver DEPLOY.md para o passo a
+# passo real do EasyPanel.
+#
+# Uso:
+#   cp ../.env.example ../.env.local   # preencha os valores
+#   docker compose -f infra/docker-compose.yml --env-file ../.env.local up -d --build
+#   docker compose -f infra/docker-compose.yml down          # mantém volumes
+#   docker compose -f infra/docker-compose.yml down -v        # apaga dados também
+#
+# ⚠️ NÃO validado com `docker compose up` nesta máquina (sem Docker instalado).
+# Sintaxe revisada manualmente — rodar `docker compose -f infra/docker-compose.yml
+# config` antes de confiar 100%.
+#
+# ⚠️ As variáveis de ambiente nativas da Evolution API (AUTHENTICATION_*,
+# DATABASE_*, CACHE_REDIS_*, WEBHOOK_*) abaixo são um PONTO DE PARTIDA
+# plausível para a v2.x — a Evolution API muda essas chaves com frequência
+# entre versões. CONFIRA contra a documentação oficial da versão que você de
+# fato pinar (`EVOLUTION_API_IMAGE` abaixo) antes de subir em produção — eu
+# não tenho como validar isso sem acesso à internet nesta sessão.
+
+name: innoprospect
+
+networks:
+  # Evolution API, Postgres e Redis não são expostos publicamente — só o
+  # `web` e o `worker` falam com eles, dentro da rede Docker interna
+  # (ARQUITETURA.md §9.1 R4 / Fase 3.3: "rede interna não exposta").
+  internal:
+    internal: true
+  public:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: innoprospect-postgres
+    restart: unless-stopped
+    networks: [internal]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-innoprospect}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-innoprospect}
+    volumes:
+      - innoprospect_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-innoprospect} -d ${POSTGRES_DB:-innoprospect}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: innoprospect-redis
+    restart: unless-stopped
+    networks: [internal]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - innoprospect_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+
+  evolution:
+    # Versão PINADA de propósito (ARQUITETURA.md §9.1, risco R4) — nunca
+    # `latest`. Confirme o número atual em https://hub.docker.com/r/atendai/evolution-api
+    # antes de fixar aqui; este valor é um ponto de partida, não verificado
+    # nesta sessão.
+    image: ${EVOLUTION_API_IMAGE:-atendai/evolution-api:v2.2.3}
+    container_name: innoprospect-evolution
+    restart: unless-stopped
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SERVER_URL: ${EVOLUTION_SERVER_URL:?defina EVOLUTION_SERVER_URL (URL pública/interna deste serviço)}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      # ⚠️ Banco "evolution" SEPARADO do banco "innoprospect" do app, no MESMO
+      # Postgres — o container `postgres` acima só cria o DB declarado em
+      # POSTGRES_DB (innoprospect) na primeira subida. Crie o banco "evolution"
+      # manualmente antes do primeiro `up` (`docker exec -it innoprospect-postgres
+      # psql -U <user> -c "CREATE DATABASE evolution;"`) ou troque por um
+      # segundo serviço Postgres dedicado — mais simples de operar no
+      # EasyPanel (ver DEPLOY.md).
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-innoprospect}:${POSTGRES_PASSWORD}@postgres:5432/evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/1
+      CACHE_REDIS_SAVE_INSTANCES: "true"
+      WEBHOOK_GLOBAL_ENABLED: "false" # webhook é configurado POR INSTÂNCIA (apps/worker cria via API), não global
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - innoprospect_evolution_instances:/evolution/instances
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  web:
+    build:
+      context: .. # raiz do monorepo — obrigatório (ver apps/web/Dockerfile)
+      dockerfile: apps/web/Dockerfile
+    image: innoprospect-web
+    container_name: innoprospect-web
+    restart: unless-stopped
+    networks: [internal, public]
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../.env.local
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-innoprospect}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-innoprospect}
+      REDIS_URL: redis://redis:6379
+      EVOLUTION_API_URL: http://evolution:8080
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    build:
+      context: .. # raiz do monorepo — obrigatório (ver apps/worker/Dockerfile)
+      dockerfile: apps/worker/Dockerfile
+    image: innoprospect-worker
+    container_name: innoprospect-worker
+    restart: unless-stopped
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      evolution:
+        condition: service_started
+    env_file:
+      - ../.env.local
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-innoprospect}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-innoprospect}
+      REDIS_URL: redis://redis:6379
+      EVOLUTION_API_URL: http://evolution:8080
+    # Sem healthcheck HTTP (worker não expõe porta) — a saúde real dele é
+    # medida pelo `ScraperHealthEvent`/canário (ARQUITETURA §5.6, Fase 2) e
+    # pelo monitoramento pós-deploy do Vulcano (Fase 5.6), não por um
+    # healthcheck de container aqui.
+
+volumes:
+  innoprospect_postgres_data:
+    name: innoprospect_postgres_data
+  innoprospect_redis_data:
+    name: innoprospect_redis_data
+  innoprospect_evolution_instances:
+    name: innoprospect_evolution_instances

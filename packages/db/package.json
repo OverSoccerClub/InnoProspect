@@ -1,0 +1,36 @@
+{
+  "name": "@inno/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Prisma schema, migrações e client singleton do InnoProspect. Dono: Cronos.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:diff:empty": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script",
+    "migrate:status": "prisma migrate status",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "typecheck": "tsc --noEmit"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "bcryptjs": "^2.4.3"
+  },
+  "devDependencies": {
+    "prisma": "6.19.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.2",
+    "@types/bcryptjs": "^2.4.6"
+  }
+}

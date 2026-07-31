@@ -1,0 +1,28 @@
+{
+  "name": "worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup src/index.ts --format esm --target node20 --clean --sourcemap",
+    "start": "node dist/index.js",
+    "lint": "eslint . --config ../../eslint.config.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@inno/core": "workspace:^",
+    "@inno/db": "workspace:^",
+    "@inno/scraper": "workspace:^",
+    "bullmq": "^5.34.4",
+    "ioredis": "^5.4.2",
+    "pino": "^9.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "pino-pretty": "^13.0.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

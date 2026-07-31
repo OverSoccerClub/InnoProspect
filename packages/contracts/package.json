@@ -1,0 +1,25 @@
+{
+  "name": "@inno/contracts",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Fonte única da verdade de contratos de API (Zod + tipos). Ver ARQUITETURA.md §4.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "eslint . --config ../../eslint.config.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@inno/db": "workspace:^",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

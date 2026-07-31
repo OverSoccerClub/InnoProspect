@@ -1,0 +1,22 @@
+# apps/worker/.dockerignore
+#
+# O build "de verdade" do apps/worker usa `apps/worker/Dockerfile` com
+# CONTEXTO NA RAIZ do monorepo (ver DEPLOY.md) — nesse caso é o
+# `.dockerignore` da raiz que vale, não este. Este arquivo é uma rede de
+# segurança para o caso de alguém rodar `docker build` de dentro de
+# `apps/worker/` (build local avulso/errado) — os mesmos segredos e
+# artefatos não podem vazar nesse cenário também.
+
+.env
+.env.*
+!.env.example
+
+node_modules
+dist
+.turbo
+*.tsbuildinfo
+coverage
+
+.git
+.claude
+*.md

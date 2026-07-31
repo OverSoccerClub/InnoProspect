@@ -1,0 +1,36 @@
+# --- Segredos (NUNCA versionar) ---
+.env
+.env.*
+!.env.example
+
+# --- Dependências ---
+node_modules/
+.pnpm-store/
+
+# --- Build ---
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+.turbo/
+
+# --- Prisma ---
+packages/db/src/generated/
+
+# --- Testes ---
+coverage/
+playwright-report/
+test-results/
+
+# --- Runtime / logs ---
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# --- SO / editor ---
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/

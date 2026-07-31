@@ -1,0 +1,22 @@
+# apps/web/.dockerignore
+#
+# O build "de verdade" do apps/web usa `apps/web/Dockerfile` com CONTEXTO NA
+# RAIZ do monorepo (ver DEPLOY.md) — nesse caso é o `.dockerignore` da raiz
+# que vale, não este. Este arquivo é uma rede de segurança para o caso de
+# alguém rodar `docker build` de dentro de `apps/web/` (build local
+# avulso/errado) — os mesmos segredos e artefatos não podem vazar nesse
+# cenário também.
+
+.env
+.env.*
+!.env.example
+
+node_modules
+.next
+.turbo
+*.tsbuildinfo
+coverage
+
+.git
+.claude
+*.md
