@@ -8,6 +8,16 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // O lint NÃO roda dentro do `next build`. A imagem Docker instala só o que
+  // `--filter web...` alcança, e o `apps/web/eslint.config.mjs` importa o
+  // `eslint.config.js` da RAIZ, que por sua vez importa `packages/config` —
+  // pacote fora desse filtro. Resultado no build da imagem:
+  // "⨯ ESLint: Cannot find module '/app/eslint.config.js'".
+  // Copiar a cadeia de config de lint para dentro da imagem de produção seria
+  // carregar peso morto: o lint já é obrigatório via `pnpm lint` no monorepo
+  // (turbo, 6/6), que é onde ele pertence. A checagem de TIPOS continua
+  // ligada no build — essa sim precisa rodar aqui.
+  eslint: { ignoreDuringBuilds: true },
   // Necessário para o Dockerfile (apps/web/Dockerfile): gera `.next/standalone`
   // com server.js + só os node_modules que a árvore de import realmente usa
   // (tracing), em vez de copiar o node_modules inteiro pra imagem final.

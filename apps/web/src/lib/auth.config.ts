@@ -26,7 +26,18 @@ export const authConfig: NextAuthConfig = {
   providers: [],
   callbacks: {
     async jwt({ token, user }) {
-      if (user) {
+      // `user` aqui é `User | AdapterUser`, e `User.id` é OPCIONAL no tipo base
+      // do Auth.js — a união dá `string | undefined`, que não cabe no
+      // `JWT.uid: string` declarado em types/next-auth.d.ts. Guardar por
+      // `user?.id` é o correto de qualquer forma: sem id não faz sentido
+      // carimbar meia sessão no token.
+      //
+      // Isto compilava na máquina de desenvolvimento e quebrava no Docker: com
+      // o layout estrito do pnpm, `@auth/core` não resolve a partir de
+      // apps/web e a augmentação de `@auth/core/jwt` não funde (token.uid fica
+      // solto); no build da imagem, instalado com `--shamefully-hoist`, ela
+      // funde e o erro aparece. O bug sempre existiu — o hoist só o revelou.
+      if (user?.id) {
         token.uid = user.id;
         token.role = user.role;
       }

@@ -113,3 +113,13 @@ disso existir**. É o "portão inegociável" da §6.7 da arquitetura.
 - **Bugs que só aparecem em `next build`**, nunca em `dev`/`typecheck`: componente
   passado como prop de Server → Client Component; middleware Edge + Prisma;
   imports `.js` de pacotes internos sem `transpilePackages` + `extensionAlias`.
+- **`@auth/core` é dependência DIRETA de `apps/web` de propósito.** Não remova
+  por parecer redundante (o `next-auth` já o traz transitivamente). Sem ele
+  declarado, o layout estrito do pnpm impede a resolução a partir de
+  `apps/web`, a augmentação `declare module '@auth/core/jwt'` não funde, e
+  erros de tipo em `auth.config.ts` passam despercebidos localmente para só
+  explodir no build da imagem Docker — que instala com `--shamefully-hoist` e
+  resolve. Foi exatamente assim que o primeiro deploy no EasyPanel quebrou.
+- **O lint não roda dentro do `next build`** (`eslint.ignoreDuringBuilds`). Ele é
+  obrigatório via `pnpm lint` no monorepo. A checagem de tipos continua ligada
+  no build.
