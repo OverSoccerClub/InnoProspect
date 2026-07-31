@@ -244,12 +244,38 @@ async function seedAdmin() {
   // o login falhar para sempre, com a senha certa, sem mensagem que ajude —
   // o Auth.js só devolve CredentialsSignin genérico.
   const email = (process.env.ADMIN_EMAIL?.trim() || 'admin@innoprospect.local').toLowerCase();
+  // Ecoar o e-mail EFETIVAMENTE usado: quando o login falha com o
+  // CredentialsSignin genérico, esta linha do log é o jeito mais rápido de
+  // ver que o ADMIN_EMAIL do ambiente não é o que você pensava.
+  console.log(`  → e-mail do admin (normalizado): ${email}`);
+
   const existing = await prisma.user.findUnique({ where: { email } });
 
   if (existing) {
     // Idempotência de verdade: NUNCA resetamos a senha de um admin que já
     // existe só porque o seed rodou de novo (ex.: deploy). Isso trocaria a
     // senha por baixo do usuário sem aviso.
+    //
+    // A exceção é explícita e temporária: ADMIN_RESET_PASSWORD=true, para
+    // recuperar acesso sem terminal no container. Quem liga isso está pedindo
+    // a troca conscientemente — e o log manda desligar depois.
+    const forceReset = process.env.ADMIN_RESET_PASSWORD?.trim() === 'true';
+    const newPassword = process.env.ADMIN_PASSWORD?.trim();
+
+    if (forceReset && newPassword) {
+      await prisma.user.update({
+        where: { email },
+        data: { passwordHash: await bcrypt.hash(newPassword, 12) },
+      });
+      console.log(`  ✔ Admin "${email}" já existia — senha REDEFINIDA (ADMIN_RESET_PASSWORD=true).`);
+      console.log('  ⚠ REMOVA ADMIN_RESET_PASSWORD das envs agora que o acesso foi recuperado.');
+      return;
+    }
+
+    if (forceReset && !newPassword) {
+      console.log('  ⚠ ADMIN_RESET_PASSWORD=true mas ADMIN_PASSWORD está vazio — nada foi alterado.');
+    }
+
     console.log(`  ✔ Admin "${email}" já existe — não tocado.`);
     return;
   }

@@ -153,9 +153,30 @@ Mesmas de `DATABASE_URL`, `REDIS_URL`, `LOG_LEVEL`, `EVOLUTION_API_URL`, `EVOLUT
 3. Faça o **build e deploy do `web`**. Acompanhe o log de build — é aqui que qualquer problema de `pnpm install`/`prisma generate`/`next build` no monorepo vai aparecer primeiro. Acompanhe o log de **boot** logo em seguida — é aqui que `prisma migrate deploy` roda pela primeira vez contra o banco vivo (a migração nunca foi aplicada de verdade até hoje, conforme `PROGRESSO.md`). Se falhar, o container não sobe — leia o erro, é sempre mais claro que adivinhar.
 4. Confirme `GET https://<seu-domínio>/api/v1/health` → `200 {"status":"ok","database":"ok",...}`.
 5. Rode o seed **uma vez**, manualmente (não faz parte do boot automático — só a migração é automática, de propósito, para não recriar o admin a cada deploy): abra um shell no container `web` pelo EasyPanel (working dir `/app`) e rode:
+   **Opção A (recomendada — não exige terminal no container):** defina
+   `RUN_SEED=true` nas envs do serviço `web` e faça o redeploy. O seed roda no
+   boot e o resultado aparece no **log de deploy**, incluindo a linha
+   `→ e-mail do admin (normalizado): ...`, que é o jeito mais rápido de
+   descobrir por que um login falha. **Remova a variável depois** — o seed é
+   idempotente, mas deixar ligado só custa tempo de boot.
+
+   **Opção B (terminal no container, working dir `/app`):**
    ```sh
-   cd packages/db && node ../../node_modules/.bin/tsx prisma/seed.ts
+   node node_modules/tsx/dist/cli.mjs packages/db/prisma/seed.ts
    ```
+   ⚠️ Use este caminho, **não** `node node_modules/.bin/tsx`: o `.bin/tsx` é um
+   shell script wrapper e o `node` não consegue executá-lo — falha de um jeito
+   confuso ou simplesmente não faz nada.
+
+   Ferramenta de manutenção do admin (mesmo working dir):
+   ```sh
+   node node_modules/tsx/dist/cli.mjs packages/db/prisma/admin.ts list
+   node node_modules/tsx/dist/cli.mjs packages/db/prisma/admin.ts set-password email@dominio.com SenhaForte
+   ```
+
+   **Perdeu a senha do admin e não tem terminal?** Defina `ADMIN_PASSWORD` com
+   a senha nova, `ADMIN_RESET_PASSWORD=true` e `RUN_SEED=true`, e faça o
+   redeploy. Depois **remova `ADMIN_RESET_PASSWORD`**.
    (roda `seed.ts` diretamente via `tsx`, em vez de `prisma db seed` — evita a ambiguidade de qual `package.json` o CLI do Prisma vai procurar o campo `prisma.seed` num monorepo com o working dir em `/app`, não em `packages/db`. `node_modules/.bin/tsx` existe na raiz porque o `apps/web/Dockerfile` instala com `--shamefully-hoist` — se o binário não estiver lá, rode `find / -name tsx -type f 2>/dev/null` dentro do container para localizar.)
 6. Faça login em `/login` com o `ADMIN_EMAIL`/`ADMIN_PASSWORD` do seed.
 7. Suba o **worker**. Acompanhe o log — ele deve conectar no Redis e ficar ouvindo a fila `scrape:search` sem erro.
