@@ -1,0 +1,10 @@
+# Mantém `apps/web/public/` versionado mesmo vazio.
+#
+# NÃO APAGUE sem antes ajustar `apps/web/Dockerfile`: o estágio `runner` faz
+# `COPY --from=builder /app/apps/web/public ./apps/web/public`, e o Docker
+# falha o build inteiro se a origem não existir ("not found"). Como o Git não
+# versiona diretório vazio, sem este arquivo a pasta some do clone que o
+# EasyPanel baixa e a imagem não é montada.
+#
+# Quando houver assets de verdade aqui (favicon, logo, og-image), este arquivo
+# pode sair.

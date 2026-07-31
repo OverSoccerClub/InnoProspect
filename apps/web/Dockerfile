@@ -122,6 +122,9 @@ RUN addgroup --system --gid 1001 nodejs \
 # aninhado em apps/web/ por causa do outputFileTracingRoot (ver cabeçalho).
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
+# ⚠️ Depende de `apps/web/public/` EXISTIR no repositório. O Docker aborta o
+# build ("not found") se a origem do COPY não existe, e o Git não versiona
+# diretório vazio — por isso há um `.gitkeep` lá. Não remova um sem o outro.
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public
 
 # Entrypoint (migrate deploy fail-fast + start do server).
