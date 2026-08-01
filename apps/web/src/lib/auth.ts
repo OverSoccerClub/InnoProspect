@@ -18,6 +18,7 @@ import Credentials from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { prisma } from '@inno/db';
 import { authConfig } from './auth.config';
+import { logger } from './logger';
 
 // Hash bcrypt de uma senha aleatória fixa — nunca corresponde a senha real,
 // só existe para gastar o mesmo tempo de CPU que um bcrypt.compare de
@@ -40,14 +41,37 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const user = await prisma.user.findUnique({ where: { email } });
 
+        // Diagnóstico NO LOG DO SERVIDOR apenas. A resposta ao navegador
+        // continua sendo o `CredentialsSignin` genérico do Auth.js — quem está
+        // do lado de fora não consegue descobrir quais contas existem.
+        //
+        // Por que isto existe: sem separar os dois casos, um login que falha é
+        // indistinguível de "não rodei o seed", "errei o e-mail" e "errei a
+        // senha". Isso custou várias rodadas de deploy às cegas. Nunca logamos
+        // a senha nem o hash — só o e-mail tentado, que é o que permite ver na
+        // hora um descasamento de maiúscula/minúscula ou de domínio.
         if (!user) {
           await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
+          logger.warn('auth.login.falhou', {
+            motivo: 'usuario_nao_encontrado',
+            emailTentado: email,
+            dica: 'Nenhum User com este e-mail. Rode o seed (RUN_SEED=true) ou confira o ADMIN_EMAIL.',
+          });
           return null;
         }
 
         const isValid = await bcrypt.compare(password, user.passwordHash);
-        if (!isValid) return null;
+        if (!isValid) {
+          logger.warn('auth.login.falhou', {
+            motivo: 'senha_incorreta',
+            emailTentado: email,
+            userId: user.id,
+            dica: 'O usuário existe e a senha não confere. Para redefinir: ADMIN_PASSWORD + ADMIN_RESET_PASSWORD=true + RUN_SEED=true.',
+          });
+          return null;
+        }
 
+        logger.info('auth.login.ok', { userId: user.id, role: user.role });
         return { id: user.id, email: user.email, name: user.name, role: user.role };
       },
     }),
