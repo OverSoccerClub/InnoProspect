@@ -1,0 +1,14 @@
+{
+  "event": "messages.upsert",
+  "instance": "vendas-01",
+  "data": {
+    "key": {
+      "id": "AAA111BBB222",
+      "remoteJid": "5521998887777@s.whatsapp.net",
+      "fromMe": false
+    },
+    "message": { "extendedTextMessage": { "text": "Quero sair da lista, obrigado" } },
+    "pushName": "Maria",
+    "messageTimestamp": 1735689650
+  }
+}

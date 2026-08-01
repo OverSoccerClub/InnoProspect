@@ -1,0 +1,5 @@
+{
+  "event": "messages.update",
+  "instance": "vendas-01",
+  "data": { "keyId": "3EB0C767D26A1D2F4B", "status": "DELIVERY_ACK" }
+}

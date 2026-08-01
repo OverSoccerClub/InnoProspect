@@ -1,0 +1,13 @@
+{
+  "event": "messages.upsert",
+  "instance": "vendas-01",
+  "data": {
+    "key": {
+      "id": "OUTBOUND-ECHO-1",
+      "remoteJid": "5511987654321@s.whatsapp.net",
+      "fromMe": true
+    },
+    "message": { "conversation": "Nossa mensagem enviada, ecoada de volta" },
+    "messageTimestamp": 1735689700
+  }
+}

@@ -17,6 +17,11 @@ Evolution API, fases futuras). Arquitetura fechada em `ARQUITETURA.md` — §2 e
 - `apps/web/src/lib/api-handler.ts`, `lib/auth.ts` + `lib/auth.config.ts`, `middleware.ts`: auth real
   Auth.js v5 + wrapper único de rota.
 
+**Meu escopo entregue (item 3.2 da Fase 3, 2026-08-01):** `packages/messaging` completo — cliente
+Evolution API + parser de webhook. Detalhe completo em [[convention-messaging-evolution-api]]. Ainda
+falta a rota real do webhook em `apps/web` e o dispatch worker (rodadas futuras, dependem do Cronos
+terminar `Message`/`OptOut`/`WhatsAppInstance` no schema).
+
 **Antes de mim:** `packages/db` (schema+seed, Cronos), `packages/contracts` (Zod, Nova/Cronos),
 `packages/core` (dedupe/phone/status/uf, já com `MACHINE_UPDATABLE_FIELDS` pronto), `packages/scraper`
 (engine Playwright completo, `runSearch`/`SearchEngine`), `apps/web` telas (Lyra, rodando em mock).
@@ -28,6 +33,7 @@ decisão já tomada. Nunca criar/editar nada em `app/(dashboard)/**`, `app/(auth
 nem `mocks/**` (território da Lyra) nem em `packages/db/prisma/schema.prisma` (território do Cronos) —
 se precisar mudar algo lá, relatar no handoff em vez de editar.
 
-Ver também [[convention-api-routes-fase1]] (padrões de rota/serviço estabelecidos) e
-[[bug-nextauth-edge-prisma-split]]/[[bug-nextjs-workspace-ts-source-imports]] (bugs de build
-corrigidos com causa raiz).
+Ver também [[convention-api-routes-fase1]] (padrões de rota/serviço estabelecidos),
+[[convention-messaging-evolution-api]] (cliente Evolution API + webhook parser) e
+[[bug-nextauth-edge-prisma-split]]/[[bug-nextjs-workspace-ts-source-imports]]/
+[[bug-vitest-fake-timers-retry-backoff]] (bugs corrigidos com causa raiz).

@@ -1,0 +1,10 @@
+{
+  "event": "qrcode.updated",
+  "instance": "vendas-01",
+  "data": {
+    "qrcode": {
+      "base64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/",
+      "code": "2@AbCdEfGh1234567890"
+    }
+  }
+}

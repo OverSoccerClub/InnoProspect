@@ -1,0 +1,5 @@
+{
+  "event": "connection.update",
+  "instance": "vendas-01",
+  "data": { "state": "open" }
+}

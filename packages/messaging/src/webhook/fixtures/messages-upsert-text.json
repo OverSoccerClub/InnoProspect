@@ -1,0 +1,14 @@
+{
+  "event": "messages.upsert",
+  "instance": "vendas-01",
+  "data": {
+    "key": {
+      "id": "3EB0C767D26A1D2F4B",
+      "remoteJid": "5511987654321@s.whatsapp.net",
+      "fromMe": false
+    },
+    "message": { "conversation": "Oi, gostaria de saber mais sobre o produto" },
+    "pushName": "João",
+    "messageTimestamp": 1735689600
+  }
+}

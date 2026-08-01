@@ -218,6 +218,13 @@ importers:
         version: 5.9.3
 
   packages/messaging:
+    dependencies:
+      '@inno/contracts':
+        specifier: workspace:^
+        version: link:../contracts
+      '@inno/core':
+        specifier: workspace:^
+        version: link:../core
     devDependencies:
       '@types/node':
         specifier: ^22.10.5
@@ -225,6 +232,9 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
 
   packages/scraper:
     dependencies:

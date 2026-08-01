@@ -1,0 +1,13 @@
+{
+  "event": "messages.upsert",
+  "instance": "vendas-01",
+  "data": {
+    "key": {
+      "id": "GROUP-MSG-1",
+      "remoteJid": "120363000000000000@g.us",
+      "fromMe": false
+    },
+    "message": { "conversation": "Mensagem num grupo, não é lead 1:1" },
+    "messageTimestamp": 1735689750
+  }
+}

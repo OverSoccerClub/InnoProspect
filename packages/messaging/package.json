@@ -2,7 +2,7 @@
   "name": "@inno/messaging",
   "private": true,
   "version": "0.0.0",
-  "description": "Todo o acoplamento com a Evolution API vive aqui. Ver ARQUITETURA.md §1.2/§4.8.",
+  "description": "Todo o acoplamento com a Evolution API vive aqui. Ver ARQUITETURA.md §1.2/§4.6/§4.8.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -10,10 +10,16 @@
   "types": "./src/index.ts",
   "scripts": {
     "lint": "eslint . --config ../../eslint.config.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "@inno/contracts": "workspace:^",
+    "@inno/core": "workspace:^"
   }
 }

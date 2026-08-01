@@ -2,3 +2,5 @@
 - [Convenções das rotas /api/v1 (Fase 1)](convention_api_routes_fase1.md) — api-handler, camadas, filas duplicadas web/worker, paginação, facets, claim atômico de task.
 - [Bug: Auth.js v5 + Prisma no middleware quebra build (Edge)](bug_nextauth_edge_prisma_split.md) — split auth.config.ts (Edge) / auth.ts (Node), gotcha de module augmentation do JWT.
 - [Bug: Next build não resolve pacotes internos .ts com imports .js](bug_nextjs_workspace_ts_source_imports.md) — precisa `transpilePackages` + `resolve.extensionAlias`.
+- [Convenções do packages/messaging (Evolution API)](convention_messaging_evolution_api.md) — superfície pública do EvolutionClient/parser de webhook, retry só em transiente, pendências não validadas.
+- [Bug: teste de retry/backoff com sleep real estoura timeout do vitest](bug_vitest_fake_timers_retry_backoff.md) — usar `vi.useFakeTimers()` + `runAllTimersAsync()` em testes ponta a ponta de retry.
