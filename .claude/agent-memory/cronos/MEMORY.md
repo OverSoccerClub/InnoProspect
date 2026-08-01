@@ -1,0 +1,2 @@
+- [Convenções do schema InnoProspect](schema-conventions.md) — cuid2, chaves naturais, enum parity com packages/contracts, migração via diff sem Postgres local.
+- [Cascade + contadores históricos (LGPD)](lgpd-cascade-vs-historical-counters.md) — padrão pra tabelas filhas de Lead com dado snapshotado: Cascade + contadores agregados no pai, nunca COUNT() puro nem SetNull.

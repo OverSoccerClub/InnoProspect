@@ -1,11 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────
 // InnoProspect — packages/db/prisma/schema.prisma
-// Dono: Cronos. Escopo: FASE 1 apenas (ver ARQUITETURA.md §8).
+// Dono: Cronos. Escopo: FASES 1-4 (ver ARQUITETURA.md §8).
 //
-// Fora de escopo aqui (fases futuras, NÃO adicionar sem alinhar com Nova):
-//   Fase 2 — ScraperHealthEvent, RawCapture, campos extra de origem LGPD
+// Migração 20260801120000_fases_2_3_4 acrescenta, de forma 100% ADITIVA
+// (nenhuma coluna de tabela existente foi alterada — só tabelas e enums
+// novos), os models de:
+//   Fase 2 — ScraperHealthEvent, RawCapture
 //   Fase 3 — WhatsAppInstance, InstanceDailyStat, MessageTemplate, Message, OptOut
-//   Fase 4 — Campaign, CampaignTarget
+//   Fase 4 — Campaign, CampaignInstance (join), CampaignTarget
+// Enums novos (Campaign*, Message*, WhatsAppInstance*, OptOutSource) espelham
+// packages/contracts/src/common.ts valor a valor — ver comentário em cada um.
 //
 // Convenções deste schema:
 //   - Todo id de entidade "operacional" usa cuid2 (@default(cuid(2))), conforme
@@ -101,6 +105,87 @@ enum LeadActivityActor {
   lead
 }
 
+/// CONTRATO — ARQUITETURA.md §4.5 / campaignStatusSchema (packages/contracts).
+/// `halted` é parada AUTOMÁTICA (kill switch — instância caiu/banida) e é
+/// DISTINTO de `paused` (ação humana). Não unificar: `resume` de `halted`
+/// exige `acknowledgeHalt: true`, de `paused` não exige nada (ARQUITETURA §6.6).
+enum CampaignStatus {
+  draft
+  scheduled
+  running
+  paused
+  completed
+  cancelled
+  halted
+}
+
+/// CONTRATO — ARQUITETURA.md §4.5 / campaignTargetStatusSchema.
+enum CampaignTargetStatus {
+  pending
+  sent
+  delivered
+  read
+  responded
+  failed
+  skipped
+}
+
+/// CONTRATO — ARQUITETURA.md §4.6, §4.8 / messageStatusSchema. Mapa fixo do
+/// status da Evolution API está em packages/contracts/src/webhook.contract.ts
+/// (EVOLUTION_MESSAGE_STATUS_MAP) — não duplicar a tabela aqui.
+enum MessageStatus {
+  queued
+  sent
+  delivered
+  read
+  failed
+}
+
+/// CONTRATO — ARQUITETURA.md §4.6 / messageDirectionSchema.
+enum MessageDirection {
+  outbound
+  inbound
+}
+
+/// CONTRATO — ARQUITETURA.md §4.6 / whatsAppInstanceStatusSchema. Note que
+/// `degraded` NÃO está aqui — é estado DERIVADO (instanceHealthSchema,
+/// packages/contracts), calculado combinando `status` + `WhatsAppInstance.
+/// isDegraded` na camada de API. Ver comentário no model WhatsAppInstance.
+enum WhatsAppInstanceStatus {
+  disconnected
+  connecting
+  qr_pending
+  connected
+  banned
+}
+
+/// CONTRATO — ARQUITETURA.md §4.7, §6.7 / optOutSourceSchema.
+enum OptOutSource {
+  reply
+  manual
+  public_link
+  request
+}
+
+/// Vocabulário fechado das 4 assertions de sanidade do scraper (ARQUITETURA
+/// §5.7, A1-A4). NÃO é CONTRATO de API — packages/contracts ainda não expõe
+/// isto em Zod (GET /api/v1/health devolve o evento como está, sem schema
+/// próprio publicado). Se Vega vier a publicar um contrato para isto, os
+/// valores aqui têm que bater 1:1, igual aos enums acima.
+enum ScraperHealthEventType {
+  zero_streak
+  fill_rate_name
+  fill_rate_phone
+  data_shape
+}
+
+/// Só 2 valores hoje porque é só isso que a tabela de assertions A1-A4 usa
+/// (ARQUITETURA §5.7). Mesma ressalva de "não é CONTRATO" do enum acima.
+enum ScraperHealthEventSeverity {
+  critical
+  high
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // IDENTIDADE
 // ═══════════════════════════════════════════════════════════════════════
@@ -117,6 +202,11 @@ model User {
   searchJobsCreated SearchJob[]    @relation("SearchJobCreatedBy")
   leadsOwned        Lead[]         @relation("LeadOwner")
   leadActivities    LeadActivity[] @relation("LeadActivityActorUser")
+
+  // Fases 3/4 — dono lógico das entidades operacionais que criar.
+  whatsAppInstancesCreated WhatsAppInstance[] @relation("WhatsAppInstanceCreatedBy")
+  messageTemplatesCreated  MessageTemplate[]  @relation("MessageTemplateCreatedBy")
+  campaignsCreated         Campaign[]         @relation("CampaignCreatedBy")
 
   @@map("users")
 }
@@ -264,7 +354,8 @@ model SearchTask {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  leads Lead[]
+  leads       Lead[]
+  rawCaptures RawCapture[]
 
   // 1 job nunca gera 2 tasks para o mesmo município.
   @@unique([searchJobId, cityId])
@@ -370,6 +461,14 @@ model Lead {
 
   activities LeadActivity[]
 
+  // Fases 3/4 — ver comentário de cada FK do lado de lá sobre onDelete.
+  // OptOut.leadId é opcional e SetNull (a chave de opt-out é o telefone,
+  // ARQUITETURA §3.2 regra 3 — sobrevive à exclusão do Lead).
+  campaignTargets CampaignTarget[]
+  messages        Message[]
+  optOuts         OptOut[]
+  rawCaptures     RawCapture[]
+
   // Unicidade da dedupe key — a garantia mais importante deste model.
   // (@unique acima já cria o índice; listado aqui só como documentação.)
   // Filtro/join principal da ficha do lead e de busca por telefone.
@@ -414,4 +513,500 @@ model LeadActivity {
   // Timeline de um lead, mais recente primeiro.
   @@index([leadId, createdAt])
   @@map("lead_activities")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FASE 2 — SAÚDE DO SCRAPER E EVIDÊNCIA BRUTA (ARQUITETURA §5.7, §7.5)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Registro das assertions de sanidade A1-A4 (ARQUITETURA §5.7) — o que
+/// alimenta o banner vermelho da UI e `GET /api/v1/health`. Nasce quando uma
+/// assertion dispara; `resolvedAt` é preenchido quando a condição volta ao
+/// normal (health-check.job decide isso, não é automático por tempo).
+model ScraperHealthEvent {
+  id String @id @default(cuid(2))
+
+  type     ScraperHealthEventType
+  severity ScraperHealthEventSeverity
+
+  /// Descrição da janela avaliada (ex.: "últimas 5 tasks concluídas", "50
+  /// leads mais recentes") — texto livre porque cada assertion mede uma
+  /// janela de formato diferente (contagem de tasks vs. contagem de leads).
+  window String
+
+  /// Nome da métrica avaliada (ex.: "resultCount", "name_fill_rate").
+  metric    String
+  value     Float
+  threshold Float
+
+  message String
+
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  // "Eventos ainda abertos" (resolvedAt IS NULL) é a query do banner de
+  // saúde — roda a cada carregamento do dashboard, precisa ser indexada.
+  @@index([resolvedAt, createdAt])
+  @@index([type, createdAt])
+  @@map("scraper_health_events")
+}
+
+/// Evidência bruta de 1 captura de scraping (RawBusiness/ScrapedBusiness tal
+/// como veio do extrator, ANTES de normalize()) — existe para depurar o
+/// extractor sem precisar refazer o scraping contra o Maps. EFÊMERO por
+/// desenho: `retention.job` apaga fisicamente após 7 dias (ARQUITETURA §7.5).
+/// Por isso NÃO tem `updatedAt` (nunca é editado, só criado e depois apagado).
+model RawCapture {
+  id String @id @default(cuid(2))
+
+  searchTaskId String
+  searchTask   SearchTask @relation(fields: [searchTaskId], references: [id], onDelete: Cascade)
+
+  /// Preenchido só quando a captura resultou de fato num Lead upsertado —
+  /// nem toda captura bruta vira Lead válido (ex.: falha de normalização,
+  /// nome vazio). Null não é erro, é "não virou lead".
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  /// Snapshot do objeto bruto capturado. Json (não colunas tipadas) de
+  /// propósito: é debug de curtíssima vida, não dado de domínio consultável.
+  rawData Json
+
+  sourceUrl String
+  engineId  String
+
+  createdAt DateTime @default(now())
+
+  @@index([searchTaskId])
+  @@index([leadId])
+  // Suporta o retention.job: `DELETE FROM raw_captures WHERE "createdAt" <
+  // now() - interval '7 days'` — sem este índice essa varredura diária vira
+  // sequential scan numa tabela que cresce a cada card capturado.
+  @@index([createdAt])
+  @@map("raw_captures")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FASE 3 — WHATSAPP: INSTÂNCIAS, TEMPLATES, MENSAGENS, OPT-OUT
+// (ARQUITETURA §3.1, §4.6-§4.8, §6.1-§6.7, §7)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Um número conectado via Evolution API. Carrega o estado de aquecimento
+/// (warmup) que sustenta o teto diário duro do worker (ARQUITETURA §6.2).
+model WhatsAppInstance {
+  id   String @id @default(cuid(2))
+  name String
+
+  /// Nome da instância dentro do container da Evolution API. Único: 1
+  /// instância Evolution = 1 WhatsAppInstance.
+  evolutionInstanceName String @unique
+
+  /// Segredo por instância GERADO POR NÓS, usado no path
+  /// `/api/webhooks/evolution/:instanceKey` (ARQUITETURA §4.8) — não é o
+  /// nome da instância nem o `EVOLUTION_API_KEY` global. É o índice que o
+  /// webhook consulta a CADA evento recebido para achar a instância; se não
+  /// bater, a rota devolve 404 (nunca 401 — não confirmar existência).
+  instanceKey String @unique
+
+  phoneNumber String?
+
+  status WhatsAppInstanceStatus @default(disconnected)
+
+  /// Setado pelo health-check.job quando taxa de falha/resposta indica
+  /// possível shadow-ban (ARQUITETURA §6.2, §6.6) — congela o warmup e tira
+  /// peso da instância na rotação (§6.5: peso 0,3). Distinto de `status`:
+  /// uma instância pode estar `connected` e `isDegraded=true` ao mesmo
+  /// tempo. `instanceHealthSchema` (packages/contracts: ok/warming/
+  /// degraded/blocked) é DERIVADO combinando este campo + `status` na API —
+  /// não existe coluna "health" 1:1 aqui, para não ter duas fontes de verdade.
+  isDegraded          Boolean @default(false)
+  /// Kill switch por falhas consecutivas (ARQUITETURA §6.6: "≥5 falhas de
+  /// envio consecutivas → degraded"). Zerado a cada envio bem-sucedido.
+  consecutiveFailures Int     @default(0)
+
+  /// Data em que o warmup começou a contar. `warmupDay` avança 1 POR DIA DE
+  /// CALENDÁRIO COM AO MENOS 1 ENVIO (ARQUITETURA §6.2) — não é
+  /// `now() - warmupStartedAt`, por isso o dia é persistido e avançado
+  /// explicitamente pelo `warmup-roll.job`, nunca calculado a partir da data.
+  warmupStartedAt DateTime?
+  warmupDay       Int       @default(1)
+  /// Não-nulo enquanto a taxa de resposta em 48h estiver < 2% com >=100
+  /// enviadas (ARQUITETURA §6.2) — enquanto congelado, warmup-roll.job NÃO
+  /// avança `warmupDay`.
+  warmupFrozenAt  DateTime?
+
+  /// Só pode REDUZIR o teto da tabela de warmup, nunca aumentar acima dele
+  /// (ARQUITETURA §6.2 — "o produto não deixa o usuário se sabotar"). Essa
+  /// regra é validada na camada de aplicação (packages/core), não é
+  /// expressável como CHECK constraint sem conhecer a tabela de warmup.
+  dailyLimitOverride Int?
+
+  lastConnectionAt DateTime?
+  lastErrorAt      DateTime?
+  lastErrorMessage String?
+
+  isActive Boolean @default(true)
+
+  createdById String
+  createdBy   User   @relation("WhatsAppInstanceCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dailyStats        InstanceDailyStat[]
+  messages          Message[]
+  campaignInstances CampaignInstance[]
+
+  // Volume desta tabela é dezenas de linhas (números de WhatsApp), não
+  // milhares — sem índice extra além da PK e dos @unique acima.
+  @@map("whatsapp_instances")
+}
+
+/// Contador diário por instância — fonte da quota de envio e do ramp-up de
+/// warmup (ARQUITETURA §4.6, §6.2). O worker faz upsert nesta linha a cada
+/// envio processado (sucesso ou falha).
+model InstanceDailyStat {
+  id String @id @default(cuid(2))
+
+  instanceId String
+  instance   WhatsAppInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  /// Dia (sem hora), no fuso APP_TIMEZONE — chave do contador. `@db.Date`
+  /// porque a granularidade de negócio é o dia, não o instante.
+  date DateTime @db.Date
+
+  sentCount      Int @default(0)
+  failedCount    Int @default(0)
+  respondedCount Int @default(0)
+  blockedCount   Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Requisito crítico (Cronos/Nova): é o que sustenta o teto diário e o
+  // ramp-up de warmup (ARQUITETURA §6.2) — o worker consulta/tranca esta
+  // linha a cada envio, então a unicidade TAMBÉM serve de índice de leitura.
+  @@unique([instanceId, date])
+  // Histórico de 30 dias em GET /whatsapp/instances/:id, mais recente primeiro.
+  @@index([instanceId, date])
+  @@map("instance_daily_stats")
+}
+
+/// Texto reutilizável com `{{variáveis}}` e spintax (ARQUITETURA §4.4, §6.4).
+/// Editar um template NÃO afeta campanha em andamento — o corpo é congelado
+/// em `Campaign.renderedTemplateSnapshot` no `start` (regra 5, §3.2).
+model MessageTemplate {
+  id   String @id @default(cuid(2))
+  name String
+  body String
+
+  /// Subset de TEMPLATE_ALLOWED_VARIABLES (packages/contracts) detectado no
+  /// corpo — denormalizado para a listagem não reprocessar regex a cada
+  /// `GET /templates`. A detecção de verdade é feita em packages/core.
+  variablesUsed String[] @default([])
+
+  isActive   Boolean @default(true)
+  usageCount Int     @default(0)
+
+  /// Fase 3 não versiona de verdade (ARQUITETURA §9.2, dívida D7 — o
+  /// snapshot na campanha já resolve o problema real de corrupção de
+  /// campanha ativa). Campo existe só para não fechar a porta a
+  /// versionamento futuro sem exigir migração.
+  version Int @default(1)
+
+  createdById String
+  createdBy   User   @relation("MessageTemplateCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaigns Campaign[]
+
+  // GET /templates?isActive=&... , sort default createdAt desc.
+  @@index([isActive, createdAt])
+  @@map("message_templates")
+}
+
+/// Cada mensagem individual, enviada ou recebida (ARQUITETURA §4.6, §4.8).
+model Message {
+  id String @id @default(cuid(2))
+
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// 1 CampaignTarget gera no máximo 1 Message (ARQUITETURA §3, ERD:
+  /// "CampaignTarget ||--o| Message: gera"). Nulo para envio manual (ficha
+  /// do lead, fora de campanha, ARQUITETURA §8 item 3.7) e para toda
+  /// mensagem inbound. `campaignTargetId` (não `messageId` do lado de
+  /// CampaignTarget) é quem guarda a FK física — bate 1:1 com
+  /// `messageItemSchema.campaignTargetId` em packages/contracts.
+  campaignTargetId String?         @unique
+  campaignTarget   CampaignTarget? @relation(fields: [campaignTargetId], references: [id], onDelete: SetNull)
+
+  instanceId String
+  instance   WhatsAppInstance @relation(fields: [instanceId], references: [id], onDelete: Restrict)
+
+  direction MessageDirection
+  body      String
+
+  /// `data.key.id` da Evolution API — CHAVE DE IDEMPOTÊNCIA do webhook
+  /// (ARQUITETURA §4.8: "data.key.id é chave única; evento repetido é
+  /// ignorado silenciosamente"). UNIQUE por exigência direta da Nova/Cronos.
+  /// Nullable só por robustez a um fluxo futuro de envio assíncrono — no
+  /// fluxo atual (ARQUITETURA §1.5, Fluxo B) a linha só é criada DEPOIS da
+  /// Evolution responder com `key.id`, então na prática é sempre preenchido.
+  providerMessageId String? @unique
+
+  status       MessageStatus @default(queued)
+  errorCode    String?
+  errorMessage String?
+
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Requisito crítico (Cronos/Nova): ficha do lead (GET /leads/:id) e
+  // detecção de opt-out sobre a última resposta listam mensagens do lead
+  // mais recentes primeiro, sem table scan.
+  @@index([leadId, createdAt])
+  // Histórico/depuração por instância (ex.: "últimas mensagens que saíram
+  // por este número" ao investigar um possível ban).
+  @@index([instanceId, createdAt])
+  @@map("messages")
+}
+
+/// Blacklist. A tabela mais importante do sistema em termos de risco
+/// (ARQUITETURA §3.1, §6.7, §7). NUNCA apagada por retenção — ver ausência
+/// proposital de qualquer campo de expiração.
+model OptOut {
+  id String @id @default(cuid(2))
+
+  /// CHAVE DE NEGÓCIO — explicitamente NÃO é `leadId` (ARQUITETURA §3.2
+  /// regra 3, §6.7 item 2: "a chave é o telefone, não o lead. Se o mesmo
+  /// número aparecer como outro lead numa busca futura, continua
+  /// bloqueado"). `@unique` garante o índice da consulta MAIS CRÍTICA do
+  /// sistema: 1 SELECT por telefone a cada mensagem, no worker, sem cache,
+  /// imediatamente antes de cada envio (ARQUITETURA §6.7 item 1).
+  phoneE164 String @unique
+
+  source OptOutSource
+
+  /// Opcional de propósito. Se o Lead original for apagado (retenção ou
+  /// pedido de eliminação LGPD, ARQUITETURA §7.3), o OptOut PERMANECE
+  /// válido — por isso `onDelete: SetNull`, nunca Cascade/Restrict aqui.
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  // Nenhum índice extra além do @unique acima: a única consulta de alta
+  // frequência é a busca exata por phoneE164, que o unique já cobre.
+  @@map("opt_outs")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FASE 4 — CAMPANHAS (ARQUITETURA §3.1, §4.5, §6.1-§6.6)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Um disparo planejado: template + público + instâncias + política de
+/// cadência (ARQUITETURA §3.1, §4.5). Nunca editada "ao vivo" nos campos que
+/// afetam envio já em curso — pausar/retomar são mudanças de `status`, não
+/// de `settings`.
+model Campaign {
+  id   String @id @default(cuid(2))
+  name String
+
+  templateId String
+  /// Restrict de propósito: impede apagar um MessageTemplate referenciado
+  /// por qualquer Campaign (ativa ou não) — mesma regra de "409
+  /// TEMPLATE_IN_USE" da API (ARQUITETURA §4.4), reforçada aqui por desenho.
+  template   MessageTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+
+  status CampaignStatus @default(draft)
+
+  /// Snapshot do `audience` (mode + leadIds OU filter) recebido em
+  /// `POST /campaigns` (ARQUITETURA §4.5) — auditoria de "quem entrou e por
+  /// quê". A composição REAL dos alvos vive em CampaignTarget; isto aqui não
+  /// é fonte de leitura operacional, só histórico do pedido original.
+  audienceSnapshot Json
+
+  /// Corpo do template CONGELADO no `start` (ARQUITETURA §3.2 regra 5,
+  /// §4.5 `renderedTemplateSnapshot`). Nulo em `draft`/`scheduled` — só
+  /// passa a existir depois do primeiro `start`. Editar o MessageTemplate
+  /// depois NÃO altera isto.
+  renderedTemplateSnapshot String?
+
+  /// Nulo = usa a quota de warmup vigente de cada instância no momento do
+  /// envio (ARQUITETURA §4.5: "default = quota de warmup vigente") — não é
+  /// um valor fixo capturado na criação, por isso não tem default numérico.
+  dailyLimitPerInstance     Int?
+  /// Defaults de `sendWindow` (09:00-18:00, seg-sex — ARQUITETURA §4.5, §6.3).
+  sendWindowStartHour       Int   @default(9)
+  sendWindowEndHour         Int   @default(18)
+  /// 0=domingo..6=sábado (mesma convenção de `sendWindowSchema.daysOfWeek`,
+  /// packages/contracts). Default seg-sex.
+  sendWindowDaysOfWeek      Int[] @default([1, 2, 3, 4, 5])
+  /// Defaults de jitter (45-180s — ARQUITETURA §4.5, §6.3). Mínimo de 30s é
+  /// validado em packages/contracts (`jitterSecondsSchema`), não aqui.
+  jitterMinSeconds          Int   @default(45)
+  jitterMaxSeconds          Int   @default(180)
+  skipRecentlyContactedDays Int   @default(30)
+
+  /// Preenchido quando `status = 'halted'` (ARQUITETURA §6.6) — texto
+  /// legível exibido na UI (`CampaignSummary.haltReason`).
+  haltReason String?
+
+  scheduledFor DateTime?
+
+  createdById String
+  createdBy   User   @relation("CampaignCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+  updatedAt  DateTime  @updatedAt
+
+  /// ── CONTADORES AGREGADOS — FONTE DA VERDADE HISTÓRICA ──────────────────
+  /// Mesmo padrão de SearchJob.totalTasks/doneTasks/leadsFound/leadsNew:
+  /// INCREMENTADOS PELO WORKER a cada transição de status de um
+  /// CampaignTarget, NUNCA recalculados por `COUNT(*)` a cada leitura (a
+  /// tela de progresso de campanha faz polling, igual à de busca).
+  ///
+  /// Por que isto existe além de CampaignTarget: `CampaignTarget.leadId` é
+  /// `onDelete: Cascade` — de propósito, para a eliminação LGPD (§7.3)
+  /// conseguir apagar um Lead sem ficar bloqueada, e porque `phoneE164` fica
+  /// snapshotado na própria linha (mantê-la com `SetNull` reteria o
+  /// telefone de quem pediu exclusão, o oposto do que a LGPD pede). Isso
+  /// significa que `COUNT(*)` sobre CampaignTarget ENCOLHE quando um lead é
+  /// eliminado meses depois de ter recebido a mensagem. Os contadores
+  /// abaixo são agregados ANÔNIMOS (só números, sem dado pessoal) que não
+  /// retrocedem — "quantos foram enviados" continua correto mesmo depois de
+  /// uma eliminação. `COUNT(*) GROUP BY status` sobre CampaignTarget
+  /// continua útil, mas responde outra pergunta: "quantos alvos EXISTEM
+  /// hoje em cada estado" (a foto atual) — as duas fontes podem divergir
+  /// legitimamente após uma eliminação; isso é DESENHO, não bug.
+  ///
+  /// São contadores de FUNIL, não partição: um alvo que chega a
+  /// `responded` passou por `sent → delivered → read → responded`, então
+  /// incrementa os QUATRO contadores (cada estágio realmente alcançado),
+  /// não só o último — é assim que `sentCount >= deliveredCount >=
+  /// readCount >= respondedCount` sempre se sustenta.
+  ///
+  /// `pending` (quantos ainda faltam enviar) DE PROPÓSITO não tem contador
+  /// aqui: é, por definição, estado ATUAL, não histórico — lido ao vivo via
+  /// `COUNT(*) WHERE status='pending'`, coberto pelo índice
+  /// `campaignId_status_idx` abaixo. Nomes batem com `CampaignSummary.
+  /// stats` (packages/contracts/src/campaign.contract.ts): totalTargets→
+  /// total, sentCount→sent, deliveredCount→delivered, readCount→read,
+  /// respondedCount→responded, failedCount→failed, skippedCount→skipped.
+  totalTargets   Int @default(0)
+  sentCount      Int @default(0)
+  deliveredCount Int @default(0)
+  readCount      Int @default(0)
+  respondedCount Int @default(0)
+  failedCount    Int @default(0)
+  skippedCount   Int @default(0)
+
+  targets   CampaignTarget[]
+  instances CampaignInstance[]
+
+  // GET /campaigns?status=&... , sort default createdAt desc.
+  @@index([status, createdAt])
+  @@map("campaigns")
+}
+
+/// Join table Campaign ↔ WhatsAppInstance (ERD: "Campaign }o--o{
+/// WhatsAppInstance: rotaciona entre"). Existe como TABELA, não como
+/// `instanceIds String[]` solto no Campaign, precisamente pela regra de
+/// integridade por desenho: um array de ids soltos não garante que a
+/// instância ainda exista, não é indexável para a pergunta reversa "quais
+/// campanhas usam esta instância" (kill switch, §6.6) e não tem FK real.
+model CampaignInstance {
+  id String @id @default(cuid(2))
+
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  instanceId String
+  /// Restrict: uma instância em uso por qualquer campanha (rodando ou não)
+  /// não pode ser apagada por baixo — mesma regra do "409 INSTANCE_IN_USE"
+  /// da API (ARQUITETURA §4.6), reforçada aqui.
+  instance   WhatsAppInstance @relation(fields: [instanceId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  /// 1 instância entra 1x por campanha — a ROTAÇÃO em runtime (round-robin
+  /// ponderado por quota, ARQUITETURA §6.5) é lógica do worker sobre esta
+  /// lista, não duplicidade de linha aqui.
+  @@unique([campaignId, instanceId])
+  // "Quais campanhas usam esta instância" — consultado pelo kill switch
+  // (§6.6: "TODAS as campanhas que usam SÓ esta instância → halted") e pelo
+  // DELETE de instância (409 INSTANCE_IN_USE).
+  @@index([instanceId])
+  @@map("campaign_instances")
+}
+
+/// SNAPSHOT do lead dentro da campanha (ARQUITETURA §3.1) — editar/mover o
+/// Lead depois não corrompe a campanha, e permite retry por alvo individual.
+/// É o HOT PATH do worker de disparo (`dispatch-tick.job`, ARQUITETURA §6.1).
+model CampaignTarget {
+  id String @id @default(cuid(2))
+
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  leadId String
+  /// Cascade (não Restrict): a ação de eliminação LGPD (ARQUITETURA §7.3,
+  /// "Eliminação") apaga o Lead e precisa conseguir completar sem ficar
+  /// bloqueada por histórico de campanha — o registro que SOBREVIVE à
+  /// eliminação é o OptOut (chave por telefone), não o CampaignTarget.
+  /// ⚠️ Efeito colateral aceito conscientemente: `CampaignTarget.phoneE164`
+  /// abaixo é o snapshot que resta como rastro após a eliminação; ver
+  /// PENDÊNCIAS no handoff do Cronos sobre isto.
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// Snapshot do telefone no momento em que o alvo entrou na campanha —
+  /// editar o telefone do Lead depois não muda para onde a campanha manda
+  /// (ARQUITETURA §3.1: CampaignTarget é "snapshot do lead dentro da campanha").
+  phoneE164 String
+
+  status     CampaignTargetStatus @default(pending)
+  skipReason String?
+
+  /// Quando o worker pode processar este alvo — é a coluna de ORDER BY da
+  /// seleção `FOR UPDATE SKIP LOCKED` (requisito crítico do Cronos/Nova).
+  scheduledFor DateTime?
+
+  attempt Int @default(0)
+
+  /// Back-relation de `Message.campaignTargetId` (que é quem guarda a FK
+  /// física, com `onDelete: SetNull` — ver comentário no model Message).
+  /// Sem `fields`/`references` aqui de propósito: é o lado que NÃO possui a
+  /// coluna, só a leitura reversa "qual mensagem este alvo gerou".
+  message Message?
+
+  sentAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 1 lead não pode ser alvo duplicado dentro da mesma campanha.
+  @@unique([campaignId, leadId])
+  // ⚠️ ÍNDICE MAIS CRÍTICO DESTA MIGRAÇÃO (requisito direto do Cronos/Nova) —
+  // é o que dá performance ao hot path do worker de disparo:
+  //   SELECT * FROM campaign_targets
+  //   WHERE "campaignId" = ? AND status = 'pending' AND "scheduledFor" <= now()
+  //   ORDER BY "scheduledFor" FOR UPDATE SKIP LOCKED LIMIT 1;
+  // SKIP LOCKED é quem impede 2 workers pegarem o mesmo alvo; este índice é
+  // quem impede essa query virar sequential scan numa campanha de dezenas de
+  // milhares de alvos, tick após tick, a cada ~30s.
+  @@index([campaignId, status, scheduledFor])
+  // GET /campaigns/:id/targets?status=
+  @@index([campaignId, status])
+  @@map("campaign_targets")
 }
