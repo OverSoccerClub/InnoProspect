@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AlertTriangle, Loader2, Plug, Trash2, Unplug } from 'lucide-react';
+import { AlertTriangle, Flame, Gauge, Loader2, Megaphone, Plug, Trash2, Unplug } from 'lucide-react';
 
 import { ConfirmDialog } from '@/components/common/confirm-dialog';
 import { InstanceHealthBadge } from '@/components/whatsapp/instance-health-badge';
@@ -13,7 +13,20 @@ import { Progress } from '@/components/ui/progress';
 import { deleteInstance, disconnectInstance } from '@/lib/api/whatsapp';
 import { ApiRequestError } from '@/lib/fetcher';
 import { formatDateTime, formatPhone } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import type { InstanceListItem } from '@/types/whatsapp';
+
+/**
+ * Cor da borda esquerda reflete a saúde — mesma linguagem visual do `Alert`
+ * (DESIGN-SYSTEM.md §4): quem varre a grade de instâncias enxerga o risco
+ * pela borda antes de ler qualquer badge.
+ */
+const HEALTH_ACCENT: Record<InstanceListItem['health'], string> = {
+  ok: 'border-l-success/70',
+  warming: 'border-l-warning',
+  degraded: 'border-l-warning',
+  blocked: 'border-l-destructive',
+};
 
 type InstanceCardProps = {
   instance: InstanceListItem;
@@ -63,13 +76,13 @@ export function InstanceCard({ instance, onConnect, onChanged }: InstanceCardPro
   }
 
   return (
-    <Card>
+    <Card className={cn('border-l-4', HEALTH_ACCENT[instance.health])}>
       <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
         <div>
           <CardTitle className="text-base">{instance.name}</CardTitle>
-          <p className="text-sm text-muted-foreground">{formatPhone(instance.phoneNumber)}</p>
+          <p className="text-sm text-muted-foreground tabular-nums">{formatPhone(instance.phoneNumber)}</p>
         </div>
-        <div className="flex flex-col items-end gap-1">
+        <div className="flex flex-col items-end gap-1.5">
           <InstanceStatusBadge status={instance.status} />
           <InstanceHealthBadge health={instance.health} />
         </div>
@@ -88,36 +101,47 @@ export function InstanceCard({ instance, onConnect, onChanged }: InstanceCardPro
           </Alert>
         )}
 
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <p className="text-xs text-muted-foreground">Aquecimento</p>
-            <p className="font-medium">
-              Dia {instance.warmup.day} {instance.warmup.isWarm && '· aquecida'}
+        <div className="grid grid-cols-3 gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm">
+          <div className="flex flex-col gap-1">
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Flame className="size-3.5" aria-hidden="true" />
+              Aquecimento
+            </span>
+            <p className="font-medium tabular-nums">
+              Dia {instance.warmup.day}
+              {instance.warmup.isWarm && <span className="text-success"> · aquecida</span>}
             </p>
           </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Teto diário</p>
-            <p className="font-medium">{instance.warmup.dailyLimit} msgs/dia</p>
+          <div className="flex flex-col gap-1">
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Gauge className="size-3.5" aria-hidden="true" />
+              Teto diário
+            </span>
+            <p className="font-medium tabular-nums">{instance.warmup.dailyLimit} msgs</p>
           </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Campanhas ativas</p>
-            <p className="font-medium">{instance.activeCampaigns}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Conectado desde</p>
-            <p className="font-medium">{formatDateTime(instance.lastConnectionAt)}</p>
+          <div className="flex flex-col gap-1">
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Megaphone className="size-3.5" aria-hidden="true" />
+              Campanhas
+            </span>
+            <p className="font-medium tabular-nums">{instance.activeCampaigns} ativa(s)</p>
           </div>
         </div>
 
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>Uso de hoje</span>
-            <span>
-              {instance.today.sent} de {usageTotal} ({instance.today.failed} falha(s))
+            <span className="tabular-nums">
+              <span className="font-medium text-foreground">{instance.today.sent}</span> de {usageTotal}
+              {instance.today.failed > 0 && <span className="text-destructive"> · {instance.today.failed} falha(s)</span>}
             </span>
           </div>
           <Progress value={usagePercent} label={`${instance.today.sent} mensagens enviadas hoje`} />
         </div>
+
+        <p className="text-xs text-muted-foreground">
+          Conectado desde <span className="tabular-nums">{formatDateTime(instance.lastConnectionAt)}</span>
+        </p>
 
         <div className="flex flex-wrap gap-2">
           {canConnect && (

@@ -53,13 +53,15 @@ export function OptOutTable({ optouts, onDeleted }: { optouts: OptOutItem[]; onD
         <TableBody>
           {optouts.map((optout) => (
             <TableRow key={optout.id}>
-              <TableCell className="font-medium">{formatPhone(optout.phoneE164)}</TableCell>
-              <TableCell>{optout.leadName ?? '—'}</TableCell>
+              <TableCell className="font-medium tabular-nums">{formatPhone(optout.phoneE164)}</TableCell>
+              <TableCell className="text-muted-foreground">{optout.leadName ?? '—'}</TableCell>
               <TableCell>
                 <Badge variant="outline">{SOURCE_LABEL[optout.source]}</Badge>
                 {optout.reason && <p className="mt-0.5 text-xs text-muted-foreground">{optout.reason}</p>}
               </TableCell>
-              <TableCell>{formatDateTime(optout.createdAt)}</TableCell>
+              <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
+                {formatDateTime(optout.createdAt)}
+              </TableCell>
               <TableCell className="text-right">
                 <Button
                   variant="ghost"

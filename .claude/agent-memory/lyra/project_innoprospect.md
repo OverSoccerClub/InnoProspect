@@ -29,7 +29,22 @@ publicado de verdade.
 
 Ver também [[bug-rsc-client-icon-props]] (bug de build descoberto e corrigido nessa entrega).
 
-**Identidade visual / sistema de design (entregue em 2026-08-03):** `DESIGN-SYSTEM.md` na raiz é a
+**Identidade visual / sistema de design — 2ª rodada (2026-08-03, mesma sessão do Atlas, commit da 1ª
+rodada `c353708`):** corrigi o bug que eu mesma tinha documentado (`InstanceHealthBadge`: `degraded`
+e `blocked` caíam na mesma cor — agora `degraded`=warning/`TrendingDown`, `blocked`=destructive/
+`AlertOctagon`, com ícone em todo badge de status/saúde de WhatsApp e borda de severidade no
+`InstanceCard`). Redesenhei Templates (editor+preview+variable-picker), Opt-outs, o placeholder de
+Campanhas, e a página pública de descadastro (a única que um estranho vê sem contexto — tratada como
+peça de marca: halo, wordmark, ícone de estado em círculo, rodapé anti-phishing explicando o que é o
+InnoProspect). Deixei prontos (sem tela ainda) `components/campaigns/{campaign-status-badge,
+campaign-target-status-badge}.tsx`, importando `CampaignStatus`/`CampaignTargetStatus` direto de
+`@inno/contracts` — usar esses componentes quando a Fase 4 chegar, não recriar a lógica de cor.
+Também tornei `Sidebar` e `Topbar` sticky (`sticky top-0`/`h-screen`) — isso quebra qualquer painel
+com `lg:sticky lg:top-4` que dependa de colar no topo real da viewport (ex.: preview do editor de
+templates); o ajuste foi usar `lg:top-20` (56px do Topbar + folga) em vez de `top-4`. Se adicionar
+outro painel sticky dentro do dashboard, lembrar desse offset.
+
+**Identidade visual / sistema de design — 1ª rodada (entregue em 2026-08-03):** `DESIGN-SYSTEM.md` na raiz é a
 fonte da verdade — paleta OKLCH própria do InnoProspect (hue≈231, azure, deliberadamente distinta do
 navy da InnovareCode hue≈262), tipografia via `next/font` (Inter + Plus Jakarta Sans, self-hosted,
 respeita a CSP do Vulcano), tema claro/escuro com toggle (`components/theme/*`, chave de localStorage

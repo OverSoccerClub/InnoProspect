@@ -30,7 +30,7 @@ export default function OptOutsPage() {
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Opt-outs</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">Opt-outs</h1>
           <p className="text-sm text-muted-foreground">
             Números que pediram para não receber mais mensagens. O bloqueio é checado antes de todo envio, mesmo
             durante uma campanha em andamento.

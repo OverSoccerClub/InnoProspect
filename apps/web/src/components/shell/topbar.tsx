@@ -17,7 +17,7 @@ export function Topbar() {
   }
 
   return (
-    <header className="flex h-14 items-center justify-between gap-3 border-b border-border bg-card/60 px-4 backdrop-blur-sm">
+    <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-3 border-b border-border bg-card/80 px-4 backdrop-blur-sm">
       <div className="flex items-center gap-2">
         <MobileNav />
         <span className="text-sm font-semibold md:hidden">

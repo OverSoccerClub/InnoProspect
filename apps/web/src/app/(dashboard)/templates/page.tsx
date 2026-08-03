@@ -19,7 +19,7 @@ export default function TemplatesPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Templates</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">Templates</h1>
           <p className="text-sm text-muted-foreground">
             Mensagens reutilizáveis com variáveis e variação de texto (spintax) contra bloqueio.
           </p>

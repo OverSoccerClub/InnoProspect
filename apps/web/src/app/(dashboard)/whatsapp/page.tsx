@@ -32,7 +32,7 @@ export default function WhatsappPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">WhatsApp</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">WhatsApp</h1>
           <p className="text-sm text-muted-foreground">
             Conecte números, acompanhe aquecimento e saúde da conexão antes de disparar campanhas.
           </p>

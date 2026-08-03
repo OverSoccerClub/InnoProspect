@@ -43,7 +43,10 @@ export function TemplatePreview({ body }: { body: string }) {
             </p>
             <ul className="flex flex-col gap-2">
               {samples.map((text, index) => (
-                <li key={index} className="whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 text-sm">
+                <li
+                  key={index}
+                  className="whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 text-sm leading-relaxed"
+                >
                   {text}
                 </li>
               ))}

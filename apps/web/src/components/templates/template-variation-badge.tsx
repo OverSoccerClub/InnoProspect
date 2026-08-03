@@ -14,7 +14,7 @@ export function TemplateVariationBadge({ count, className }: { count: number; cl
   const risk = variationRisk(count);
   return (
     <Badge variant={VARIANT[risk]} className={className}>
-      {risk !== 'good' && <AlertTriangle className="mr-1 size-3" aria-hidden="true" />}
+      {risk !== 'good' && <AlertTriangle aria-hidden="true" />}
       {count} {count === 1 ? 'variação' : 'variações'}
     </Badge>
   );

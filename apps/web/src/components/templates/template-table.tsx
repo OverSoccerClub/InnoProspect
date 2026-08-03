@@ -47,7 +47,10 @@ export function TemplateTable({ templates, onDeleted }: { templates: TemplateIte
           {templates.map((template) => (
             <TableRow key={template.id}>
               <TableCell>
-                <Link href={`/templates/${template.id}`} className="font-medium hover:underline">
+                <Link
+                  href={`/templates/${template.id}`}
+                  className="font-medium text-foreground hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   {template.name}
                 </Link>
                 <p className="mt-0.5 max-w-md truncate text-xs text-muted-foreground">{template.body}</p>

@@ -240,22 +240,28 @@ cores" em 7 categorias):
 `instanceHealthSchema`: `ok` / `warming` / `degraded` / `blocked`
 (`@inno/contracts`, `apps/web/src/components/whatsapp/instance-health-badge.tsx`).
 
-**Achado importante para a próxima rodada:** o componente atual mapeia
-`degraded` **e** `blocked` para a mesma variante (`destructive`) — os dois
-ficam visualmente idênticos, só o texto do badge muda. Isso viola
-diretamente o pedido do dono ("sinais de risco precisam gritar" e "estados
-diferentes não podem parecer iguais"). Mapeamento correto a aplicar quando
-essa tela entrar em pauta:
+**Corrigido na 2ª rodada (2026-08-03):** o componente mapeava `degraded` **e**
+`blocked` para a mesma variante (`destructive`) — ficavam visualmente
+idênticos, só o texto do badge mudava. Mapeamento aplicado:
 
-| Health | Variante recomendada | Por quê |
-|---|---|---|
-| `ok` | `success` | saudável |
-| `warming` | `warning` | esperado, temporário (aquecimento de número novo) |
-| `degraded` | `warning` (não `destructive`) | precisa de atenção, ainda operando |
-| `blocked` | `destructive` **+ ícone de alerta forte** (ex. `AlertOctagon`) | crítico, ação imediata |
+| Health | Variante | Ícone | Por quê |
+|---|---|---|---|
+| `ok` | `success` | `ShieldCheck` | saudável |
+| `warming` | `warning` | `Flame` | esperado, temporário (aquecimento de número novo) |
+| `degraded` | `warning` (não `destructive`) | `TrendingDown` | precisa de atenção, ainda operando |
+| `blocked` | `destructive` | `AlertOctagon` | crítico, ação imediata |
 
-Isso também vale para `whatsAppInstanceStatusSchema` (`banned` já usa
-`destructive`, correto — é terminal e crítico).
+`warming` e `degraded` dividem a cor de propósito (mesmo grupo "precisa de
+atenção") — o ícone e o texto (não a cor) são o que os diferencia, mesma
+lógica do `responded`/`negotiating` do lead em §5.1. `InstanceStatusBadge`
+(`whatsAppInstanceStatusSchema`) ganhou o mesmo tratamento de ícone por
+consistência (`banned` já usava `destructive`, correto — é terminal e
+crítico).
+
+Em `apps/web/src/components/whatsapp/instance-card.tsx`, a borda esquerda do
+`Card` também reflete a saúde (`border-l-4`, mesma cor da variante do badge)
+— quem varre a grade de instâncias enxerga o risco pela borda antes de ler
+qualquer badge, mesma linguagem visual do `Alert` (§4).
 
 ### 5.3 Campanha — `halted` vs. `paused`, a distinção que mais importa
 
@@ -286,6 +292,15 @@ todo o resto deste documento.
 `success` (mensagem lida é o "melhor" estado observável); `responded` →
 `warning` (mesmo grupo semântico do lead `responded`, exige ação);
 `failed` → `destructive`.
+
+**Badges deixados prontos na 2ª rodada** (sem tela ainda usando, de
+propósito — Fase 4 não existe): `apps/web/src/components/campaigns/
+campaign-status-badge.tsx` e `campaign-target-status-badge.tsx` implementam
+exatamente os dois mapas acima, com ícone por status (`AlertOctagon` para
+`halted`, `Pause` para `paused` — nunca só a cor). Import direto de
+`CampaignStatus`/`CampaignTargetStatus` de `@inno/contracts` (schema já
+publicado pelo Vega), sem tipo local. Quando a Fase 4 chegar: importe esses
+dois componentes em vez de recriar a lógica de cor.
 
 ---
 
@@ -376,19 +391,49 @@ em torno de L 0.65 mediu 5.24:1 nos meus testes) e documente aqui.
 
 ---
 
-## 8. Telas aplicadas nesta rodada
+## 8. Telas aplicadas — histórico das duas rodadas
 
-Login (`app/(auth)/login`, `app/(auth)/layout.tsx`), shell (`components/shell/*`),
-dashboard (`app/(dashboard)/page.tsx`), leads lista (`app/(dashboard)/leads/page.tsx`,
-`components/leads/lead-table.tsx`, `lead-filters.tsx`) e ficha do lead
-(`components/leads/lead-detail.tsx`, `lead-timeline.tsx`, `lead-status-badge.tsx`).
+**1ª rodada (2026-08-03):** Login (`app/(auth)/login`, `app/(auth)/layout.tsx`),
+shell (`components/shell/*`), dashboard (`app/(dashboard)/page.tsx`), leads
+lista (`app/(dashboard)/leads/page.tsx`, `components/leads/lead-table.tsx`,
+`lead-filters.tsx`) e ficha do lead (`components/leads/lead-detail.tsx`,
+`lead-timeline.tsx`, `lead-status-badge.tsx`). Todos os componentes em
+`components/ui/*` foram refinados na base nessa rodada.
 
-Todos os componentes em `components/ui/*` foram refinados na base — então
-**toda tela do produto herdou a atualização de tokens/primitivos
-automaticamente** (cores, sombra, radius, badge, tabela, dialog), mesmo as
-que não foram tocadas diretamente nesta rodada (Buscas, Templates, WhatsApp,
-Opt-outs, Campanhas, Descadastro público). O que elas **não** ganharam foi
-polimento específico de layout/hierarquia — isso fica para a próxima rodada,
-seguindo exatamente a semântica de status definida em §5 (em especial o
-achado do §5.2 sobre `degraded`/`blocked` e o mapa de `halted`/`paused`
-do §5.3, que ainda não têm UI).
+**2ª rodada (2026-08-03, mesma data — chamada em sequência pelo Atlas):**
+- **WhatsApp** (`app/(dashboard)/whatsapp/page.tsx`,
+  `components/whatsapp/instance-card.tsx`, `instance-health-badge.tsx`,
+  `instance-status-badge.tsx`) — corrigido o bug `degraded`/`blocked` (§5.2),
+  ícone em todo badge de status/saúde, borda de severidade no card.
+- **Templates** (`app/(dashboard)/templates/*`,
+  `components/templates/template-editor.tsx`, `template-preview.tsx`,
+  `variable-picker.tsx`, `template-variation-badge.tsx`, `template-table.tsx`)
+  — textarea/pills alinhados ao padrão de Input/Select da 1ª rodada, preview
+  de spintax com `lg:sticky` (ajustado para não ficar embaixo do Topbar, que
+  também passou a ser sticky nesta rodada — ver `components/shell/topbar.tsx`
+  e `sidebar.tsx`), checkbox nativo trocado pelo componente `Checkbox`
+  compartilhado.
+- **Opt-outs** (`app/(dashboard)/configuracoes/*`,
+  `components/optouts/optout-table.tsx`) — heading, `tabular-nums`, cards do
+  hub de configurações com o mesmo tratamento de ícone-em-caixa do dashboard.
+- **Campanhas** — só o placeholder (`components/common/coming-soon.tsx`)
+  alinhado ao padrão visual do `EmptyState`; a tela em si continua não
+  implementada de propósito (Fase 4). Os badges de status de campanha (§5.3)
+  foram deixados prontos em `components/campaigns/*` para quando a Fase 4
+  chegar.
+- **Descadastro público** (`app/descadastro/layout.tsx`,
+  `components/public/unsubscribe-view.tsx`) — a única tela que um estranho
+  julga sem contexto nenhum, tratada como peça de marca: mesmo halo de marca
+  e wordmark do login, ícone de estado em círculo colorido (sucesso = verde,
+  neutro = cinza), tipografia de título em `font-display`, e um rodapé de
+  credibilidade explicando o que é o InnoProspect e reforçando que a página
+  nunca pede senha/pagamento — mitigação de "isso parece phishing" para quem
+  chega por um link de WhatsApp sem ter pedido nada.
+
+Todo componente em `components/ui/*` continua sendo herdado automaticamente
+por qualquer tela nova — a única coisa que precisa de trabalho manual por
+tela é hierarquia/layout específico, exatamente o que essas duas rodadas
+cobriram. Não sobrou nenhuma tela do produto sem passar por pelo menos os
+tokens base; Buscas (`app/(dashboard)/buscas/*`) é a única área que só
+recebeu a herança automática, sem polimento de layout dedicado — fica como
+candidata natural de uma 3ª rodada, se o dono quiser.

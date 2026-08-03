@@ -1,3 +1,5 @@
+import { Ban, Loader2, QrCode, Unplug, Wifi } from 'lucide-react';
+
 import { Badge } from '@/components/ui/badge';
 import type { InstanceConnectionStatus } from '@/types/whatsapp';
 
@@ -17,6 +19,20 @@ const VARIANT: Record<InstanceConnectionStatus, 'default' | 'secondary' | 'succe
   banned: 'destructive',
 };
 
+const ICON: Record<InstanceConnectionStatus, typeof Wifi> = {
+  disconnected: Unplug,
+  connecting: Loader2,
+  qr_pending: QrCode,
+  connected: Wifi,
+  banned: Ban,
+};
+
 export function InstanceStatusBadge({ status }: { status: InstanceConnectionStatus }) {
-  return <Badge variant={VARIANT[status]}>{LABEL[status]}</Badge>;
+  const Icon = ICON[status];
+  return (
+    <Badge variant={VARIANT[status]}>
+      <Icon aria-hidden="true" className={status === 'connecting' ? 'animate-spin' : undefined} />
+      {LABEL[status]}
+    </Badge>
+  );
 }

@@ -9,6 +9,7 @@ import { TemplatePreview } from '@/components/templates/template-preview';
 import { VariablePicker } from '@/components/templates/variable-picker';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -157,7 +158,9 @@ export function TemplateEditor({ id }: { id: string }) {
   return (
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold tracking-tight">{isCreate ? 'Novo template' : 'Editar template'}</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          {isCreate ? 'Novo template' : 'Editar template'}
+        </h1>
         <div className="flex items-center gap-2">
           <Button type="button" variant="outline" onClick={() => router.push('/templates')}>
             Cancelar
@@ -216,8 +219,8 @@ export function TemplateEditor({ id }: { id: string }) {
               aria-invalid={Boolean(fieldErrors.body)}
               aria-describedby={fieldErrors.body ? 'template-body-error' : 'template-body-hint'}
               className={cn(
-                'flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background disabled:cursor-not-allowed disabled:opacity-50',
-                fieldErrors.body && 'border-destructive',
+                'flex w-full rounded-md border border-input bg-card px-3 py-2 text-sm leading-relaxed shadow-xs transition-shadow placeholder:text-muted-foreground hover:border-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background disabled:cursor-not-allowed disabled:opacity-50',
+                fieldErrors.body && 'border-destructive focus-visible:ring-destructive',
               )}
             />
             {fieldErrors.body ? (
@@ -233,12 +236,7 @@ export function TemplateEditor({ id }: { id: string }) {
           </div>
 
           <label className="flex w-fit items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={isActive}
-              onChange={(e) => setIsActive(e.target.checked)}
-              className="size-4 rounded border border-input accent-primary"
-            />
+            <Checkbox checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
             Template ativo (disponível para novas campanhas)
           </label>
 
@@ -253,7 +251,7 @@ export function TemplateEditor({ id }: { id: string }) {
           </Alert>
         </div>
 
-        <div className="lg:sticky lg:top-4 lg:self-start">
+        <div className="lg:sticky lg:top-20 lg:self-start">
           <TemplatePreview body={body} />
         </div>
       </div>

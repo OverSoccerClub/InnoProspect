@@ -8,7 +8,7 @@ import { NavLink } from './nav-link';
 
 export function Sidebar() {
   return (
-    <aside className="hidden w-64 shrink-0 border-r border-border bg-card md:flex md:flex-col">
+    <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card md:flex">
       <div className="flex h-14 items-center gap-2.5 border-b border-border px-4">
         <Link
           href="/"
