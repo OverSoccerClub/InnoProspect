@@ -1,20 +1,54 @@
 /**
  * lib/services/leads.ts — lógica de negócio de `Lead` (ARQUITETURA §4.3).
  *
- * Campos que dependem de models de fases futuras (ainda não existem no
- * schema da Fase 1 — ver comentário de escopo em
- * `packages/db/prisma/schema.prisma`) ficam com valor neutro documentado:
- *   - `isOptedOut` / filtro `optedOut`: sempre `false` (sem `OptOut`, Fase 3).
+ * Campos que dependem de models de fases futuras ficam com valor neutro
+ * documentado:
  *   - `lastContactedAt` / filtro `contactedInCampaign`: sempre `null`/no-op
- *     (sem `Message`/`CampaignTarget`, Fases 3-4).
- *   - `LeadDetail.messages`: sempre `[]` (sem `Message`, Fase 3).
+ *     (depende de `Message`/`CampaignTarget` estarem sendo populados pelo
+ *     disparo, que é a Fase 4).
+ *   - `LeadDetail.messages`: sempre `[]` (idem).
+ *
+ * ⚠️ `isOptedOut` NÃO é mais um desses. A tabela `OptOut` existe desde a Fase
+ * 3 e é consultada de verdade aqui — ver `fetchOptedOutPhones`. Enquanto ficou
+ * chumbado em `false`, a lista mostrava alguém que pediu para não ser
+ * contatado como um lead comum, sem nenhum aviso ao operador. Achado da Íris
+ * na revisão da Fase 3.
  */
 import { prisma, type Lead, type LeadStatus, type Prisma } from '@inno/db';
 import { checkStatusTransition } from '@inno/core';
 import type { LeadDetail, LeadListItem, ListLeadsQuery, ListLeadsResponse, PatchLeadBody } from '@inno/contracts';
 import { badRequest, notFound } from '@/lib/api-handler';
+import { logger } from '@/lib/logger';
 
-function toListItem(lead: Lead & { city: { name: string } | null }): LeadListItem {
+/**
+ * Acima disto, carregar a lista inteira de telefones descadastrados para
+ * montar o filtro `optedOut` deixa de ser barato. Não é um limite silencioso:
+ * ao ultrapassar, logamos para que a troca por uma junção em SQL (ou uma
+ * coluna denormalizada em `Lead`, mantida pelo registro de opt-out) seja uma
+ * decisão tomada com dado, e não uma surpresa de performance em produção.
+ */
+const OPTOUT_FILTER_ALERTA = 20_000;
+
+/**
+ * Descobre quais dos telefones informados estão descadastrados — UMA consulta
+ * por página, nunca uma por lead (o índice único de `OptOut.phoneE164` cobre
+ * o `IN`). Leads sem telefone nunca podem estar na lista.
+ */
+async function fetchOptedOutPhones(phones: readonly (string | null)[]): Promise<Set<string>> {
+  const alvos = [...new Set(phones.filter((p): p is string => Boolean(p)))];
+  if (alvos.length === 0) return new Set();
+
+  const encontrados = await prisma.optOut.findMany({
+    where: { phoneE164: { in: alvos } },
+    select: { phoneE164: true },
+  });
+  return new Set(encontrados.map((o) => o.phoneE164));
+}
+
+function toListItem(
+  lead: Lead & { city: { name: string } | null },
+  optedOutPhones: ReadonlySet<string>,
+): LeadListItem {
   return {
     id: lead.id,
     name: lead.name,
@@ -29,14 +63,24 @@ function toListItem(lead: Lead & { city: { name: string } | null }): LeadListIte
     reviewCount: lead.reviewCount,
     status: lead.status,
     tags: lead.tags,
-    isOptedOut: false,
+    isOptedOut: lead.phoneE164 !== null && optedOutPhones.has(lead.phoneE164),
     lastContactedAt: null,
     createdAt: lead.createdAt.toISOString(),
   };
 }
 
-/** Monta o `where` do Prisma a partir do filtro combinável (AND) de `leadFilterSchema`. */
-function buildWhere(filter: ListLeadsQuery, options: { includeStatus: boolean }): Prisma.LeadWhereInput {
+/**
+ * Monta o `where` do Prisma a partir do filtro combinável (AND) de
+ * `leadFilterSchema`.
+ *
+ * `todosOptedOut` é a lista completa de telefones descadastrados, carregada
+ * pelo chamador SOMENTE quando o filtro `optedOut` foi usado — `null` quando
+ * não foi, para não pagar essa consulta em toda listagem.
+ */
+function buildWhere(
+  filter: ListLeadsQuery,
+  options: { includeStatus: boolean; todosOptedOut: readonly string[] | null },
+): Prisma.LeadWhereInput {
   const where: Prisma.LeadWhereInput = {};
 
   if (options.includeStatus && filter.status?.length) where.status = { in: filter.status };
@@ -63,10 +107,37 @@ function buildWhere(filter: ListLeadsQuery, options: { includeStatus: boolean })
       { phoneE164: { contains: filter.q } },
     ];
   }
-  // `optedOut`/`contactedInCampaign`: sem tabela correspondente na Fase 1
-  // (ver cabeçalho do arquivo) — não filtram nada ainda, de propósito.
+  // `optedOut`: a chave do descadastro é o TELEFONE, não o lead — o mesmo
+  // número pode ter sido coletado como leads diferentes, e todos precisam
+  // aparecer como descadastrados. Por isso o filtro é por `phoneE164`, e não
+  // por uma relação com `OptOut.leadId` (que é opcional e só registra o lead
+  // de origem). Lead sem telefone nunca está descadastrado: entra no `false`
+  // e fica fora do `true`.
+  if (filter.optedOut !== undefined && options.todosOptedOut) {
+    const lista = [...options.todosOptedOut];
+    where.phoneE164 = filter.optedOut ? { in: lista } : { notIn: lista };
+  }
+
+  // `contactedInCampaign`: continua no-op — depende de `Message`/
+  // `CampaignTarget` serem populados pelo disparo, que é a Fase 4.
 
   return where;
+}
+
+/**
+ * Carrega todos os telefones descadastrados, para o filtro `optedOut`.
+ * Só é chamado quando o filtro foi de fato usado.
+ */
+async function fetchTodosOptedOut(): Promise<string[]> {
+  const linhas = await prisma.optOut.findMany({ select: { phoneE164: true } });
+  if (linhas.length > OPTOUT_FILTER_ALERTA) {
+    logger.warn('leads.filtro_optedout.lista_grande', {
+      total: linhas.length,
+      limite: OPTOUT_FILTER_ALERTA,
+      dica: 'Trocar o filtro por junção em SQL ou coluna denormalizada em Lead.',
+    });
+  }
+  return linhas.map((l) => l.phoneE164);
 }
 
 const EMPTY_STATUS_COUNTS: Record<LeadStatus, number> = {
@@ -80,11 +151,13 @@ const EMPTY_STATUS_COUNTS: Record<LeadStatus, number> = {
 };
 
 export async function listLeads(filter: ListLeadsQuery): Promise<ListLeadsResponse> {
-  const whereWithStatus = buildWhere(filter, { includeStatus: true });
+  const todosOptedOut = filter.optedOut !== undefined ? await fetchTodosOptedOut() : null;
+
+  const whereWithStatus = buildWhere(filter, { includeStatus: true, todosOptedOut });
   // Facets (contagem por status + total) refletem o filtro SEM o próprio
   // `status` — é isso que permite a UI mostrar "quantos há em cada aba" sem
   // o número da aba selecionada colapsar para ela mesma.
-  const whereForFacets = buildWhere(filter, { includeStatus: false });
+  const whereForFacets = buildWhere(filter, { includeStatus: false, todosOptedOut });
 
   const orderBy: Prisma.LeadOrderByWithRelationInput[] = [
     { [filter.sort.field]: filter.sort.direction } as Prisma.LeadOrderByWithRelationInput,
@@ -114,8 +187,11 @@ export async function listLeads(filter: ListLeadsQuery): Promise<ListLeadsRespon
     facetsTotal += group._count._all;
   }
 
+  // Uma consulta para a página inteira — não uma por lead.
+  const optedOutPhones = await fetchOptedOutPhones(page.map((lead) => lead.phoneE164));
+
   return {
-    data: page.map(toListItem),
+    data: page.map((lead) => toListItem(lead, optedOutPhones)),
     page: { cursor: filter.cursor ?? null, nextCursor, limit: filter.limit, total },
     facets: { byStatus, total: facetsTotal },
   };
@@ -131,8 +207,10 @@ export async function getLeadDetail(id: string): Promise<LeadDetail> {
   });
   if (!lead) notFound('Lead não encontrado.');
 
+  const optedOutPhones = await fetchOptedOutPhones([lead.phoneE164]);
+
   return {
-    ...toListItem(lead),
+    ...toListItem(lead, optedOutPhones),
     notes: lead.notes,
     latitude: lead.latitude,
     longitude: lead.longitude,
