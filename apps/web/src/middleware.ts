@@ -3,8 +3,8 @@
  * Substitui o `AuthGuard` client-side da Lyra (que só olha um cookie mock e
  * não bloqueia nada quando `USE_MOCKS=false`) como a barreira de verdade:
  *
- *   - Páginas do dashboard (tudo fora de `/login` e `/api/*`): sem sessão →
- *     redirect para `/login`.
+ *   - Páginas do dashboard (tudo fora de `/login`, `/descadastro/*` e
+ *     `/api/*`): sem sessão → redirect para `/login`.
  *   - `/api/v1/*` (exceto `/api/v1/health`, usado por healthcheck de infra
  *     sem cookie): sem sessão → `401` no envelope de erro padrão (§4.0),
  *     mesmo formato que `lib/api-handler.ts` devolve nas rotas — o
@@ -12,6 +12,12 @@
  *   - `/api/auth/*` (o próprio NextAuth) e `/api/webhooks/*` (Evolution API,
  *     Fase 3 — autenticado por outro mecanismo, `apikey` + `instanceKey`,
  *     não por cookie de sessão) ficam de fora da checagem.
+ *   - `/api/v1/public/*` (Fase 3, ARQUITETURA §4.7: `POST
+ *     /api/v1/public/optout`) também fica de fora — é o endpoint que a
+ *     página pública `/descadastro/:token` consome, sem sessão por desenho
+ *     (link enviado por WhatsApp para quem nem tem conta no sistema).
+ *     Autenticado por token HMAC no corpo, não por cookie — ver
+ *     `lib/services/optouts.ts#publicOptOut`.
  *
  * ⚠️ Importa `auth.config.ts` (Edge-safe), NÃO `lib/auth.ts` — o Middleware
  * roda em Edge Runtime por padrão, e `lib/auth.ts` carrega `bcryptjs` +
@@ -25,7 +31,14 @@ import { authConfig } from '@/lib/auth.config';
 
 const { auth } = NextAuth(authConfig);
 
-const PUBLIC_PATH_PREFIXES = ['/login', '/api/auth', '/api/webhooks', '/api/v1/health'];
+const PUBLIC_PATH_PREFIXES = [
+  '/login',
+  '/descadastro',
+  '/api/auth',
+  '/api/webhooks',
+  '/api/v1/health',
+  '/api/v1/public',
+];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;

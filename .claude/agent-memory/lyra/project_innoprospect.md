@@ -28,3 +28,11 @@ de `apps/web/src/app/api/` ou `apps/web/src/lib/api-handler.ts` (território do 
 publicado de verdade.
 
 Ver também [[bug-rsc-client-icon-props]] (bug de build descoberto e corrigido nessa entrega).
+
+**Fase 3 (entregue em 2026-08-01):** Templates (lista + editor `[id]/page.tsx`, tratando `id==='novo'`
+como criação, com preview local de spintax — ver `lib/spintax.ts`), Instâncias de WhatsApp
+(`app/(dashboard)/whatsapp`, cards com QR polling de 2s via `usePolling`), Opt-outs
+(`app/(dashboard)/configuracoes/optouts`) e a página pública `app/descadastro/[token]/page.tsx` (sem
+`AuthGuard`, sem sidebar — layout próprio em `app/descadastro/layout.tsx`). Nessa entrega descobri que o
+Vega já tinha publicado `@inno/contracts` de verdade em paralelo — ver [[convention-check-contracts-before-mocking]]
+antes de repetir o padrão de tipo local em fases futuras.

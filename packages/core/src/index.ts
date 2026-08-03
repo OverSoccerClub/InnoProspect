@@ -10,3 +10,5 @@ export * from './templates/spintax.js';
 export * from './optout/detect.js';
 export * from './optout/token.js';
 export * from './locations/uf.js';
+export * from './whatsapp/warmup.js';
+export * from './whatsapp/health.js';

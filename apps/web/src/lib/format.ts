@@ -47,3 +47,11 @@ export function formatPhone(phoneE164: string | null | undefined): string {
   if (!match) return phoneE164;
   return `(${match[1]}) ${match[2]}-${match[3]}`;
 }
+
+/**
+ * Valida formato E.164 — mesma regex de `e164Schema` em `@inno/contracts`
+ * (ARQUITETURA.md §4.0). Não valida DDD/operadora, só a forma.
+ */
+export function isValidE164(value: string): boolean {
+  return /^\+[1-9]\d{7,14}$/.test(value.trim());
+}
