@@ -4,3 +4,5 @@
 - [Bug: Next build não resolve pacotes internos .ts com imports .js](bug_nextjs_workspace_ts_source_imports.md) — precisa `transpilePackages` + `resolve.extensionAlias`.
 - [Convenções do packages/messaging (Evolution API)](convention_messaging_evolution_api.md) — superfície pública do EvolutionClient/parser de webhook, retry só em transiente, pendências não validadas.
 - [Bug: teste de retry/backoff com sleep real estoura timeout do vitest](bug_vitest_fake_timers_retry_backoff.md) — usar `vi.useFakeTimers()` + `runAllTimersAsync()` em testes ponta a ponta de retry.
+- [Convenção: estado operacional (pausa de fila/heartbeat) em Redis via Queue#client](convention_worker_redis_state.md) — chaves duplicadas worker/web, ScraperHealthEvent só cobre A1-A4.
+- [Bug: Queue#client do bullmq não é o Commander do ioredis](bug_bullmq_client_not_ioredis.md) — sem `.ping()`, `.set()` usa options object, não varargs `'EX', n`.

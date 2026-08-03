@@ -18,6 +18,7 @@ import { API_ERROR_HTTP_STATUS, apiError, type ApiErrorCode, type ApiErrorDetail
 import { Prisma } from '@inno/db';
 import { auth } from './auth';
 import { logger } from './logger';
+import { checkRateLimit, clientIp } from './rate-limit';
 
 /**
  * Erro de negócio/validação que uma rota (ou uma função de serviço chamada
@@ -92,6 +93,23 @@ export type RouteParamsPromise = { params: Promise<Record<string, string>> };
 export type ApiRouteOptions<TQuery, TBody, TParams> = {
   /** Default `true` — quase toda rota `/api/v1/*` exige sessão (ARQUITETURA §4.0). Só `false` para rotas públicas explícitas. */
   requireAuth?: boolean;
+  /**
+   * Limite de taxa por IP, aplicado como o PRIMEIRO passo do handler — antes
+   * de sessão, antes de ler o corpo. Só faz sentido em rota `requireAuth:
+   * false` (rota autenticada já é limitada implicitamente por exigir login);
+   * usado hoje no webhook da Evolution e no opt-out público (achado do Órion,
+   * 2026-08-03: nenhuma rota pública tinha rate limit). `bucket` identifica a
+   * rota no contador compartilhado (`lib/rate-limit.ts`) — obrigatório para
+   * duas rotas com `rateLimit` não dividirem o mesmo balde.
+   */
+  rateLimit?: { windowMs: number; max: number; bucket: string };
+  /**
+   * Rejeita o corpo (antes do `JSON.parse`) se exceder este tamanho em bytes.
+   * Sem isto uma rota sem sessão paga o custo de ler/parsear qualquer payload
+   * que o cliente mandar. Só use em rota pública — rota autenticada não
+   * precisa (o operador já passou por login).
+   */
+  maxBodyBytes?: number;
   querySchema?: ZodType<TQuery>;
   bodySchema?: ZodType<TBody>;
   paramsSchema?: ZodType<TParams>;
@@ -127,6 +145,17 @@ export function apiRoute<TQuery = undefined, TBody = undefined, TParams = Record
     const path = req.nextUrl.pathname;
 
     try {
+      // Rate limit é o PRIMEIRO passo, antes de sessão e de ler o corpo —
+      // uma requisição que estoura o limite não deve custar Postgres (auth
+      // já não roda em rota pública) nem `req.text()`/`JSON.parse`.
+      if (options.rateLimit) {
+        const key = `${options.rateLimit.bucket}:${clientIp(req)}`;
+        const result = checkRateLimit(key, options.rateLimit.windowMs, options.rateLimit.max);
+        if (!result.allowed) {
+          throw new ApiHttpError('RATE_LIMITED', 'Muitas tentativas em pouco tempo. Aguarde um instante e tente novamente.');
+        }
+      }
+
       let session: AuthedSession | null = null;
       if (requireAuth) {
         const authSession = await auth();
@@ -145,7 +174,22 @@ export function apiRoute<TQuery = undefined, TBody = undefined, TParams = Record
 
       let rawBody: unknown;
       if (method !== 'GET' && method !== 'DELETE' && method !== 'HEAD') {
+        if (options.maxBodyBytes !== undefined) {
+          const declaredLength = Number(req.headers.get('content-length') ?? NaN);
+          if (Number.isFinite(declaredLength) && declaredLength > options.maxBodyBytes) {
+            badRequest('Corpo da requisição excede o tamanho máximo permitido.');
+          }
+        }
+
         const text = await req.text();
+
+        if (options.maxBodyBytes !== undefined && Buffer.byteLength(text, 'utf8') > options.maxBodyBytes) {
+          // Defesa de segunda linha para o caso raro de corpo sem
+          // `content-length` (ex.: transfer-encoding chunked) — o header já
+          // barra a maioria dos casos antes de gastar a leitura acima.
+          badRequest('Corpo da requisição excede o tamanho máximo permitido.');
+        }
+
         if (text.length > 0) {
           try {
             rawBody = JSON.parse(text);

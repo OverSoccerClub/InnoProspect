@@ -28,31 +28,49 @@ import {
 } from '@inno/scraper';
 import { SCRAPE_SEARCH_JOB_NAME, priorityFromPopulation } from '../queues.js';
 import { logger } from '../observability/logger.js';
+import { evaluateAndRecordSanity } from '../observability/sanity.js';
+import { persistQueuePause } from '../lib/queue-state.js';
 
 export type ScrapeSearchJobData = { searchTaskId: string };
 
-/** Timer do "despausar" automático de uma fila pausada por RATE_LIMITED/CAPTCHA_DETECTED. */
-let queueResumeTimer: NodeJS.Timeout | null = null;
-
-async function pauseQueueFor(scrapeQueue: Queue, ms: number, reason: string, severity: 'high' | 'critical') {
+/**
+ * Pausa a fila (BullMQ nativo, já persistido no Redis) e grava o MOTIVO/
+ * HORÁRIO num campo de metadata próprio no Redis (`lib/queue-state.ts`) — não
+ * mais um `setTimeout` em memória do processo. Onda 1 item 1.2: o timer
+ * antigo sumia se o worker reiniciasse, deixando a fila pausada para sempre
+ * sem ninguém saber por quê. Agora um sweep periódico (`scheduler.ts`) lê
+ * essa metadata do Redis e retoma sozinho quando `resumeAt` vence — sobrevive
+ * a restart porque não depende de nenhum estado em memória.
+ */
+async function pauseQueueFor(
+  scrapeQueue: Queue,
+  ms: number,
+  code: string,
+  message: string,
+  severity: 'high' | 'critical',
+): Promise<void> {
   await scrapeQueue.pause();
+
+  const pausedAt = new Date();
+  const resumeAt = Number.isFinite(ms) ? new Date(pausedAt.getTime() + ms) : null;
+
+  await persistQueuePause(scrapeQueue, {
+    code,
+    message,
+    severity,
+    source: 'scrape_error',
+    pausedAt: pausedAt.toISOString(),
+    // LAYOUT_CHANGED (ms = Infinity) pausa indefinida — exige `POST
+    // /api/v1/scraper/queue/resume` manual, depois de consertar
+    // extraction/selectors.ts. RATE_LIMITED/CAPTCHA_DETECTED têm `resumeAt`
+    // e o sweep periódico retoma sozinho quando a hora chegar.
+    resumeAt: resumeAt ? resumeAt.toISOString() : null,
+  });
+
   logger[severity === 'critical' ? 'fatal' : 'error'](
-    { reason, pauseMs: Number.isFinite(ms) ? ms : 'infinite' },
+    { code, resumeAt: resumeAt?.toISOString() ?? 'indefinido (exige POST /api/v1/scraper/queue/resume)' },
     'scrape:search queue paused — intervenção automática de anti-detecção/anti-quebra',
   );
-
-  if (!Number.isFinite(ms)) {
-    // LAYOUT_CHANGED: pausa indefinida, exige intervenção humana (consertar
-    // extraction/selectors.ts) — não há endpoint de "resume" na Fase 1.
-    return;
-  }
-
-  if (queueResumeTimer) clearTimeout(queueResumeTimer);
-  queueResumeTimer = setTimeout(() => {
-    logger.warn({ reason }, 'scrape:search queue resumed automaticamente após pausa');
-    void scrapeQueue.resume();
-  }, ms);
-  queueResumeTimer.unref?.();
 }
 
 /**
@@ -228,6 +246,20 @@ export function createScrapeSearchProcessor(scrapeQueue: Queue) {
         { searchTaskId, resultCount: output.businesses.length, newLeads: newCount },
         'SearchTask concluída',
       );
+
+      // Assertions de sanidade (A1-A4, Onda 1 item 1.1) — SEMPRE depois da
+      // task já ter fechado com sucesso, e em seu PRÓPRIO try/catch: um erro
+      // aqui (ex.: Postgres soluçou no meio da leitura) é um bug de
+      // observabilidade, não motivo para marcar a task que acabou de
+      // completar como falha.
+      try {
+        await evaluateAndRecordSanity(scrapeQueue);
+      } catch (sanityErr) {
+        logger.error(
+          { searchTaskId, err: sanityErr instanceof Error ? sanityErr : new Error(String(sanityErr)) },
+          'falha ao avaliar sanidade do scraper (não afeta a SearchTask, que já concluiu)',
+        );
+      }
     } catch (err) {
       await handleScrapeFailure(scrapeQueue, task, err);
     }
@@ -252,7 +284,7 @@ async function handleScrapeFailure(
   );
 
   if (policy.pauseQueueMs !== undefined) {
-    await pauseQueueFor(scrapeQueue, policy.pauseQueueMs, code, policy.alarmSeverity ?? 'high');
+    await pauseQueueFor(scrapeQueue, policy.pauseQueueMs, code, message, policy.alarmSeverity ?? 'high');
   }
 
   if (task.attempt < effectiveMaxAttempts) {

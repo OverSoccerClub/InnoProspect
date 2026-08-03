@@ -22,6 +22,24 @@ Evolution API + parser de webhook. Detalhe completo em [[convention-messaging-ev
 falta a rota real do webhook em `apps/web` e o dispatch worker (rodadas futuras, dependem do Cronos
 terminar `Message`/`OptOut`/`WhatsAppInstance` no schema).
 
+**Meu escopo entregue (Onda 1 pós-revisão, 2026-08-03 — REVISAO-ARQUITETURA.md/REVISAO-QA.md):**
+"o sistema consegue dizer que está quebrado". Liguei `evaluateSanity` (A1-A4, estava escrita e testada
+com zero chamadores) em `apps/worker/src/observability/sanity.ts`, chamado ao fim de cada `SearchTask`
+bem-sucedida (`jobs/scrape-search.job.ts`) — grava/resolve `ScraperHealthEvent` e pausa a fila quando
+A1/A2 disparam. Troquei o `setTimeout` em memória da pausa de fila por estado persistido no Redis
+(`lib/queue-state.ts`, escritor no worker/leitor no web, ver [[convention-worker-redis-state]]) — não
+some mais num restart. Adicionei heartbeat do worker (mesma via Redis), `requeue-orphans` no boot
+(`jobs/requeue-orphans.ts`, risco R10), `GET /api/v1/health` de verdade (banco/Redis/worker/fila
+separados, só o banco decide 200/503) e os endpoints novos `GET /api/v1/scraper/queue` +
+`POST /api/v1/scraper/queue/resume` (sem contrato prévio da Nova — documentado no handoff). Também
+adicionei rate limit + limite de corpo em `apiRoute` (`rateLimit`/`maxBodyBytes`, `lib/rate-limit.ts`),
+aplicado nas duas rotas públicas (webhook Evolution, opt-out público) por achado do Órion. Gotcha de
+typecheck descoberto nessa rodada: [[bug-bullmq-client-not-ioredis]].
+**Não pude validar:** nada disto rodou contra Postgres/Redis reais (indisponíveis nesta máquina) —
+`pnpm typecheck`/`lint`/`test` (164+48 testes existentes) e `next build`/`tsup build` passaram limpos,
+mas o comportamento sob concorrência real (claim atômico, sweep de pausa, heartbeat expirando) só se
+prova em ambiente com Redis de verdade.
+
 **Antes de mim:** `packages/db` (schema+seed, Cronos), `packages/contracts` (Zod, Nova/Cronos),
 `packages/core` (dedupe/phone/status/uf, já com `MACHINE_UPDATABLE_FIELDS` pronto), `packages/scraper`
 (engine Playwright completo, `runSearch`/`SearchEngine`), `apps/web` telas (Lyra, rodando em mock).

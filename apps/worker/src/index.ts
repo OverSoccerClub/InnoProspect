@@ -1,6 +1,7 @@
 import { prisma } from '@inno/db';
 import { logger } from './observability/logger.js';
 import { startWorkers } from './scheduler.js';
+import { requeueOrphanTasks } from './jobs/requeue-orphans.js';
 
 async function main(): Promise<void> {
   // Falha rápido e com mensagem clara se o processo subir sem banco
@@ -11,6 +12,18 @@ async function main(): Promise<void> {
 
   const workers = startWorkers();
   logger.info('worker up');
+
+  // Onda 1 item 1.5 (risco R10, REVISAO-ARQUITETURA §4.1): recolhe
+  // SearchTask presas em `pending`/`running` de uma execução anterior —
+  // Redis que perdeu a fila, enqueue que falhou silenciosamente
+  // (`services/searches.ts`), ou worker que morreu no meio do processamento.
+  // Roda 1x no boot, depois que a fila/worker já estão prontos para consumir
+  // o que for reenfileirado.
+  try {
+    await requeueOrphanTasks(workers.scrapeSearchQueue);
+  } catch (err) {
+    logger.error({ err }, 'requeue-orphans falhou no boot — worker continua no ar, mas tasks órfãs podem seguir presas até o próximo restart');
+  }
 
   let shuttingDown = false;
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

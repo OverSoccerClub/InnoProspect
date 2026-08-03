@@ -15,6 +15,14 @@
  *   4. A partir daí, SEMPRE `200 { received: true }`, mesmo se o
  *      processamento falhar internamente — a Evolution reenvia em não-200 e
  *      pode entrar em loop; erro de processamento vira log, não resposta de erro.
+ *
+ * Rate limit + limite de corpo (achado do Órion, 2026-08-03): rota sem
+ * sessão, autenticada só depois do `req.text()`/`JSON.parse` — sem isto,
+ * qualquer flood anônimo já custava 1 consulta ao Postgres por requisição
+ * (busca do `instanceKey`) antes de rejeitar. `apiRoute` agora corta isso no
+ * primeiro passo, antes de qualquer I/O. Limite generoso (bem acima do
+ * volume esperado de eventos reais da Evolution) porque isto não é anti-abuso
+ * de usuário final — é o provedor de WhatsApp mandando webhook.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -26,8 +34,13 @@ import { logger } from '@/lib/logger';
 
 const paramsSchema = z.object({ instanceKey: z.string().min(1) });
 
+const WEBHOOK_RATE_LIMIT_PER_MIN = Number(process.env.WEBHOOK_RATE_LIMIT_PER_MIN ?? 300);
+const WEBHOOK_MAX_BODY_BYTES = 1_000_000; // 1MB — payload de evento é JSON pequeno; folga generosa para metadados de mídia.
+
 export const POST = apiRoute({
   requireAuth: false,
+  rateLimit: { windowMs: 60_000, max: WEBHOOK_RATE_LIMIT_PER_MIN, bucket: 'webhook-evolution' },
+  maxBodyBytes: WEBHOOK_MAX_BODY_BYTES,
   paramsSchema,
   bodySchema: z.unknown(),
   handler: async ({ params, body, req }) => {
