@@ -79,6 +79,25 @@ COPY packages/db packages/db
 COPY packages/core packages/core
 COPY packages/contracts packages/contracts
 COPY packages/scraper packages/scraper
+
+# Mesma guarda do apps/web/Dockerfile. Um pacote do workspace importado pelo
+# worker e esquecido nos COPY acima NÃO quebra o `pnpm install` — a falha
+# aparece só no bundle, com uma mensagem que não aponta para este arquivo.
+# `@inno/messaging` entra aqui quando o worker de disparo (Fase 4) chegar.
+RUN node -e "\
+const pkg=require('./apps/worker/package.json');\
+const fs=require('fs');\
+const faltando=Object.keys(pkg.dependencies||{})\
+  .filter(d=>d.startsWith('@inno/'))\
+  .map(d=>d.replace('@inno/',''))\
+  .filter(n=>!fs.existsSync('packages/'+n+'/package.json'));\
+if(faltando.length){\
+  console.error('\n[Dockerfile] apps/worker depende de @inno/'+faltando.join(', @inno/')+', mas esse(s) pacote(s) NAO foram copiados para a imagem.');\
+  console.error('[Dockerfile] Conserto: adicione COPY packages/<nome>/package.json nos stages deps e prod-deps E COPY packages/<nome> no stage build.\n');\
+  process.exit(1);\
+}\
+console.log('[Dockerfile] Todos os pacotes @inno/* de apps/worker estao presentes.');"
+
 RUN pnpm --filter @inno/db run generate
 RUN pnpm --filter worker run build
 

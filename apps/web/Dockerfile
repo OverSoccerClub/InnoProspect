@@ -62,9 +62,16 @@ WORKDIR /app
 FROM base AS deps
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
 COPY apps/web/package.json apps/web/package.json
+# ⚠️ ESTA LISTA PRECISA CONTER TODO `@inno/*` QUE apps/web/package.json
+# declara como dependência. Um pacote novo importado pelo app e esquecido aqui
+# NÃO quebra o `pnpm install` — ele passa, e o build só falha lá na frente com
+# "Module not found: Can't resolve '@inno/xxx'", longe da causa. Foi assim que
+# `@inno/messaging` derrubou o deploy da Fase 3. O `RUN` de verificação no
+# stage `builder` existe para transformar isso num erro explícito.
 COPY packages/db/package.json packages/db/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/messaging/package.json packages/messaging/package.json
 # --shamefully-hoist: por padrão o pnpm cria um node_modules PRÓPRIO dentro
 # de cada pacote do workspace (apps/web/node_modules, packages/db/node_modules
 # etc.), cada um só com symlinks das SUAS dependências declaradas — só o
@@ -91,6 +98,26 @@ COPY apps/web apps/web
 COPY packages/db packages/db
 COPY packages/core packages/core
 COPY packages/contracts packages/contracts
+COPY packages/messaging packages/messaging
+
+# Guarda contra o erro mais provável deste arquivo: apps/web passa a importar um
+# pacote novo do workspace e alguém esquece de copiá-lo nos dois lugares acima.
+# Sem isto, o sintoma é um "Module not found" do webpack no meio do `next build`
+# — mensagem que não diz nada sobre o Dockerfile ser a causa. Aqui a falha vem
+# antes, nomeando o pacote e o conserto.
+RUN node -e "\
+const pkg=require('./apps/web/package.json');\
+const fs=require('fs');\
+const faltando=Object.keys(pkg.dependencies||{})\
+  .filter(d=>d.startsWith('@inno/'))\
+  .map(d=>d.replace('@inno/',''))\
+  .filter(n=>!fs.existsSync('packages/'+n+'/package.json'));\
+if(faltando.length){\
+  console.error('\n[Dockerfile] apps/web depende de @inno/'+faltando.join(', @inno/')+', mas esse(s) pacote(s) NAO foram copiados para a imagem.');\
+  console.error('[Dockerfile] Conserto: adicione COPY packages/<nome>/package.json no stage deps E COPY packages/<nome> no stage builder.\n');\
+  process.exit(1);\
+}\
+console.log('[Dockerfile] Todos os pacotes @inno/* de apps/web estao presentes.');"
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ARG DATABASE_URL="postgresql://user:pass@localhost:5432/placeholder"
