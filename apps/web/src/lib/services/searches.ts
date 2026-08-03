@@ -137,19 +137,39 @@ export async function createSearchJob(input: CreateSearchJobBody, createdById: s
 
   // Enfileira fora da transação (Redis não participa da transação do
   // Postgres — "Redis é volátil por design; a verdade está no Postgres",
-  // ARQUITETURA §1.3). Se o enqueue falhar aqui, as tasks ficam `pending`
-  // no banco esperando reprocessamento manual (`retry-failed`) — o job
-  // `requeue-orphans` no boot do worker (R10, ainda não implementado) é
-  // quem fecharia esse buraco de vez.
+  // ARQUITETURA §1.3).
+  //
+  // Falha de enqueue NÃO perde trabalho: as `SearchTask` já estão gravadas
+  // como `pending`, e o `requeue-orphans` (Onda 1, `apps/worker/src/jobs/`)
+  // as reenfileira no próximo boot do worker. Por isso a criação continua
+  // devolvendo 201 — o trabalho existe e será executado.
+  //
+  // ⚠️ Mas o silêncio aqui já custou dois dias: com o Redis fora, uma busca
+  // ficou "Na fila" na tela sem nada indicar que ela não estava em fila
+  // nenhuma. O log abaixo é agregado e explícito para aparecer numa varredura
+  // rápida; quem responde "por que não anda?" é `GET /api/v1/health`, que
+  // reporta Redis, worker e fila separadamente.
+  let falhasDeEnqueue = 0;
   await Promise.all(
     tasks.map(async (task) => {
       try {
         await enqueueScrapeSearchTask(task.id, task.city.population);
       } catch (err) {
+        falhasDeEnqueue += 1;
         logger.error('falha ao enfileirar SearchTask', { searchTaskId: task.id, searchJobId: job.id, err: err instanceof Error ? err : new Error(String(err)) });
       }
     }),
   );
+
+  if (falhasDeEnqueue > 0) {
+    logger.error('busca criada SEM entrar na fila', {
+      searchJobId: job.id,
+      tarefasNaoEnfileiradas: falhasDeEnqueue,
+      totalTarefas: tasks.length,
+      efeito: 'A busca aparece como "na fila" na tela, mas nada será processado até o Redis voltar.',
+      acao: 'Verifique GET /api/v1/health (checks.redis.target diz para onde tentamos conectar). O worker reenfileira sozinho no próximo boot.',
+    });
+  }
 
   return {
     id: job.id,

@@ -18,7 +18,7 @@
  */
 import { prisma, type ScraperHealthEventSeverity, type ScraperHealthEventType } from '@inno/db';
 import { conflict } from '@/lib/api-handler';
-import { getScrapeSearchQueue } from '@/lib/queue';
+import { getScrapeSearchQueue, redisTargetForDisplay } from '@/lib/queue';
 import {
   clearQueuePauseMeta,
   isScrapeQueuePausedSafe,
@@ -44,7 +44,13 @@ export type HealthReport = {
   time: string;
   checks: {
     database: { status: DependencyStatus; latencyMs: number | null; error?: string };
-    redis: { status: DependencyStatus; latencyMs: number | null; error?: string };
+    /**
+     * `target` é host:porta SEM credenciais. Existe porque "timeout" sozinho
+     * não distingue as duas causas mais comuns, que pedem consertos opostos:
+     * ver `localhost:6379` significa que a variável não chegou no container;
+     * ver o hostname do serviço significa que o host está inacessível.
+     */
+    redis: { status: DependencyStatus; latencyMs: number | null; target: string; error?: string };
     worker: { status: 'ok' | 'down'; lastHeartbeatAt: string | null; ageSeconds: number | null };
     queue: QueueStatusView;
     openIncidents: number;
@@ -107,7 +113,9 @@ export async function getHealthReport(): Promise<HealthReport> {
     time: new Date().toISOString(),
     checks: {
       database,
-      redis: redis.ok ? { status: 'ok', latencyMs: redis.latencyMs } : { status: 'error', latencyMs: null, error: redis.error },
+      redis: redis.ok
+        ? { status: 'ok', latencyMs: redis.latencyMs, target: redisTargetForDisplay() }
+        : { status: 'error', latencyMs: null, target: redisTargetForDisplay(), error: redis.error },
       worker,
       queue,
       openIncidents,

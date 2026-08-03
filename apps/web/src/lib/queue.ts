@@ -21,8 +21,46 @@ export type ScrapeSearchJobData = { searchTaskId: string };
 
 let scrapeSearchQueue: Queue<ScrapeSearchJobData> | null = null;
 
+/**
+ * ⚠️ Sem fallback silencioso em produção.
+ *
+ * Isto já custou dois dias: em produção, sem `REDIS_URL`, a versão anterior
+ * caía em `redis://localhost:6379`, tentava conectar num Redis que não existe
+ * dentro do container e falhava com "timeout" — um sintoma que não diz nada
+ * sobre a causa. A busca ficava em `queued` para sempre e o log não ajudava.
+ *
+ * Em desenvolvimento o padrão continua, porque ali `localhost` é de fato o
+ * Redis do compose. Em produção, variável ausente é erro de configuração e
+ * tem que gritar, não adivinhar.
+ */
 function redisUrl(): string {
-  return process.env.REDIS_URL ?? 'redis://localhost:6379';
+  const fromEnv = process.env.REDIS_URL?.trim();
+  if (fromEnv) return fromEnv;
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'REDIS_URL não está definida. Sem ela não há fila: buscas seriam criadas no banco e nunca processadas. ' +
+        'Defina REDIS_URL nas variáveis de ambiente do serviço.',
+    );
+  }
+  return 'redis://localhost:6379';
+}
+
+/**
+ * Host e porta do Redis configurado, SEM credenciais — para o health check
+ * dizer *para onde* tentou conectar. Distinguir `localhost:6379` de
+ * `inno-prospect_inno-prospect-redis:6379` na resposta separa na hora
+ * "variável não chegou no container" de "o host está inacessível".
+ */
+export function redisTargetForDisplay(): string {
+  const raw = process.env.REDIS_URL?.trim();
+  if (!raw) return '(REDIS_URL ausente)';
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.hostname}:${parsed.port || '6379'}`;
+  } catch {
+    return '(REDIS_URL malformada)';
+  }
 }
 
 /** Singleton do produtor — reaproveita a conexão entre chamadas de rota dentro do mesmo processo Next.js. */

@@ -32,8 +32,26 @@ export const SCRAPE_RATE_LIMITER = {
   duration: 60_000,
 };
 
+/**
+ * ⚠️ Sem fallback silencioso em produção — mesma regra de
+ * `apps/web/src/lib/queue.ts` (contrato de protocolo duplicado de propósito).
+ *
+ * Sem `REDIS_URL`, a versão anterior tentava `localhost` dentro do container e
+ * morria com "timeout". No worker isso é ainda pior que no web: ele sobe,
+ * parece vivo, e simplesmente nunca consome nada — falha silenciosa, que é
+ * exatamente o modo de falha que esta Onda existiu para eliminar.
+ */
 export function redisUrl(): string {
-  return process.env.REDIS_URL ?? 'redis://localhost:6379';
+  const fromEnv = process.env.REDIS_URL?.trim();
+  if (fromEnv) return fromEnv;
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'REDIS_URL não está definida. O worker não tem fila para consumir e nenhuma busca sairia de "queued". ' +
+        'Defina REDIS_URL nas variáveis de ambiente do serviço.',
+    );
+  }
+  return 'redis://localhost:6379';
 }
 
 /** Opções de conexão exigidas pelo BullMQ (`maxRetriesPerRequest: null` é obrigatório para Worker/QueueEvents). */
