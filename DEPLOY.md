@@ -11,6 +11,13 @@
 > real do repositório, mas o **primeiro build no EasyPanel é o primeiro teste
 > real**. Trate o primeiro deploy como um ensaio: acompanhe os logs de build
 > e de boot, não assuma que vai funcionar de primeira.
+>
+> ⚠️ **`infra/docker-compose.yml` NÃO é a produção.** A produção é este
+> documento — cada serviço criado avulso na UI do EasyPanel. Aquele arquivo
+> é só para validar localmente, numa máquina com Docker, que os mesmos
+> Dockerfiles sobem juntos; nunca rodou nem roda em produção. Se você
+> chegou aqui depurando um incidente, o estado real está no painel do
+> EasyPanel, não naquele arquivo.
 
 ---
 
@@ -70,15 +77,29 @@ Se for usar a Evolution API com Postgres também (recomendado — ver §4), crie
 
 **+ Add Service → App** (a partir de uma imagem Docker, não de um repositório Git).
 
-- Imagem: `atendai/evolution-api:<versão pinada>` — **confira a versão estável atual em https://hub.docker.com/r/atendai/evolution-api antes de preencher** (eu não tenho como validar isso nesta sessão sem acesso à internet; `infra/docker-compose.yml` traz `v2.2.3` como ponto de partida, não como valor confirmado).
+- Imagem: **`evoapicloud/evolution-api:v2.3.7`** — confirmada com acesso à
+  rede em 2026-08-03 (última tag estável, publicada 2025-12-05; existe
+  `2.4.0-rc1`/`rc2`, mais recentes mas release-candidate, **não use**).
+  ⚠️ **O projeto mudou de nome/organização e de imagem Docker.** Era
+  `EvolutionAPI/evolution-api` → imagem `atendai/evolution-api`; agora é
+  `evolution-foundation/evolution-api` (marca "Evolution Foundation") →
+  imagem **`evoapicloud/evolution-api`**. A imagem antiga (`atendai/...`)
+  ficou órfã (nenhum push desde meados de 2025) e nunca teve nada além da
+  v2.2.3 — que era exatamente o "chute" que estava aqui antes. Se você
+  pinar uma versão mais nova no futuro, confirme de novo em
+  https://github.com/evolution-foundation/evolution-api/releases (tags
+  `latest`/prerelease não servem) e em
+  https://hub.docker.com/r/evoapicloud/evolution-api/tags.
 - **Nunca use a tag `latest`** — risco documentado em `ARQUITETURA.md §9.1` (R4): uma atualização quebrando compatibilidade derruba todo o disparo de WhatsApp sem aviso.
 - **Não exponha a porta publicamente** — só `web` e `worker` falam com ela, pelo nome interno do serviço (ex.: `http://innoprospect-evolution:8080`).
-- Variáveis de ambiente (nomes da v2.x — confirme contra a documentação oficial da versão que você pinou, https://doc.evolution-api.com, essas chaves mudam entre versões):
+- Variáveis de ambiente — conferidas em 2026-08-03 contra o `.env.example`
+  REAL da tag `2.3.7` (`https://github.com/evolution-foundation/evolution-api/blob/2.3.7/.env.example`
+  — repare que a tag git não tem o "v" que aparece no nome da release):
   | Variável | Valor |
   |---|---|
   | `SERVER_URL` | URL interna deste serviço, ex. `http://innoprospect-evolution:8080` |
   | `AUTHENTICATION_API_KEY` | o valor de `EVOLUTION_API_KEY` gerado no passo 0 |
-  | `DATABASE_ENABLED` | `true` |
+  | `DATABASE_ENABLED` | `true` — ⚠️ essa chave **não aparece mais** no `.env.example` da 2.3.7 (existia na v2.2.x, que foi a base deste guia antes). Deixe por precaução — env var desconhecida costuma ser ignorada — mas **acompanhe o log de boot** da Evolution API no primeiro deploy: se houver aviso de variável não reconhecida, remova esta linha. |
   | `DATABASE_PROVIDER` | `postgresql` |
   | `DATABASE_CONNECTION_URI` | `postgresql://<user>:<senha>@<nome-do-serviço-postgres>:5432/evolution` |
   | `CACHE_REDIS_ENABLED` | `true` |
@@ -99,6 +120,36 @@ Se for usar a Evolution API com Postgres também (recomendado — ver §4), crie
 - Domínio: configure o seu (ex. `app.seudominio.com.br`), com HTTPS automático do EasyPanel.
 - **Health check**: caminho `/api/v1/health`, porta `3000`. Essa rota é pública (não exige sessão) e faz `SELECT 1` no Postgres — só fica `200` se o banco estiver realmente acessível, não só se o processo Node subiu. Configure o EasyPanel para considerar o deploy saudável só depois de N checks `200` consecutivos, e para **manter a versão anterior no ar** (rollback automático) se o novo container não ficar saudável dentro do timeout — é assim que o `docker-entrypoint.sh` fail-fast (ver comentário no próprio arquivo) protege o deploy: se `prisma migrate deploy` falhar, o container nem chega a responder o health check.
 
+### ⚠️ Build-time vs runtime — onde cada variável vai no EasyPanel
+
+O EasyPanel normalmente separa, na tela do serviço `web`, um campo para
+**"Build" (vira `--build-arg`)** e outro para **"Environment" (env do
+container em runtime)**. Essa distinção não é cosmética: **tudo que entra
+como build-arg fica gravado permanentemente na imagem** — qualquer pessoa
+com acesso ao registry/`docker history` da imagem consegue ler de volta, e
+o valor aparece **em texto puro no log de build**. Runtime env não tem
+nenhum desses dois problemas (não é impresso no log de build, não fica
+gravado na imagem).
+
+Contra o `apps/web/Dockerfile` real:
+
+| Variável | Build-arg? | Por quê |
+|---|---|---|
+| `DATABASE_URL` | Sim, mas **não precisa do valor real** | O `prisma generate` (stage `generate`) só precisa de uma URL com formato válido pra resolver o schema — **nunca conecta de verdade**. O Dockerfile já tem um placeholder (`postgresql://user:pass@localhost:5432/placeholder`) como default do `ARG`. **Não sobrescreva isso com a senha real do Postgres de produção** — não há motivo, e isso seria exatamente o vazamento que este aviso existe para evitar. Deixe o EasyPanel construir sem preencher este build-arg. |
+| `NEXT_PUBLIC_USE_MOCKS` | Sim (mas não é segredo) | Vira parte do bundle JS do navegador — tem que existir em build-time por definição. Default do Dockerfile já é `false` (produção real); só mexa se quiser uma imagem de demonstração com mocks. |
+| `NEXT_PUBLIC_API_BASE_URL` | Sim (mas não é segredo) | Mesmo motivo acima. Deixe vazio (mesma origem) no caso normal. |
+| **Todas as outras** (`NEXTAUTH_SECRET`, `EVOLUTION_API_KEY`, `ADMIN_PASSWORD`, senha do Postgres embutida numa `DATABASE_URL` de verdade, senha do Redis, etc.) | **NÃO** | São lidas em runtime pelo processo Node (`process.env.*`), nunca pelo `next build`. Coloque SÓ no campo "Environment"/runtime do EasyPanel. Colocar aqui não muda nada funcionalmente hoje (o build já usa o placeholder) — o único efeito de colocar por engano seria vazar o segredo no log de build e gravá-lo na imagem, sem nenhum ganho. |
+
+**Regra prática para quem for preencher a tela do EasyPanel:** se o campo se
+chama "Build"/"Build Arguments"/"Build Variables", só preencha
+`NEXT_PUBLIC_USE_MOCKS`/`NEXT_PUBLIC_API_BASE_URL` se precisar mudar o
+default — e nunca cole um segredo ali. Tudo que tem "senha", "secret",
+"key" ou "password" no nome vai no campo de runtime, sempre.
+
+O mesmo vale para `apps/worker` — o `apps/worker/Dockerfile` não declara
+**nenhum** `ARG` de segredo (confirmado lendo o arquivo nesta entrega); toda
+variável do worker é runtime.
+
 ### Variáveis de ambiente do `web`
 
 | Variável | Valor | Observação |
@@ -116,7 +167,7 @@ Se for usar a Evolution API com Postgres também (recomendado — ver §4), crie
 | `EVOLUTION_WEBHOOK_BASE_URL` | `https://<seu-domínio>/api/webhooks/evolution` | |
 | `LOG_LEVEL` | `info` | |
 
-⚠️ **`NEXT_PUBLIC_USE_MOCKS` e `NEXT_PUBLIC_API_BASE_URL` NÃO vão nesta tabela** — são embutidas no bundle JavaScript do navegador **durante o `docker build`**, não lidas em runtime. O `apps/web/Dockerfile` já builda com `NEXT_PUBLIC_USE_MOCKS=false` por padrão (produção real, sem mock) — não precisa (e não adianta) definir isso como env do serviço no EasyPanel depois do build pronto.
+⚠️ **`NEXT_PUBLIC_USE_MOCKS` e `NEXT_PUBLIC_API_BASE_URL` NÃO vão nesta tabela** — são embutidas no bundle JavaScript do navegador **durante o `docker build`**, não lidas em runtime. O `apps/web/Dockerfile` já builda com `NEXT_PUBLIC_USE_MOCKS=false` por padrão (produção real, sem mock) — não precisa (e não adianta) definir isso como env do serviço no EasyPanel depois do build pronto. Ver a subseção "Build-time vs runtime" acima para a tabela completa de quem é build-arg e quem é runtime — **todas as variáveis da tabela acima são runtime**, nenhuma delas deve ir no campo de "Build" do EasyPanel.
 
 ---
 
@@ -184,11 +235,41 @@ Mesmas de `DATABASE_URL`, `REDIS_URL`, `LOG_LEVEL`, `EVOLUTION_API_URL`, `EVOLUT
 
 ---
 
+## 7.5. Backup do Postgres — obrigatório antes de dado de cliente real
+
+Passo a passo completo, com o teste de restore, em `infra/backup/README.md`.
+Resumo: ative o recurso nativo "Database Backups" do serviço Postgres no
+EasyPanel (agendamento + retenção + destino S3-compatível externo), e
+**teste o restore de verdade** antes de considerar isto resolvido — um
+backup nunca restaurado é uma suposição, não uma proteção. `infra/backup/`
+também tem `pg-dump.sh`/`pg-restore.sh` como caminho manual (avulso ou se a
+sua licença do EasyPanel não incluir backup agendado nativo).
+
+⚠️ Nenhum comando de backup/restore foi executado nesta sessão — sem
+Postgres nem Docker disponíveis. O que precisa ser verificado no primeiro
+uso está listado no topo de cada script e no checklist final do README.
+
+---
+
 ## 8. O que NÃO está resolvido ainda (declarado explicitamente, não escondido)
 
-- **Rotação de segredos.** `NEXTAUTH_SECRET` e `EVOLUTION_API_KEY` não têm processo de rotação definido. Trocar hoje invalida todas as sessões ativas (aceitável) e quebra a conexão da Evolution API até você atualizar o valor nos dois lados (web/worker E Evolution) ao mesmo tempo.
-- **Backup do Postgres.** `ARQUITETURA.md §8` (item 5.5, minha própria entrega da Fase 5) pede "backup diário do Postgres com **restore testado**" — isso ainda **não existe**. `infra/backup/pg-dump.sh` mencionado na estrutura de pastas (§2) não foi criado nesta entrega. Sem isso, uma perda de volume do Postgres no EasyPanel é perda de dado real e irrecuperável. Prioridade alta antes de colocar dado de cliente de verdade em produção.
+- **Rotação de segredos.** `NEXTAUTH_SECRET` e `EVOLUTION_API_KEY` não têm processo de rotação definido. Trocar hoje invalida todas as sessões ativas (aceitável) e quebra a conexão da Evolution API até você atualizar o valor nos dois lados (web/worker E Evolution) ao mesmo tempo. Território do Órion (revisão de 2026-08-03, P10) — cito e sigo.
 - **`requeue-orphans` no boot do worker** (mencionado em `ARQUITETURA.md §9.1` R10) — se o Redis cair e perder a fila, nada reenfileira automaticamente as `SearchTask`/`CampaignTarget` presas em `pending`/`running`. Território do Vega, não meu.
-- **Monitoramento pós-deploy real** (métricas de erro/latência, alertas). Hoje só existe o health check de boot — não há dashboard nem alerta contínuo. `ALERT_WEBHOOK_URL` está documentada no `.env.example` mas **não é lida pelo código ainda** (Fase 5.6).
-- **Versão da imagem da Evolution API não confirmada** — eu não tenho acesso à internet nesta sessão para checar a tag estável mais recente. Confirme antes do primeiro deploy real (§4).
+- **Monitoramento pós-deploy real** (métricas de erro/latência, alertas). Hoje só existe o health check de boot — não há dashboard nem alerta contínuo. `ALERT_WEBHOOK_URL` está documentada no `.env.example` mas **não é lida pelo código da aplicação ainda** (Fase 5.6) — `infra/backup/pg-dump.sh` já dispara nela em caso de falha de backup, mas isso cobre só o backup, não o sistema como um todo.
+- **Monitoramento do próprio backup** (§7.5) — se o job agendado do EasyPanel parar de rodar silenciosamente, hoje ninguém é avisado automaticamente; é preciso abrir o Backups Log na mão. Ver `infra/backup/README.md §5`.
 - **Nenhum dos Dockerfiles/compose foi validado com `docker build`/`docker compose up` de verdade** — sem Docker nesta máquina de desenvolvimento. O primeiro build no EasyPanel é o primeiro teste real (ver aviso no topo deste documento).
+- **Headers de segurança (`next.config.ts`) validados só até onde esta máquina permite.** `pnpm --filter web run build` passou pela geração de todas as páginas com o novo `headers()` sem erro de compilação — mas o build falha depois disso por um limite conhecido do Windows sem modo desenvolvedor (`EPERM` ao criar symlink do `.next/standalone`, o mesmo problema já registrado na entrega anterior, não relacionado ao CSP). Isso prova que o CSP não quebra o *build*; **não prova que nada quebra no navegador** — no primeiro deploy real, abra o Console do navegador em cada tela (login, dashboard, `/descadastro/:token`, modal de QR do WhatsApp) e procure por erros `Refused to ... because it violates the following Content Security Policy directive`. Se aparecer, é a CSP bloqueando algo legítimo que esta revisão não previu — ajuste a diretiva específica em `next.config.ts` e documente o porquê ali, não remova a CSP inteira.
+
+### Resolvido nesta entrega (2026-08-03)
+- **Backup do Postgres com restore testável** — `infra/backup/` criado (ver §7.5). "Testável" ≠ "testado": o teste de restore em si ainda precisa ser executado pelo menos uma vez por alguém com acesso ao EasyPanel — não é algo que eu (Vulcano) tenha como fazer sem Postgres/Docker nesta máquina.
+- **Headers de segurança** — `apps/web/next.config.ts` ganhou `headers()` com CSP, `X-Frame-Options`, `Referrer-Policy`, `X-Content-Type-Options`, `Permissions-Policy` e `Strict-Transport-Security`. Trade-offs documentados no próprio arquivo.
+- **Segredos em build-arg** — auditado: só `DATABASE_URL` (com placeholder seguro, não a senha real) e as duas `NEXT_PUBLIC_*` (não-segredas) são build-args nos Dockerfiles reais. Documentado explicitamente em §5 qual variável vai em qual campo do EasyPanel.
+- **Versão da Evolution API confirmada** — `evoapicloud/evolution-api:v2.3.7` (o projeto trocou de organização/imagem; ver §4).
+- **`infra/docker-compose.yml`** — mantido (decisão abaixo), com banner "isto não é produção" reforçado no topo do arquivo e aqui no `DEPLOY.md`.
+
+### Decisão: `infra/docker-compose.yml` — manter, marcado como dev-only (não remover)
+
+A Nova perguntou (revisão de arquitetura, 2026-08-03) se este arquivo deveria ser marcado como dev-only ou removido, porque ele "descreve uma topologia que nunca subiu" e documentação divergente é pior que ausente. Decisão: **manter, com o aviso reforçado**, não remover. Motivos:
+1. **Utilidade real que nada mais cobre**: é o único jeito de validar, numa máquina com Docker, que os `Dockerfile`s reais do `apps/web`/`apps/worker` sobem e conversam entre si (web ↔ postgres ↔ redis ↔ Evolution) — algo que nunca foi testado nem nesta máquina de desenvolvimento nem em produção ainda. Removê-lo não resolve a causa raiz (documentação vs. realidade); só apaga uma ferramenta que vai fazer falta no dia em que alguém tiver Docker à mão e precisar reproduzir um bug de build localmente antes de gastar um deploy real testando.
+2. **Remover não é opção segura sem quebrar referência que não posso editar**: `ARQUITETURA.md §2` (arquivo da Nova, fora do meu escopo nesta tarefa) cita este caminho na estrutura de pastas. Renomear ou apagar o arquivo deixaria essa referência inconsistente sem que eu pudesse corrigi-la eu mesmo.
+3. O problema real não era a existência do arquivo, era o aviso ser fraco. Corrigido: banner grande no topo do arquivo (impossível de não ver ao abrir), nome do projeto compose trocado de `innoprospect` para `innoprospect-local-validation` (evita confundir em `docker compose ls`/nomes de container com algo de produção), e referência cruzada no topo deste `DEPLOY.md`.

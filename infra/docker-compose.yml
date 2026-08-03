@@ -1,17 +1,27 @@
 # infra/docker-compose.yml
 #
-# Stack COMPLETA (web + worker + postgres + redis + Evolution API) para rodar
-# o InnoProspect inteiro containerizado — referência e uso local futuro.
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║ ⚠️  ISTO NÃO É A PRODUÇÃO. A PRODUÇÃO É O EASYPANEL.                  ║
+# ║  Este arquivo NUNCA subiu, não é monitorado, não recebe deploy, e     ║
+# ║  não reflete necessariamente o estado real do ambiente que os         ║
+# ║  clientes usam. Se você está depurando um incidente de produção,      ║
+# ║  FECHE este arquivo e vá para `DEPLOY.md` — lá está o que realmente   ║
+# ║  está no ar (serviços avulsos criados na UI do EasyPanel).            ║
+# ╚══════════════════════════════════════════════════════════════════════╝
 #
-# NÃO substitui `infra/docker-compose.dev.yml` (que só sobe postgres+redis
-# para rodar `pnpm dev` fora de container, no dia a dia de desenvolvimento).
-# Use este arquivo quando quiser validar a stack real de produção (as mesmas
-# imagens que vão pro EasyPanel) numa máquina com Docker disponível.
+# Uso deste arquivo (só desenvolvimento local, opcional): validar que os
+# MESMOS Dockerfiles que o EasyPanel vai buildar (`apps/web/Dockerfile`,
+# `apps/worker/Dockerfile`) sobem e conversam entre si (web+worker+postgres+
+# redis+Evolution), numa máquina com Docker disponível — coisa que nunca foi
+# testada nesta máquina de desenvolvimento (sem Docker instalado aqui).
+#
+# NÃO substitui `infra/docker-compose.dev.yml` (esse sim é o usado no dia a
+# dia: só sobe postgres+redis para rodar `pnpm dev` fora de container).
 #
 # NÃO é o mecanismo de deploy do EasyPanel — lá cada serviço é criado
 # individualmente pela UI (um container por serviço, cada um com seu próprio
-# Dockerfile/imagem/env), não por este compose. Ver DEPLOY.md para o passo a
-# passo real do EasyPanel.
+# Dockerfile/imagem/env, health check e rollback próprios), não por este
+# compose. Ver `DEPLOY.md` para o passo a passo real do EasyPanel.
 #
 # Uso:
 #   cp ../.env.example ../.env.local   # preencha os valores
@@ -23,14 +33,14 @@
 # Sintaxe revisada manualmente — rodar `docker compose -f infra/docker-compose.yml
 # config` antes de confiar 100%.
 #
-# ⚠️ As variáveis de ambiente nativas da Evolution API (AUTHENTICATION_*,
-# DATABASE_*, CACHE_REDIS_*, WEBHOOK_*) abaixo são um PONTO DE PARTIDA
-# plausível para a v2.x — a Evolution API muda essas chaves com frequência
-# entre versões. CONFIRA contra a documentação oficial da versão que você de
-# fato pinar (`EVOLUTION_API_IMAGE` abaixo) antes de subir em produção — eu
-# não tenho como validar isso sem acesso à internet nesta sessão.
+# As variáveis de ambiente nativas da Evolution API (AUTHENTICATION_*,
+# DATABASE_*, CACHE_REDIS_*, WEBHOOK_*) abaixo foram conferidas contra o
+# `.env.example` oficial da tag `2.3.7` do repositório
+# `evolution-foundation/evolution-api` (ver comentário na definição do
+# serviço `evolution` abaixo) em 2026-08-03. Se você pinar uma versão
+# diferente, confira de novo — essas chaves mudam entre versões.
 
-name: innoprospect
+name: innoprospect-local-validation
 
 networks:
   # Evolution API, Postgres e Redis não são expostos publicamente — só o
@@ -76,10 +86,31 @@ services:
 
   evolution:
     # Versão PINADA de propósito (ARQUITETURA.md §9.1, risco R4) — nunca
-    # `latest`. Confirme o número atual em https://hub.docker.com/r/atendai/evolution-api
-    # antes de fixar aqui; este valor é um ponto de partida, não verificado
-    # nesta sessão.
-    image: ${EVOLUTION_API_IMAGE:-atendai/evolution-api:v2.2.3}
+    # `latest`. CONFIRMADA em 2026-08-03 (Vulcano, com acesso à rede):
+    #
+    # 1. O projeto mudou de organização/marca: era `EvolutionAPI/evolution-api`
+    #    (imagem `atendai/evolution-api`), agora é
+    #    `evolution-foundation/evolution-api` ("Evolution Foundation").
+    #    A imagem `atendai/evolution-api` ficou ÓRFÃ — o último push lá foi em
+    #    2025-06 e ela NUNCA recebeu nada além da v2.2.3 (a versão que estava
+    #    aqui como "chute"). Quem publica as versões atuais é
+    #    `evoapicloud/evolution-api` (confirmado no `docker-compose.yaml`
+    #    oficial do repositório, branch `main`).
+    # 2. Última tag ESTÁVEL (não release-candidate) confirmada via GitHub
+    #    Releases em 2026-08-03: `v2.3.7` (publicada 2025-12-05). Existem
+    #    `2.4.0-rc1`/`2.4.0-rc2` (2026-05, prerelease) — NÃO use, é RC.
+    # 3. As chaves de ambiente abaixo foram conferidas contra o
+    #    `.env.example` real da tag `2.3.7` do repo (não documentação
+    #    desatualizada). Uma mudou: `DATABASE_ENABLED` NÃO existe mais nesse
+    #    `.env.example` (a versão v2.2.x que originou este arquivo tinha essa
+    #    flag) — deixei a variável abaixo por precaução (imagens costumam
+    #    ignorar env var desconhecida), mas ACOMPANHE o log de boot do
+    #    primeiro `up`: se aparecer aviso de env var não reconhecida, remova.
+    #    Se quiser conferir de novo no futuro:
+    #    https://github.com/evolution-foundation/evolution-api/blob/2.3.7/.env.example
+    #    (repare: a tag git é `2.3.7` sem "v", mesmo a release no GitHub
+    #    mostrando "v2.3.7").
+    image: ${EVOLUTION_API_IMAGE:-evoapicloud/evolution-api:v2.3.7}
     container_name: innoprospect-evolution
     restart: unless-stopped
     networks: [internal]
@@ -92,6 +123,8 @@ services:
       SERVER_URL: ${EVOLUTION_SERVER_URL:?defina EVOLUTION_SERVER_URL (URL pública/interna deste serviço)}
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY}
       AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      # Ver nota (1) acima — pode estar obsoleta na 2.3.7, deixada por
+      # precaução. Confirme no log de boot.
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: postgresql
       # ⚠️ Banco "evolution" SEPARADO do banco "innoprospect" do app, no MESMO

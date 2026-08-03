@@ -4,3 +4,4 @@
 - [infra/docker-compose.dev.yml — deps de dev](infra_docker_compose_dev.md) — postgres+redis local, sem Docker validado na máquina
 - [Deploy EasyPanel (Fase 5.5)](infra_deploy_easypanel.md) — Dockerfiles, compose completo, DEPLOY.md, pendências (backup, alertas)
 - [Bug pnpm hoisting em Docker monorepo](feedback_pnpm_docker_monorepo_gotchas.md) — node_modules não consolida na raiz sem --shamefully-hoist
+- [Backup/restore, headers CSP, Evolution API confirmada (2026-08)](infra_backup_evolution_headers_2026-08.md) — pré-dado-real: infra/backup/, next.config.ts headers(), v2.3.7 evoapicloud, docker-compose.yml mantido dev-only
