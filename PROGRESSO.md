@@ -5,120 +5,129 @@ contatos, e dispara **mensagens de WhatsApp** para os leads.
 
 - **Repositório:** github.com/OverSoccerClub/InnoProspect
 - **Produção:** EasyPanel (projeto `inno-prospect`)
-- **Arquitetura:** `ARQUITETURA.md` (Nova) · **Deploy:** `DEPLOY.md` (Vulcano)
+- **Arquitetura:** `ARQUITETURA.md` **v1.1** · **Deploy:** `DEPLOY.md`
+- **Revisões:** `REVISAO-ARQUITETURA.md` (Nova) · `REVISAO-QA.md` (Íris)
 - **Última atualização:** 2026-08-03
 
 ---
 
 ## Estado atual
 
-O `frontend` está **no ar** e o login funciona. As Fases 1, 2 (parcial) e 3
-estão escritas, commitadas e validadas por build. **O worker ainda não subiu**,
-e por isso **nenhum lead real foi coletado até hoje**.
+O `frontend` está no ar, o login funciona e o banco está migrado. As Fases 1, 2
+(parcial) e 3 estão escritas e testadas. A **Fase 4 (campanhas e disparo) não
+existe**.
 
-### Concluído e commitado
+⚠️ **Continua valendo:** o **worker nunca subiu em produção** e **nenhum lead
+real foi coletado**. O scraper jamais abriu o Google Maps.
 
-| Fase | Entrega | Commit |
-|---|---|---|
-| 1 | Monorepo, Docker, configs, deploy EasyPanel | `83f02a9` |
-| 1 | Schema Prisma (7 models) + seed IBGE (27 UFs, 5.571 municípios) | `83f02a9` |
-| 1 | `packages/scraper` — Playwright, seletores isolados, sanity, fixtures | `83f02a9` |
-| 1 | `packages/contracts` (Zod) e `packages/core` (regras puras) | `83f02a9` |
-| 1 | `apps/worker` — fila BullMQ, 1 job por município, retry por tipo de erro | `83f02a9` |
-| 1 | API `/api/v1` (locations, searches, leads, health) + Auth.js + middleware | `83f02a9` |
-| 1 | Telas: login, shell, buscas, progresso ao vivo, leads | `83f02a9` |
-| — | Correções da auditoria do Órion (CVE do Next, login/logout) | `d139967` |
-| — | `apps/web/public` (build da imagem) | `e2c14bf` |
-| — | Normalização de e-mail do admin + ferramenta `admin.ts` | `3949305` |
-| — | `RUN_SEED` no boot + comando correto do tsx | `93463c8` |
-| — | Diagnóstico de login no log do servidor | `5c0cb89` |
-| 3 | `packages/messaging` — cliente Evolution + parser de webhook | `95702ed` |
-| 2/3/4 | Schema com 10 tabelas novas (migração aditiva) | `ff3d794` |
-| 3 | Opt-out, templates com spintax, instâncias WhatsApp, webhook + telas | `bb6e934` |
+### Métricas
 
-**Validação atual:** typecheck 8/8, lint 6/6, **164 testes** (core 81,
-messaging 48, scraper 35, contracts), build com 21/21 páginas.
+| | |
+|---|---|
+| Testes | **219** (core 81, messaging 48, web 48, scraper 35, contracts 7) |
+| Rotas de API | 23 |
+| `pnpm test` na raiz | ✅ existe e roda tudo |
+
+---
+
+## Revisão profunda (2026-08-03) — o diagnóstico
+
+Três auditorias independentes convergiram no mesmo ponto: **o problema não era
+o que faltava escrever, era o que estava escrito e não estava ligado.**
+
+| Achado | Estado |
+|---|---|
+| Assertions de sanidade do scraper eram **código morto** (zero chamadores) | ✅ ligadas |
+| Pausa da fila era `setTimeout` **em memória** — sumia no restart | ✅ persistida no Redis |
+| `/health` respondia **"ok" com o worker morto** | ✅ reporta cada dependência |
+| Rotas públicas **sem rate limit**, corpo parseado antes da auth | ✅ corrigido |
+| UI tratava `RATE_LIMITED` que o backend **nunca emitia** | ✅ backend emite |
+| `USE_MOCKS` era **fail-open** (default = dado falso) | ✅ invertido |
+| `isOptedOut` chumbado em `false`, filtro no-op | ✅ consulta real |
+| `apps/web` com **zero testes** | ✅ 48 testes |
+| **Sem backup** do Postgres | ✅ documentado + scripts |
+| Imagem da Evolution API **órfã desde 2025** | ✅ `evoapicloud/evolution-api:v2.3.7` |
+| Nada no sistema chama `sendText` | ⏳ contrato §4.9 escrito, **falta implementar** |
+
+### Commits da rodada
+
+`addc7d4` opt-out real na listagem · `17d81c1` ARQUITETURA v1.1 + contrato do
+envio unitário · `a1d3a2e` infra de teste · `fc46446` sanidade, pausa,
+heartbeat, rate limit · `f9014fd` backup, headers, Evolution despinada
 
 ---
 
 ## Próximos passos, em ordem
 
-### 1. Subir o worker (ação do dono — BLOQUEIA tudo que segue)
-Serviço `inno-prospect-backend` no EasyPanel: `apps/worker/Dockerfile`,
-contexto de build `/`, **sem porta, sem domínio, sem health check HTTP**.
-Variáveis em `DEPLOY.md §6`. Sem ele, toda busca criada fica em `queued` para
-sempre — não há ninguém consumindo a fila.
+### 1. Subir o worker (ação do dono — BLOQUEIA tudo)
+`inno-prospect-backend`: `apps/worker/Dockerfile`, contexto `/`, **sem porta,
+sem domínio, sem health check HTTP**. Sem ele toda busca fica em `queued`.
 
-### 2. Aplicar a migração das Fases 2/3/4
-Roda sozinha no próximo deploy do `frontend` (o entrypoint faz
-`migrate deploy`). **É a primeira migração deste projeto a rodar em banco com
-dado dentro.** Se falhar, o container não sobe — é fail-fast proposital, e o
-EasyPanel mantém a versão anterior no ar.
+### 2. Ativar o backup (ação do dono)
+`infra/backup/README.md`. O EasyPanel tem recurso **nativo** de backup de
+Postgres com destino S3-compatível — usar como primário. **Testar o restore**
+num serviço descartável; backup sem restore testado não é backup.
 
-### 3. Validar o critério de aceite da Fase 1 — nunca feito
-Buscar **"clínica odontológica" em Campinas-SP** e obter ≥ 30 leads com nome e
-telefone em < 3 minutos, sem duplicatas.
+### 3. Rodar a busca de Campinas — o dado que decide uma feature
+"clínica odontológica" em Campinas-SP. Precisa reportar **dois números**: % de
+leads com telefone e % dos telefones que são móveis. Cortes em `ARQUITETURA.md
+§8.3` (≥50% / 25–50% / <25%) decidem se `scrape-detail` é melhoria ou requisito
+— o card da lista do Maps frequentemente não traz telefone.
 
-⚠️ **Este é o teste mais importante do projeto.** É a primeira vez que o
-scraper abre o Google Maps de verdade. A falha mais provável é seletor errado
-— e, por desenho, isso é fix em **um arquivo só**
-(`packages/scraper/src/extraction/selectors.ts`).
+### 4. Implementar o §4.9 — envio unitário
+`POST /api/v1/leads/:id/messages`. **A primeira mensagem que o sistema envia.**
+O guard de opt-out nasce aqui, com carimbo de 5s que faz o código quebrar se
+alguém cachear a blacklist. A Fase 4 herda um portão já exercitado.
 
-### 4. Fase 4 — campanhas e disparo com anti-ban
-Único bloco grande que falta para o sistema fazer o que promete. Inclui:
-seleção de público, `dispatch-tick.job` com `FOR UPDATE SKIP LOCKED`, janela de
-envio, jitter, rotação entre instâncias, aquecimento e kill switch.
+### 5. Fase 4 — campanhas e disparo com anti-ban
+`dispatch-tick`, `warmup-roll`, janela, jitter, rotação, kill switch.
 
-**Pré-requisito já resolvido:** o opt-out existe (Fase 3).
-
-### 5. Fase 5 — segurança e operação
-Rate limit de login, headers de segurança (CSP), retenção LGPD, backup do
-Postgres com restore testado, `requeue-orphans`, monitoramento.
+### 6. Fase 5 — retenção LGPD, eliminação do titular, monitoramento
 
 ---
 
 ## Decisões em aberto (dependem do dono)
 
-1. **Rate limit de login no proxy do EasyPanel.** Não existe (adiado para a
-   Fase 5, quando a premissa era "poucos usuários internos"). O domínio agora é
-   público. Recomendação: ligar um rate limit por IP — é configuração, não código.
-2. **HTTPS no painel do EasyPanel.** Está sendo acessado por IP sobre HTTP.
-3. **Quantos números de WhatsApp** serão usados? Define se a rotação entre
-   instâncias é essencial já na Fase 4.
-4. **Texto padrão de descadastro** na 1ª mensagem: "responda SAIR" ou link
-   público? O sistema suporta os dois.
-5. **Backup do Postgres não existe.** Prioridade alta antes de dado de cliente real.
-6. **Versão da imagem da Evolution API** não confirmada (`v2.2.3` é chute).
+1. **Horário de envio:** piso 08:00–20:00, sem domingo (§4.9.6), ancorado no
+   parâmetro de telemarketing porque é o que sustenta a base legal de legítimo
+   interesse. Se o nicho tiver praxe diferente, o número é do dono — **mas só
+   para estreitar**.
+2. **HTTPS no painel do EasyPanel** — acessado por IP sobre HTTP.
+3. **Quantos números de WhatsApp?** Define se a rotação entre instâncias é
+   essencial na Fase 4.
+4. **Texto de descadastro na 1ª mensagem:** "responda SAIR" ou link público?
 
 ---
 
 ## Invariantes — não reabrir sem motivo forte
 
-- **Fonte de leads:** scraping próprio. **Canal:** Evolution API.
-  **Stack:** Next.js 15 + TS + Prisma + Postgres. Decisões do dono.
-- **Opt-out é por telefone**, checado **antes de cada envio**, inclusive dentro
-  de campanha em andamento. Nenhum disparo é habilitado sem ele.
-- **Seletores do Google Maps vivem em UM arquivo só.**
-- **Toda a Evolution API vive em `packages/messaging`.**
-- **Re-scraping nunca sobrescreve dado humano** — `buildMachineUpdate()` lança
-  exceção se um campo fora da allowlist tentar entrar no upsert.
-- **Contadores são incrementados, nunca `COUNT(*)`** — telas fazem polling.
-- **Eliminação LGPD apaga `CampaignTarget` junto** (ele guarda snapshot do
-  telefone); os contadores agregados da `Campaign` preservam o histórico anônimo.
-- **`halted` ≠ `paused`** — parada automática não é pausa humana.
-- **`apps/web` nunca importa `@inno/scraper`** (arrastaria Playwright).
+- **Fonte:** scraping próprio. **Canal:** Evolution API. **Stack:** Next 15 + TS
+  + Prisma + Postgres.
+- **Opt-out é por telefone**, checado antes de cada envio. O guard **lança
+  exceção** se a checagem tiver mais de 5s — impossível cachear por acidente.
+- **Só pode existir UM call site de `sendText`** em produção. Mais de um =
+  segundo caminho sem portão. Auditoria: `grep -rn "sendText(" apps/ packages/`.
+- **Seletores do Maps em UM arquivo.** **Evolution API só em `packages/messaging`.**
+- **Re-scraping nunca sobrescreve dado humano** (`buildMachineUpdate` lança).
+- **Contadores incrementados, nunca `COUNT(*)`** — telas fazem polling.
+- **Eliminação LGPD apaga `CampaignTarget`** (guarda snapshot do telefone); os
+  contadores agregados preservam o histórico anônimo.
+- **`halted` ≠ `paused`.** **Pausa por mudança de layout é indefinida** — só sai
+  com decisão humana.
+- **`apps/web` nunca importa `@inno/scraper`.**
+- **Modo degradado tem que ser difícil de ativar**, nunca o padrão.
 
 ## Armadilhas já pagas (não repetir)
 
-- Bugs que **só aparecem em `next build`**, nunca em `dev`/`typecheck`:
-  componente como prop de Server→Client Component; middleware Edge + Prisma;
-  imports `.js` de pacotes internos sem `transpilePackages` + `extensionAlias`.
-- `COPY` de pasta inexistente aborta o build Docker — `apps/web/public` precisa
-  do `.gitkeep`.
-- pnpm em Docker exige `--shamefully-hoist`, senão falta dependência em runtime.
-- **`node node_modules/.bin/tsx` NÃO funciona** (é shell script). Use
+- Bugs que **só aparecem em `next build`**: componente como prop de
+  Server→Client; middleware Edge + Prisma; imports `.js` sem `transpilePackages`.
+- **`COPY` de pacote do workspace esquecido no Dockerfile não quebra o
+  `pnpm install`** — falha só no bundle. Há guarda nos dois Dockerfiles agora.
+- `COPY` de pasta inexistente aborta o build — `apps/web/public/.gitkeep`.
+- pnpm em Docker exige `--shamefully-hoist`.
+- **`node node_modules/.bin/tsx` NÃO funciona** (shell script). Use
   `node node_modules/tsx/dist/cli.mjs`.
-- O e-mail do admin precisa ser gravado em minúsculas — o `authorize`
-  normaliza antes de buscar.
-- `next build` falha no Windows no passo do `standalone` (EPERM de symlink).
-  É limitação do SO; no container Linux funciona.
+- E-mail do admin precisa ser gravado em minúsculas.
+- `next build` falha no Windows no passo `standalone` (EPERM de symlink) — é o
+  SO, não o código.
+- **`Queue#client` do BullMQ não é o cliente do ioredis** — abstração própria.
