@@ -29,6 +29,22 @@ publicado de verdade.
 
 Ver também [[bug-rsc-client-icon-props]] (bug de build descoberto e corrigido nessa entrega).
 
+**Identidade visual / sistema de design (entregue em 2026-08-03):** `DESIGN-SYSTEM.md` na raiz é a
+fonte da verdade — paleta OKLCH própria do InnoProspect (hue≈231, azure, deliberadamente distinta do
+navy da InnovareCode hue≈262), tipografia via `next/font` (Inter + Plus Jakarta Sans, self-hosted,
+respeita a CSP do Vulcano), tema claro/escuro com toggle (`components/theme/*`, chave de localStorage
+`inno-prospect-theme`) e semântica de cor de status documentada para os 4 domínios do produto (lead,
+saúde de instância WhatsApp, status de campanha incl. `halted` vs. `paused`, target de campanha).
+Refinei todos os primitivos em `components/ui/*` e apliquei em profundidade só nas 5 telas de maior
+visibilidade (login, shell, dashboard, leads lista+ficha) — Buscas/Templates/WhatsApp/Opt-outs/
+Campanhas/Descadastro herdam a base de tokens/componentes automaticamente mas não foram redesenhadas
+tela a tela; ficou para uma próxima rodada (contexto já registrado no DESIGN-SYSTEM.md §5 e §8, em
+especial um bug real encontrado no `InstanceHealthBadge` — `degraded` e `blocked` mapeiam pra mesma cor
+hoje, precisa diferenciar). Ver [[feedback-dual-role-color-tokens]] para o achado técnico principal
+(um token de cor não serve pros dois papéis "fill+texto branco" e "texto sobre fundo escuro" ao mesmo
+tempo, sobretudo em vermelho) — isso também corrigiu um bug de contraste real e pré-existente no
+componente `Alert` (`success` com texto branco sobre fundo quase-branco, 1.02:1 de contraste).
+
 **Fase 3 (entregue em 2026-08-01):** Templates (lista + editor `[id]/page.tsx`, tratando `id==='novo'`
 como criação, com preview local de spintax — ver `lib/spintax.ts`), Instâncias de WhatsApp
 (`app/(dashboard)/whatsapp`, cards com QR polling de 2s via `usePolling`), Opt-outs

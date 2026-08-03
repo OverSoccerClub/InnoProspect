@@ -2,3 +2,4 @@
 - [Padrão de mock de API trocável por 1 flag](convention_mock_api_layer.md) — USE_MOCKS + lib/api/* + mocks/*, componentes shadcn feitos à mão
 - [Bug: ícone/componente como prop Server→Client quebra o build](bug_rsc_client_icon_props.md) — marcar o pai que itera NAV_ITEMS como 'use client'; só `next build` revela isso
 - [Checar @inno/contracts antes de criar tipo local](convention_check_contracts_before_mocking.md) — o Vega pode já ter publicado o schema em paralelo; `ls packages/contracts/src` primeiro
+- [Token de cor não serve pros dois papéis (fill vs. texto sobre fundo escuro)](feedback_dual_role_color_tokens.md) — medir OKLCH→sRGB, não "no olho"; achei bug real de contraste 1.02:1 no Alert

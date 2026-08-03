@@ -47,7 +47,7 @@ export default function OverviewPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Visão geral</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">Visão geral</h1>
           <p className="text-sm text-muted-foreground">Seu ponto de partida no InnoProspect.</p>
         </div>
         <Button asChild>
@@ -62,27 +62,45 @@ export default function OverviewPage() {
 
       {!error && (
         <div className="grid gap-4 sm:grid-cols-2">
-          <Card>
+          <Card className="transition-shadow hover:shadow-md">
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Buscas em andamento</CardTitle>
-              <Search className="size-4 text-muted-foreground" aria-hidden="true" />
+              <CardTitle className="!font-sans text-sm font-medium text-muted-foreground">Buscas em andamento</CardTitle>
+              <span className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <Search className="size-4" aria-hidden="true" />
+              </span>
             </CardHeader>
             <CardContent>
-              {isLoading ? <Skeleton className="h-8 w-16" /> : <p className="text-2xl font-semibold">{kpis?.activeSearches ?? 0}</p>}
-              <Link href="/buscas" className="text-sm text-primary hover:underline">
+              {isLoading ? (
+                <Skeleton className="h-9 w-16" />
+              ) : (
+                <p className="font-display text-3xl font-semibold tabular-nums">{kpis?.activeSearches ?? 0}</p>
+              )}
+              <Link
+                href="/buscas"
+                className="mt-1 inline-block text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
                 Ver todas as buscas
               </Link>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="transition-shadow hover:shadow-md">
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total de leads</CardTitle>
-              <Users className="size-4 text-muted-foreground" aria-hidden="true" />
+              <CardTitle className="!font-sans text-sm font-medium text-muted-foreground">Total de leads</CardTitle>
+              <span className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <Users className="size-4" aria-hidden="true" />
+              </span>
             </CardHeader>
             <CardContent>
-              {isLoading ? <Skeleton className="h-8 w-16" /> : <p className="text-2xl font-semibold">{kpis?.totalLeads ?? 0}</p>}
-              <Link href="/leads" className="text-sm text-primary hover:underline">
+              {isLoading ? (
+                <Skeleton className="h-9 w-16" />
+              ) : (
+                <p className="font-display text-3xl font-semibold tabular-nums">{kpis?.totalLeads ?? 0}</p>
+              )}
+              <Link
+                href="/leads"
+                className="mt-1 inline-block text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
                 Ver todos os leads
               </Link>
             </CardContent>

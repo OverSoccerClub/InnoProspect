@@ -85,12 +85,25 @@ export function LeadDetail({ id }: { id: string }) {
     <div className="flex flex-col gap-6">
       <BackLink />
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">{lead.name}</h1>
-          <p className="text-sm text-muted-foreground">
-            {lead.category ?? 'Sem categoria'} {lead.city && `· ${lead.city} — ${lead.uf}`}
-          </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-start gap-3">
+          <span
+            aria-hidden="true"
+            className="mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-semibold text-accent-foreground"
+          >
+            {lead.name
+              .trim()
+              .split(/\s+/)
+              .slice(0, 2)
+              .map((p) => p[0]?.toUpperCase() ?? '')
+              .join('')}
+          </span>
+          <div>
+            <h1 className="font-display text-xl font-semibold tracking-tight sm:text-2xl">{lead.name}</h1>
+            <p className="text-sm text-muted-foreground">
+              {lead.category ?? 'Sem categoria'} {lead.city && `· ${lead.city} — ${lead.uf}`}
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {isSavingStatus && <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />}

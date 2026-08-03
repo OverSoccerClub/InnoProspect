@@ -2,6 +2,7 @@ import { CheckCircle2, MessageSquare, PlusCircle, ShieldOff, Tag } from 'lucide-
 
 import { EmptyState } from '@/components/common/empty-state';
 import { formatDateTime } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import type { LeadActivity, LeadActivityType } from '@/types/lead';
 
 const ICON: Record<LeadActivityType, typeof CheckCircle2> = {
@@ -39,16 +40,20 @@ export function LeadTimeline({ activities }: { activities: LeadActivity[] }) {
   const sorted = [...activities].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
   return (
-    <ol className="flex flex-col gap-4">
-      {sorted.map((activity) => {
+    <ol className="flex flex-col">
+      {sorted.map((activity, index) => {
         const Icon = ICON[activity.type];
         const detail = describePayload(activity);
+        const isLast = index === sorted.length - 1;
         return (
-          <li key={activity.id} className="flex gap-3">
-            <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          <li key={activity.id} className={cn('relative flex gap-3', !isLast && 'pb-5')}>
+            {!isLast && (
+              <span aria-hidden="true" className="absolute left-[13px] top-7 bottom-0 w-px bg-border" />
+            )}
+            <div className="z-10 mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground ring-4 ring-card">
               <Icon className="size-3.5" aria-hidden="true" />
             </div>
-            <div>
+            <div className="pb-0.5">
               <p className="text-sm font-medium">
                 {LABEL[activity.type]}
                 {detail && <span className="font-normal text-muted-foreground"> — {detail}</span>}

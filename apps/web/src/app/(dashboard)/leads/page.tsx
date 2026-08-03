@@ -38,9 +38,16 @@ export default function LeadsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Leads</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">Leads</h1>
           <p className="text-sm text-muted-foreground">
-            {response ? `${response.facets.total} lead(s) encontrados` : 'Empresas coletadas pelas suas buscas.'}
+            {response ? (
+              <>
+                <span className="font-medium tabular-nums text-foreground">{response.facets.total}</span> lead(s)
+                encontrados
+              </>
+            ) : (
+              'Empresas coletadas pelas suas buscas.'
+            )}
           </p>
         </div>
       </div>

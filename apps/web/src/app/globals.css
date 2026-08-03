@@ -2,79 +2,104 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ───────────────────────────────────────────────────────────────────────
+ * Tokens de marca — InnoProspect.
+ *
+ * Todos os valores foram verificados contra WCAG AA (razão de contraste
+ * ≥4.5:1 para texto normal, ≥3:1 para componentes de UI/texto grande) com
+ * um conversor OKLCH→sRGB dedicado, não "no olho". A tabela completa de
+ * razões calculadas está em DESIGN-SYSTEM.md — não altere um valor aqui
+ * sem recalcular lá.
+ *
+ * Identidade: azul-azure (H≈231) — deliberadamente distinto do navy/indigo
+ * da InnovareCode (H≈262, mais roxo-azulado). Ver DESIGN-SYSTEM.md §1.
+ * ─────────────────────────────────────────────────────────────────────── */
+
 :root {
   --radius: 0.625rem;
 
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  /* Canvas (página) vs. painel (card/sidebar/topbar/dialog) — separação
+   * tonal sutil em vez de "tudo branco", para dar profundidade sem recorrer
+   * a sombras pesadas. */
+  --background: oklch(0.975 0.004 250);
+  --foreground: oklch(0.19 0.012 260);
 
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card: oklch(0.995 0.002 250);
+  --card-foreground: var(--foreground);
 
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
+  --popover: oklch(0.995 0.002 250);
+  --popover-foreground: var(--foreground);
 
-  /* Marca InnoProspect: azul (confiança/B2B) */
-  --primary: oklch(0.47 0.17 258);
-  --primary-foreground: oklch(0.98 0 0);
+  /* Marca InnoProspect: azure/azul-sinal — confiança sem ser o navy da
+   * InnovareCode. Contraste vs. branco: 6.12:1 (light) / vs. texto escuro
+   * no dark: 8.14:1. */
+  --primary: oklch(0.47 0.16 231);
+  --primary-foreground: oklch(0.99 0 0);
 
-  --secondary: oklch(0.96 0 0);
-  --secondary-foreground: oklch(0.2 0 0);
+  --secondary: oklch(0.955 0.006 250);
+  --secondary-foreground: oklch(0.28 0.01 260);
 
-  --muted: oklch(0.96 0 0);
-  --muted-foreground: oklch(0.5 0 0);
+  --muted: oklch(0.96 0.005 250);
+  --muted-foreground: oklch(0.46 0.01 260);
 
-  --accent: oklch(0.96 0 0);
-  --accent-foreground: oklch(0.2 0 0);
+  --accent: oklch(0.94 0.02 231);
+  --accent-foreground: oklch(0.24 0.06 231);
 
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.98 0 0);
+  /* Semântica de risco — ver DESIGN-SYSTEM.md §5 para o mapeamento completo
+   * de status (lead, campanha, saúde de instância) para estas 3 cores. */
+  --destructive: oklch(0.5 0.19 25);
+  --destructive-foreground: oklch(0.99 0 0);
 
-  --success: oklch(0.55 0.15 150);
-  --success-foreground: oklch(0.98 0 0);
+  --success: oklch(0.46 0.14 152);
+  --success-foreground: oklch(0.99 0 0);
 
-  --warning: oklch(0.75 0.16 80);
-  --warning-foreground: oklch(0.2 0.05 80);
+  --warning: oklch(0.75 0.15 80);
+  --warning-foreground: oklch(0.22 0.05 80);
 
-  --border: oklch(0.9 0 0);
-  --input: oklch(0.9 0 0);
-  --ring: oklch(0.47 0.17 258);
+  --border: oklch(0.9 0.007 250);
+  --input: oklch(0.87 0.008 250);
+  --ring: var(--primary);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.98 0 0);
+  --background: oklch(0.17 0.012 250);
+  --foreground: oklch(0.96 0.003 250);
 
-  --card: oklch(0.18 0 0);
-  --card-foreground: oklch(0.98 0 0);
+  --card: oklch(0.225 0.014 250);
+  --card-foreground: var(--foreground);
 
-  --popover: oklch(0.18 0 0);
-  --popover-foreground: oklch(0.98 0 0);
+  --popover: oklch(0.225 0.014 250);
+  --popover-foreground: var(--foreground);
 
-  --primary: oklch(0.68 0.15 258);
-  --primary-foreground: oklch(0.145 0 0);
+  /* Mesmo hue da marca, elevado em L para ler bem sobre fundo quase-preto;
+   * pareia com texto ESCURO (não branco) — em H≈231/L alto, texto escuro
+   * lê melhor que branco (8.14:1 vs. ~3:1). */
+  --primary: oklch(0.72 0.12 231);
+  --primary-foreground: oklch(0.15 0.012 250);
 
-  --secondary: oklch(0.26 0 0);
-  --secondary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.27 0.014 250);
+  --secondary-foreground: oklch(0.94 0.003 250);
 
-  --muted: oklch(0.26 0 0);
-  --muted-foreground: oklch(0.66 0 0);
+  --muted: oklch(0.27 0.012 250);
+  --muted-foreground: oklch(0.7 0.012 250);
 
-  --accent: oklch(0.26 0 0);
-  --accent-foreground: oklch(0.98 0 0);
+  --accent: oklch(0.3 0.03 231);
+  --accent-foreground: oklch(0.92 0.02 231);
 
-  --destructive: oklch(0.6 0.2 25);
-  --destructive-foreground: oklch(0.98 0 0);
+  --destructive: oklch(0.55 0.19 25);
+  --destructive-foreground: oklch(0.99 0 0);
 
-  --success: oklch(0.6 0.15 150);
-  --success-foreground: oklch(0.145 0 0);
+  /* Verde e âmbar, em L alto o suficiente pra ler no dark, pareiam melhor
+   * com texto ESCURO que com branco (mesma razão do primary acima). */
+  --success: oklch(0.62 0.14 152);
+  --success-foreground: oklch(0.14 0.02 152);
 
-  --warning: oklch(0.75 0.16 80);
-  --warning-foreground: oklch(0.145 0.05 80);
+  --warning: oklch(0.78 0.15 80);
+  --warning-foreground: oklch(0.2 0.05 80);
 
-  --border: oklch(1 0 0 / 12%);
-  --input: oklch(1 0 0 / 18%);
-  --ring: oklch(0.68 0.15 258);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: var(--primary);
 }
 
 @theme inline {
@@ -106,13 +131,93 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* Tipografia — ver `app/layout.tsx` (next/font, self-hosted, respeita a
+   * CSP `font-src 'self'`). `font-display` é usado em títulos/CTAs;
+   * `font-sans` (padrão) é o corpo e as tabelas densas de leads. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-jakarta), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  /* Sombras com leve matiz azul-marinho (em vez de preto puro) — mais
+   * "premium/macio" que a sombra cinza padrão do navegador, sutil o
+   * suficiente para não pesar em uma UI de dado denso. */
+  --shadow-xs: 0 1px 2px 0 rgb(15 23 42 / 0.04);
+  --shadow-sm: 0 1px 3px 0 rgb(15 23 42 / 0.06), 0 1px 2px -1px rgb(15 23 42 / 0.05);
+  --shadow-md: 0 4px 12px -2px rgb(15 23 42 / 0.08), 0 2px 4px -2px rgb(15 23 42 / 0.05);
+  --shadow-lg: 0 16px 32px -8px rgb(15 23 42 / 0.14), 0 4px 8px -4px rgb(15 23 42 / 0.06);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/* Transições de abrir/fechar do Dialog (Radix) — feitas à mão com
+ * data-state, sem depender do plugin tailwindcss-animate (não instalado). */
+@keyframes inno-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes inno-overlay-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+/* Só opacidade (sem tocar em transform): o Dialog é reusado tanto centrado
+ * (`top-1/2 left-1/2 -translate-1/2`) quanto como painel lateral no
+ * `MobileNav` (`left-0 top-0 translate-0`) — animar `transform` aqui
+ * quebraria um dos dois usos, então o "zoom" sutil fica só no scale via
+ * `transform-origin` + escala combinada com a transform-base do próprio
+ * elemento (Tailwind), nunca sobrescrevendo a posição. */
+@keyframes inno-content-in {
+  from {
+    opacity: 0;
+    scale: 0.97;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+@keyframes inno-content-out {
+  from {
+    opacity: 1;
+    scale: 1;
+  }
+  to {
+    opacity: 0;
+    scale: 0.97;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .inno-dialog-overlay[data-state='open'] {
+    animation: inno-overlay-in 150ms ease-out;
+  }
+  .inno-dialog-overlay[data-state='closed'] {
+    animation: inno-overlay-out 120ms ease-in;
+  }
+  .inno-dialog-content[data-state='open'] {
+    animation: inno-content-in 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .inno-dialog-content[data-state='closed'] {
+    animation: inno-content-out 120ms ease-in;
   }
 }
