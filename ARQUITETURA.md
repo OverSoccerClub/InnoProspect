@@ -1,8 +1,27 @@
 # InnoProspect — Documento de Arquitetura
 
-> Versão 1.0 · Autora: Nova (arquitetura) · Data: 2026-07-30
+> Versão 1.1 · Autora: Nova (arquitetura) · Data: 2026-08-03 (v1.0: 2026-07-30)
 > Status: **fechado para implementação** nas partes marcadas como CONTRATO.
 > Alterações em seções CONTRATO exigem aviso ao Atlas antes de codificar (Vega/Lyra dependem delas).
+
+### O que mudou na v1.1
+
+Revisão contra o código real (`REVISAO-ARQUITETURA.md`, 2026-08-03). Três tipos de mudança:
+
+| # | Mudança | Seção | Tipo |
+|---|---|---|---|
+| 1 | **Contrato do envio unitário `POST /leads/:id/messages`** — a omissão que matou a entrega 3.7 | **§4.9 (nova)** | 🔒 CONTRATO novo |
+| 2 | **`error.reason`**: sub-código legível por máquina no envelope de erro | §4.0 | 🔒 CONTRATO alterado — Vega precisa mexer em `packages/contracts` |
+| 3 | Premissa de hospedagem corrigida (EasyPanel, não Docker Compose) | §0 | correção de fato |
+| 4 | Diagrama: só 1 dos 3 workers existe; o seed roda no `apps/web` | §1.2 | correção de fato |
+| 5 | Camada `lib/services/*` promovida a convenção (nenhuma query Prisma em `route.ts`) | §2 | convenção nova |
+| 6 | `saturated` nunca foi para o schema — a dívida D4 está sem instrumento de medição | §5.2, §9.2 | correção de fato |
+| 7 | Plano faseado reescrito: Fase 0, ordem por ondas, gatilho de `scrape-detail` | **§8** | reescrita |
+| 8 | Dívidas novas D8 (reconciliação de status) e D9 (sem model de configuração) | §9.2 | dívida declarada |
+
+**Regra que passa a valer para este documento:** nenhuma linha do plano de fases (§8) existe sem
+contrato correspondente na §4. O §4 é, na prática, a lista de trabalho; o §8 é só a narrativa.
+Foi exatamente essa omissão que fez a entrega 3.7 não existir (ver `REVISAO-ARQUITETURA.md §6.2`).
 
 ---
 
@@ -19,7 +38,20 @@ seguinte** — se alguma premissa estiver errada, avise antes da Fase 1, porque 
 | Volume de disparo | Dezenas a poucos milhares de mensagens/dia, divididas por instância | Fila com rate limit, não streaming distribuído |
 | Equipe | Time pequeno (agentes especializados), 1 ambiente de produção | Menos peças móveis = melhor |
 | Prazo | Fase 1 funcional rápido | Fase 1 é deliberadamente mínima (ver §8) |
-| Hospedagem | VPS Linux com Docker Compose (não serverless puro) | Obrigatório: worker e scraper precisam de processo longo e Chromium |
+| Hospedagem | **EasyPanel** (PaaS sobre VPS Linux), não serverless — *corrigido na v1.1* | Obrigatório: worker e scraper precisam de processo longo e Chromium |
+
+> ⚠️ **Correção v1.1 — hospedagem.** A v1.0 dizia "VPS com Docker Compose". A produção real é
+> **EasyPanel** (TLS, rollback por health check e deploy por Git de graça — troca boa, feita durante a
+> implementação). Consequências que valem como requisito de arquitetura, não como detalhe de deploy:
+> 1. `infra/docker-compose.yml` descreve uma topologia que **nunca subiu**. É artefato de
+>    desenvolvimento local; a produção está no `DEPLOY.md`. Documentação divergente induz a erro em
+>    incidente — o arquivo precisa dizer isso no topo (Onda 4).
+> 2. **Terminal dentro do container é recurso escasso e frágil neste ambiente** (já pagamos por isso:
+>    seed e reset de senha viraram variáveis `RUN_SEED` / `ADMIN_RESET_PASSWORD`). Daí deriva um
+>    requisito duro: **toda operação de manutenção e recuperação precisa de caminho pela UI ou por
+>    variável de ambiente idempotente.** Nada de "é só rodar um comando no container".
+> 3. O domínio é **público na internet**, não rede interna. Isso reclassifica a superfície de
+>    autenticação — avaliação é do Órion.
 
 **Consequência de senioridade:** este sistema **não** deve ser microserviços. É um monólito modular com
 **dois processos**: o app web (Next.js) e o worker (Node). Eles compartilham banco e código via workspaces.
@@ -105,6 +137,15 @@ flowchart TB
     style WorkerProc fill:#f0f7ff
     style WebProc fill:#fff7f0
 ```
+
+> ⚠️ **Correção v1.1 — o diagrama é o alvo, não o estado.** Em 2026-08-03, dos três workers
+> desenhados dentro de `WorkerProc`, **só o `SW` (Scrape Worker) existe**. `DW` (Dispatch) e `MW`
+> (Maintenance) não têm código. Duas consequências:
+> - O `MW` aparece chamando o IBGE no seed; na prática o seed roda no **`apps/web`**
+>   (`packages/db/prisma/seed.ts`, acionado por `RUN_SEED`). O diagrama está errado neste ponto.
+> - A seta `DW → EVO (POST /message/sendText)` nunca existiu em execução: **nada no sistema jamais
+>   enviou uma mensagem**. O primeiro chamador real de `sendText` é o envio unitário da **§4.9**, e
+>   ele nasce no `apps/web` (route handler), não no worker — de propósito, ver §4.9.1.
 
 ### 1.3 Decisão: fila e orquestração
 
@@ -404,6 +445,16 @@ InnoProspect/
 - `packages/core` não importa Prisma nem Next — é lógica pura, 100% testável em unidade.
 - Só `packages/scraper` conhece o DOM do Google. Só `packages/messaging` conhece a Evolution API.
 - Web e worker **não** se chamam por HTTP. Comunicam-se por **Postgres (estado) + Redis (fila)**.
+- **`apps/web/src/lib/services/*` é camada obrigatória: nenhuma query Prisma vive em `route.ts`.**
+  *(convenção v1.1)* Eu não tinha previsto essa camada — o Vega a criou e as rotas ficaram com ~10
+  linhas cada. É melhor do que projetei; vira regra. O `route.ts` faz auth + parse Zod + chamada ao
+  serviço + resposta, e nada mais. Isso é o que torna auditável a afirmação "todo envio passa pelo
+  guard" (§4.9.3): há um único lugar onde procurar.
+- **Regra pura + adaptador de I/O, quando a regra é de proteção.** A decisão mora em `packages/core`
+  (sem I/O, testável); quem lê o banco e chama a rede é o adaptador em `apps/*`. Serve para o guard
+  de envio (§4.9.3) exatamente como serve para warmup e sanidade do scraper — **e o adaptador tem
+  que ser exercitado, senão a regra pura é código morto** (foi o que aconteceu com `evaluateSanity`,
+  `effectiveDailyLimit` e `regressWarmupDay`: escritas, testadas, exportadas, zero chamadores).
 
 ---
 
@@ -505,6 +556,7 @@ type ApiError = {
   error: {
     code: 'VALIDATION_ERROR' | 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND'
         | 'CONFLICT' | 'RATE_LIMITED' | 'UPSTREAM_ERROR' | 'INTERNAL_ERROR';
+    reason?: string;                        // 🆕 v1.1 — sub-código SCREAMING_SNAKE, legível por máquina
     message: string;                        // legível, pt-BR, exibível ao usuário
     details?: Array<{ path: string; message: string }>;
     requestId: string;
@@ -512,6 +564,24 @@ type ApiError = {
 };
 ```
 **Códigos HTTP usados:** 200, 201, 202, 204, 400, 401, 403, 404, 409, 422, 429, 500, 502.
+
+> 🔒 **CONTRATO ALTERADO na v1.1 — `error.reason` (Vega implementa em `packages/contracts`).**
+> Buraco encontrado na revisão: este documento vinha citando sub-códigos (`SEARCH_ALREADY_RUNNING`,
+> `INVALID_STATUS_TRANSITION`, `TEMPLATE_IN_USE`, `ALREADY_OPTED_OUT`, `INSUFFICIENT_TEXT_VARIATION`,
+> `HALT_NOT_ACKNOWLEDGED`…) como se fossem valores de `error.code` — mas `code` é um enum fechado de
+> 8 valores, ligado 1:1 ao status HTTP. Não havia onde esses nomes viverem. Resultado: hoje a UI só
+> tem a `message` em pt-BR para decidir o que fazer, ou seja, **não tem como decidir**.
+>
+> - `code` continua fechado e continua governando o status HTTP (`API_ERROR_HTTP_STATUS`).
+> - `reason` é opcional, `SCREAMING_SNAKE`, e é **o único campo em que Lyra pode ramificar lógica**.
+>   Nunca ramificar por `message` (texto muda; é para o humano ler).
+> - Todo sub-código nomeado neste §4 é um valor de `reason`. O conjunto por rota é fechado e está
+>   documentado na tabela de erros de cada endpoint.
+> - Mudança **aditiva**: nenhum consumidor existente quebra. `details[]` continua sendo para erro de
+>   campo (validação), `reason` para erro de regra de negócio.
+>
+> Isto é pré-requisito da §4.9: sem `reason`, a UI do envio unitário não distingue "bloqueado por
+> opt-out" (nunca mais tente) de "estourou a cota do dia" (tente amanhã) — e são ações opostas.
 
 **Paginação:** cursor (`?cursor=<id>&limit=<1..100>`, default 25). Ordenação padrão `createdAt desc`.
 
@@ -874,6 +944,308 @@ Eventos tratados:
 **Mapa de status (CONTRATO):** `PENDING→queued`, `SERVER_ACK→sent`, `DELIVERY_ACK→delivered`,
 `READ→read`, `ERROR→failed`.
 
+**Ordem de chegada (v1.1, corrige um buraco real):** a Evolution pode entregar o `messages.update`
+**antes** de terminarmos de gravar o `providerMessageId` da mensagem que acabamos de enviar (§4.9.5).
+Se o handler não encontrar `Message` com aquele `data.key.id`, ele **não pode descartar em silêncio**:
+- refaz a busca **uma vez, após ~2s**, antes de desistir (cobre a corrida de sub-segundo, custo zero);
+- se ainda não achar, grava `logger.warn` com o `keyId` e a instância. É o que permite descobrir o
+  problema sem esperar o cliente reclamar de "métrica de entrega baixa".
+
+Reconciliação de verdade (varrer mensagens `sent` sem `delivered` e consultar a Evolution) é a
+dívida **D8** (§9.2) — consciente, e o `warn` acima é o instrumento que vai medir se ela importa.
+
+---
+
+### 4.9 Envio unitário de mensagem (CONTRATO — 🆕 v1.1)
+
+> **Por que esta seção existe.** A entrega 3.7 do plano faseado ("envio manual para 1 lead") existia
+> justamente para **exercitar a integração com a Evolution API antes de a Fase 4 ser construída em
+> cima dela**. Eu escrevi a linha no §8 e nunca escrevi o endpoint aqui. Ninguém implementou — e o
+> §4 é, na prática, a lista de trabalho. Consequência medida na revisão: `EvolutionClient.sendText`
+> está completo, testado e **sem um único chamador**; o sistema nunca enviou uma mensagem.
+> Esta seção fecha o buraco. Erro meu, registrado como tal.
+
+#### 4.9.1 Por que o envio unitário vem antes da campanha (e o que isso decide)
+
+Esta rota **não é uma conveniência de UI**. É a primeira execução real de todos os portões de
+proteção do §6, com volume 1 e um humano olhando. A Fase 4 não vai *estrear* o portão de opt-out num
+disparo de 500 mensagens — vai **herdar um portão já exercitado em produção**.
+
+Três decisões derivam disso:
+
+1. **O guard nasce aqui, não na Fase 4.** O `dispatch-tick.job` vai importar exatamente a mesma
+   função de decisão. Se o guard nascesse no worker, a primeira vez que ele rodaria seria também a
+   primeira vez que 500 pessoas receberiam mensagem — o pior momento possível para descobrir um bug.
+2. **A rota vive no `apps/web`, não no worker.** Envio unitário é síncrono por natureza: o operador
+   clica e precisa saber, na mesma tela, se saiu e por que não saiu. Passar pela fila só para
+   devolver "202 aceito" transforma um erro acionável ("este número pediu para sair") em silêncio.
+   O worker continua sendo o único caminho para **volume** (§6.1) — isto aqui é uma mensagem.
+3. **Nada aqui é "modo de teste".** O envio manual consome a mesma cota diária, avança os mesmos
+   contadores e respeita os mesmos bloqueios. Se fosse exceção, viraria o caminho oficial para furar
+   o warmup — e o WhatsApp do outro lado não distingue mensagem manual de mensagem de campanha.
+
+#### 4.9.2 `POST /api/v1/leads/:id/messages`
+
+Envia **uma** mensagem de texto para o lead `:id`, a partir de uma instância conectada.
+Auth: sessão (`operator` ou `admin`). Não há versão pública nem por API key.
+
+```ts
+// Request
+{
+  // Exatamente UM dos dois — enviar os dois ou nenhum é 422:
+  templateId?: string;          // renderiza {{variáveis}} + spintax a partir do template
+  body?: string;                // 1..4000 chars, texto final, sem processamento de variáveis
+
+  instanceId?: string;          // opcional — default resolvido por afinidade/cota (§4.9.4)
+  spintaxSeed?: string;         // opcional — ver §4.9.4 "o que eu vi no preview é o que sai"
+
+  // Confirmações explícitas. Default false: o caminho seguro nunca depende de o cliente lembrar.
+  confirmOutsideBusinessWindow?: boolean;   // fora de 09–18/seg–sex, mas dentro do piso legal
+  allowNonMobile?: boolean;                 // telefone classificado como fixo/desconhecido
+}
+```
+
+```ts
+// 201 Created
+{
+  message: MessageItem;                     // já existe em packages/contracts (whatsapp.contract.ts)
+                                            // status = 'sent', providerMessageId preenchido
+  instance: { id: string; name: string; phoneNumber: string | null;
+              health: 'ok'|'warming'|'degraded'|'blocked' };
+  quota: { warmupDay: number; isWarm: boolean; dailyLimit: number;
+           sentToday: number; remaining: number };
+  renderedFrom: { templateId: string; spintaxSeed: string } | null;   // null se veio `body` cru
+  warnings: Array<{ code: string; message: string }>;                 // ver §4.9.6
+}
+```
+
+Reaproveitar `messageItemSchema` é deliberado: a ficha do lead (`GET /leads/:id`) já lista mensagens
+com esse formato, então a UI insere a nova na timeline sem refetch e sem um segundo tipo para manter.
+
+#### 4.9.3 Os portões, em ordem, e onde cada um mora
+
+Esta tabela é o coração da seção. A **ordem é normativa**: o custo cresce e a reversibilidade cai da
+esquerda para a direita, e o portão inegociável é o último, colado na rede.
+
+| # | Portão | Falha → | `reason` | Onde a decisão mora |
+|---|---|---|---|---|
+| G0 | Sessão válida | 401 | — | `api-handler` |
+| G1 | Lead existe / instância existe | 404 | `LEAD_NOT_FOUND` · `INSTANCE_NOT_FOUND` | serviço |
+| G2 | Payload: exatamente um de `templateId`\|`body`; tamanho; variáveis e spintax válidos | 422 | `BODY_OR_TEMPLATE_REQUIRED` · `BODY_TOO_LONG` · `UNKNOWN_VARIABLE` · `INVALID_SPINTAX` | Zod + `packages/core/templates` |
+| G3 | Lead tem `phoneE164` | 409 | `LEAD_HAS_NO_PHONE` | serviço |
+| G4 | `phoneType === 'mobile'` (ou `allowNonMobile: true`) | 409 | `LEAD_NOT_MOBILE` | `packages/core/leads/phone` |
+| G5 | **Piso de horário (duro, não contornável)** | 409 | `QUIET_HOURS` | `core/whatsapp/send-window` |
+| G6 | Janela comercial (mole: exige confirmação) | 409 | `OUTSIDE_BUSINESS_WINDOW` | `core/whatsapp/send-window` |
+| G7 | Instância `connected` e não banida | 409 | `INSTANCE_NOT_CONNECTED` · `INSTANCE_BANNED` | serviço |
+| G8 | **Cota diária do warmup** | 409 | `DAILY_LIMIT_REACHED` | `core/whatsapp/warmup` (`effectiveDailyLimit`) |
+| G9 | Anti-duplo-clique: nenhum outbound para este lead nos últimos 60s | 409 | `DUPLICATE_SEND` | serviço |
+| G10 | 1º contato frio: aviso de descadastro + `{{minha_empresa}}` presentes | 409 | `MISSING_OPTOUT_NOTICE` · `MISSING_COMPANY_NAME` | `core/templates` + serviço |
+| G11 | 🔴 **OPT-OUT — `SELECT` por `phoneE164`, sem cache, imediatamente antes da rede** | 409 | `OPTED_OUT` | serviço (consulta) + `core/whatsapp/send-guard` (decisão) |
+| — | → `EvolutionClient.sendText()` | — | — | `packages/messaging` |
+
+**G11 é o ponto que o Órion audita.** Não basta que a consulta exista: ela tem que ser a **última**
+coisa antes da chamada HTTP. O desenho que torna isso verificável, em vez de confiável:
+
+```ts
+// packages/core/src/whatsapp/send-guard.ts — puro, sem I/O, compartilhado web ↔ worker
+export type SendGuardFacts = {
+  now: Date;
+  phone: { e164: string; type: PhoneType };
+  instance: { status: WhatsAppInstanceStatus; isDegraded: boolean;
+              warmupDay: number; dailyLimitOverride: number | null };
+  quota: { sentToday: number };
+  optOut: { exists: boolean; checkedAt: Date };   // ⚠️ carimbo obrigatório
+  lastOutboundAt: Date | null;
+  isColdFirstContact: boolean;
+  text: string;
+  overrides: { allowNonMobile: boolean; confirmOutsideBusinessWindow: boolean };
+};
+
+export type SendGuardVerdict =
+  | { allow: true;  warnings: Array<{ code: string; message: string }> }
+  | { allow: false; reason: SendBlockReason; message: string; meta?: Record<string, unknown> };
+
+/** Lança (não retorna `false`) se `optOut.checkedAt` for mais velho que OPT_OUT_MAX_AGE_MS (5s). */
+export function evaluateSendGuard(facts: SendGuardFacts): SendGuardVerdict;
+```
+
+O carimbo `optOut.checkedAt` converte uma regra de disciplina em **falha de runtime**: um chamador
+que cachear a blacklist, ou que ler o opt-out no começo de uma função longa e enviar 3 segundos
+depois, quebra em execução — não passa despercebido numa revisão de código. É o mesmo truque que o
+`buildMachineUpdate()` usa para proteger dado humano no scraper, e que funcionou melhor do que a
+regra escrita que eu tinha especificado. **Não substituir por um comentário `// não cachear`.**
+
+Invariantes que o Órion verifica (§4.9.9): `evaluateSendGuard` é chamado **na mesma função** que
+chama `sendText`, sem nenhum `await` de I/O entre os dois além da renderização do texto (que é pura).
+
+#### 4.9.4 Decisões de detalhe (fechadas aqui para não virar dúvida na implementação)
+
+**Escolha de instância, quando `instanceId` é omitido** — mesma política do §6.5, versão de 1 msg:
+1. **Afinidade lead→instância:** se já houve mensagem (in ou out) com este lead, usa a mesma
+   instância, se ela estiver `connected` e com cota. Trocar de número no meio de uma conversa
+   confunde o prospect e parece spam.
+2. Senão, entre as `connected`: maior `remaining` de cota. Empate → `isDegraded: false` vence.
+3. Nenhuma elegível → `409 INSTANCE_NOT_CONNECTED` listando o motivo de cada uma em `details[]`
+   (é a diferença entre "conecte um número" e "espere até amanhã").
+
+**Spintax determinístico.** `spintaxSeed` default = `` `${leadId}:${templateId}:${YYYY-MM-DD}` ``.
+A UI de preview (`POST /templates/:id/preview`) passa a devolver o `spintaxSeed` de cada variação, e
+o botão "enviar esta versão" reenvia o mesmo seed. Sem isso, o operador aprova um texto e o sistema
+manda outro — pequeno, mas destrói a confiança na tela de preview.
+
+**`body` cru não passa por render de variáveis.** `{{nome}}` digitado à mão sai literal. Deliberado:
+`body` existe para o operador **responder uma conversa**, não para driblar o cadastro de templates.
+
+**A cota é sempre debitada.** Envio manual conta em `InstanceDailyStat.sentCount` do dia (fuso
+`APP_TIMEZONE`) exatamente como campanha. `warmupDay` **não** é avançado por esta rota — quem avança
+é o `warmup-roll.job` (Onda 3), e a fonte da verdade de "este dia teve envio" é justamente
+`InstanceDailyStat.sentCount > 0`, que esta rota grava. Nenhum campo novo é necessário.
+
+#### 4.9.5 Registro do `Message` e o que acontece quando a Evolution falha
+
+**Decisão: grava-se ANTES de chamar a rede (write-ahead).** É o ponto mais fácil de errar da seção.
+
+```
+   ┌─ transação 1 (reserva) ────────────────────────────────────────────┐
+   │ Message(status='queued', providerMessageId=null, body=<texto final>)│
+   │ InstanceDailyStat.sentCount += 1        (upsert por instância+dia)   │
+   └────────────────────────────────────────────────────────────────────┘
+                    ↓  (nenhum outro I/O entre G11 e esta linha)
+              EvolutionClient.sendText()
+                    ↓
+   ┌─ transação 2a (sucesso) ──────────┐   ┌─ transação 2b (falha) ─────────────────┐
+   │ Message → status='sent',           │   │ Message → status='failed', errorCode,   │
+   │   providerMessageId, sentAt        │   │   errorMessage                          │
+   │ instance.consecutiveFailures = 0   │   │ InstanceDailyStat: sentCount−1,         │
+   │ Lead.status: new|validated →       │   │   failedCount+1        (compensação)    │
+   │   'contacted' (actor='system')     │   │ instance.consecutiveFailures += 1       │
+   │ LeadActivity 'message_sent'        │   │ LeadActivity 'message_failed'           │
+   └────────────────────────────────────┘   └─────────────────────────────────────────┘
+```
+
+**Por que write-ahead e não "grava depois que deu certo":** os dois modos de falha não são
+simétricos. "Enviei e não registrei" (o processo morre entre o `sendText` e o `INSERT`) produz uma
+mensagem **invisível**: não aparece na timeline, não conta na cota, e o operador reenvia — o lead
+recebe duas vezes e o warmup é furado sem ninguém ver. "Registrei e não enviei" produz uma linha
+`queued` visível na tela, que o operador entende e pode reenviar. **A cota erra sempre para menos,
+nunca para mais.** Entre perder uma unidade de cota e perder a rastreabilidade de um envio real, o
+anti-ban manda escolher a primeira. O `providerMessageId` é `@unique` e nullable no schema atual, o
+que já suporta isso — nenhuma migração é necessária.
+
+Linha `queued` órfã (processo morreu no meio) é o resíduo aceito dessa escolha: fica visível, e a
+varredura que a resolve é a dívida **D8** (§9.2).
+
+**Mapa de erro da Evolution → resposta e efeito colateral** (`MessagingErrorCode` já existe em
+`packages/messaging/src/errors.ts` — não criar vocabulário novo):
+
+| `MessagingErrorCode` | HTTP | `reason` | `consecutiveFailures` | Efeito colateral |
+|---|---|---|---|---|
+| `INSTANCE_DISCONNECTED` | 409 | `INSTANCE_NOT_CONNECTED` | +1 | instância → `disconnected`; chama `haltCampaignsSoleInstanceDisconnected` (já existe) |
+| `INSTANCE_NOT_FOUND` | 409 | `INSTANCE_MISSING_UPSTREAM` | +1 | instância → `disconnected` + `lastError`; a instância sumiu do container |
+| `INVALID_NUMBER` | 409 | `NUMBER_HAS_NO_WHATSAPP` | **0** | não é falha da instância; `LeadActivity` registra para alimentar a qualidade do dado (R6) |
+| `AUTH_ERROR` | 502 | `EVOLUTION_AUTH` | **0** | erro de **configuração nossa** (`EVOLUTION_API_KEY`) — alerta `critical`; punir a instância seria diagnóstico errado |
+| `RATE_LIMITED` | 502 | `EVOLUTION_RATE_LIMITED` | +1 | sem retry automático aqui (§ política do pacote: quem decide o quando é a camada de cadência) |
+| `TRANSIENT_ERROR` · `TIMEOUT` | 502 | `EVOLUTION_TRANSIENT` | +1 | o cliente HTTP já fez seus 2 retries de transporte; se chegou aqui, acabou |
+| `UNKNOWN` | 502 | `EVOLUTION_UNKNOWN` | +1 | log com corpo bruto |
+
+**O kill switch por falhas consecutivas (§6.6, linha 3) nasce aqui:** ao atingir
+`consecutiveFailures >= 5`, a instância vira `isDegraded = true` na mesma transação, e a resposta
+carrega `warnings: [{ code: 'INSTANCE_DEGRADED', ... }]`. Qualquer envio bem-sucedido zera o
+contador. Isso vale desde o envio unitário — não é preciso esperar a Fase 4 para o sistema começar a
+se defender.
+
+**Nunca `500` para falha da Evolution.** É `502 UPSTREAM_ERROR`: a distinção "o defeito é nosso" vs.
+"o defeito é do provedor" é a primeira pergunta de qualquer runbook.
+
+#### 4.9.6 Janela de envio no manual — a decisão, e por quê
+
+**Pergunta:** a janela do §6.3 (09–18, seg–sex, pausa de almoço) vale para um operador clicando
+"enviar"? **Decisão: não como está — vira um piso duro + uma confirmação explícita.** Dois níveis:
+
+| Nível | Faixa | Comportamento no envio **manual** | Comportamento na **campanha** (§6.3) |
+|---|---|---|---|
+| 🔴 **Piso legal/anti-denúncia** (duro) | fora de **08:00–20:00**, ou **domingo**, ou feriado nacional | **`409 QUIET_HOURS`.** Não há flag, override ou papel de admin que passe | idem — nunca envia |
+| 🟡 **Janela comercial** (mole no manual) | 08–09, 12:00–13:30, 18–20, sábado | exige `confirmOutsideBusinessWindow: true`; sem ele, `409 OUTSIDE_BUSINESS_WINDOW` com a próxima abertura em `details` | reagenda sozinha, nunca envia fora |
+
+**Justificativa.** A janela do §6.3 protege contra duas coisas diferentes, que a v1.0 tratava como
+uma só:
+- **(a) padrão de robô** — rajada automatizada em horário estranho é assinatura de bot. Com volume 1
+  e um humano no clique, esse risco basicamente desaparece. É por isso que a janela comercial pode
+  ser mole aqui.
+- **(b) irritação do destinatário** — e essa **não** desaparece com volume 1. Quem recebe abordagem
+  comercial de desconhecido às 22h denuncia, e a denúncia derruba o número igual. O destinatário não
+  sabe (nem se importa) se foi um humano ou um cron que apertou o botão.
+
+Como (b) sobrevive e (a) não, a resposta certa não é "libera" nem "bloqueia": é **piso duro em (b),
+confirmação explícita em (a)**. O operador que precisa responder um lead às 19h30 consegue; o
+operador que iria prospectar a frio às 22h é impedido — inclusive de si mesmo, que é a defesa que o
+R9 (§9.1) pede.
+
+O piso 08:00–20:00 / sem domingos é ancorado no que a legislação brasileira já considera razoável
+para contato comercial ativo (o parâmetro do telemarketing, Decreto 11.034/2022, é 09–20 em dias
+úteis). Não é norma que se aplique literalmente a WhatsApp B2B, mas é exatamente o padrão que
+sustenta a condição de "**expectativa razoável do titular**" da nossa base legal (§7.1) — usar um
+horário mais agressivo que o do telemarketing enfraqueceria o legítimo interesse que o produto
+inteiro depende. Configurável em §10 apenas para **estreitar**, nunca para alargar (mesmo princípio
+do `dailyLimitOverride`).
+
+**Toda confirmação fica registrada.** `confirmOutsideBusinessWindow` e `allowNonMobile` vão no
+`payload` do `LeadActivity` de `message_sent`. Desvio autorizado é aceitável; desvio invisível não.
+
+**`warnings[]` da resposta 201** (não bloqueiam, a UI mostra):
+`OUTSIDE_BUSINESS_WINDOW_CONFIRMED` · `INSTANCE_DEGRADED` · `NON_MOBILE_CONFIRMED` ·
+`LOW_QUOTA_REMAINING` (≤10% do teto) · `NO_OPTOUT_NOTICE_IN_REPLY` (resposta em conversa já aberta,
+onde G10 não se aplica).
+
+#### 4.9.7 Tabela de erros consolidada
+
+| HTTP | `code` | `reason` | Quando | O que a UI faz |
+|---|---|---|---|---|
+| 401 | `UNAUTHORIZED` | — | sem sessão | redireciona ao login |
+| 404 | `NOT_FOUND` | `LEAD_NOT_FOUND` · `INSTANCE_NOT_FOUND` | id inexistente | 404 na tela |
+| 422 | `VALIDATION_ERROR` | `BODY_OR_TEMPLATE_REQUIRED` · `BODY_TOO_LONG` · `UNKNOWN_VARIABLE` · `INVALID_SPINTAX` | payload | erro no campo |
+| 409 | `CONFLICT` | `LEAD_HAS_NO_PHONE` | lead sem telefone | desabilita o botão de envio na ficha |
+| 409 | `CONFLICT` | `LEAD_NOT_MOBILE` | fixo/desconhecido, sem `allowNonMobile` | diálogo "enviar mesmo assim?" |
+| 409 | `CONFLICT` | `NUMBER_HAS_NO_WHATSAPP` | Evolution confirmou que o número não tem WhatsApp | informa e sugere marcar o lead |
+| 409 | `CONFLICT` | **`OPTED_OUT`** | telefone na blacklist | mensagem **terminal**: sem retry, sem "tentar assim mesmo" |
+| 409 | `CONFLICT` | `INSTANCE_NOT_CONNECTED` · `INSTANCE_BANNED` · `INSTANCE_MISSING_UPSTREAM` | instância inapta | link para a tela de WhatsApp |
+| 409 | `CONFLICT` | `DAILY_LIMIT_REACHED` | cota do warmup esgotada | mostra `resetsAt`; **não** oferece "aumentar limite" |
+| 409 | `CONFLICT` | `QUIET_HOURS` | fora do piso duro | informa a próxima abertura; **sem** botão de forçar |
+| 409 | `CONFLICT` | `OUTSIDE_BUSINESS_WINDOW` | fora do comercial, dentro do piso | diálogo de confirmação → reenvia com a flag |
+| 409 | `CONFLICT` | `DUPLICATE_SEND` | outbound < 60s para o mesmo lead | "acabamos de enviar" |
+| 409 | `CONFLICT` | `MISSING_OPTOUT_NOTICE` · `MISSING_COMPANY_NAME` | 1º contato frio sem saída fácil / sem remetente | leva ao editor do template |
+| 429 | `RATE_LIMITED` | `MANUAL_SEND_RATE_LIMIT` | > `MANUAL_SEND_RATE_PER_MIN` por usuário | "aguarde" |
+| 502 | `UPSTREAM_ERROR` | `EVOLUTION_*` (§4.9.5) | falha do provedor | "tente de novo"; a mensagem fica `failed` na timeline |
+
+`DAILY_LIMIT_REACHED`, `QUIET_HOURS` e `OPTED_OUT` incluem `meta` útil em `details[]`
+(`resetsAt`, `nextWindowOpensAt`, `optedOutAt`) — sem isso a UI só sabe dizer "não deu".
+
+#### 4.9.8 O que NÃO entra nesta rota
+
+Escopo cortado de propósito, para o envio unitário não virar meia campanha:
+- **Envio em lote / seleção múltipla.** Isso é campanha (§4.5) e precisa de fila, cadência e jitter.
+- **Mídia** (imagem, áudio, documento). Dívida D5, inalterada.
+- **Agendamento.** Se precisa esperar a janela abrir, é campanha de 1 alvo.
+- **Retry automático.** A rota é síncrona e falha na cara do operador — que decide reenviar. Retry
+  automático de envio manual duplicaria mensagem com o operador olhando.
+- **`GET /leads/:id/messages`.** A ficha do lead (`GET /leads/:id`) já devolve `messages[]`.
+
+#### 4.9.9 Critério de aceite (é comportamento observável, não teste unitário)
+
+Só está pronto quando, **com número real e Evolution real** (nada de mock):
+1. Uma mensagem sai da ficha do lead e chega no celular do dono; a timeline mostra
+   `sent → delivered → read` conforme os webhooks chegam.
+2. O dono responde **"SAIR"**; o `OptOut` é criado automaticamente; **um segundo envio para o mesmo
+   lead é recusado com `409 / OPTED_OUT`** — e a recusa aparece com texto legível na tela.
+3. `sentToday` da instância aumentou em 1 e é visível em `GET /whatsapp/instances`.
+4. Um envio com a Evolution derrubada devolve `502` e deixa a `Message` como `failed` na timeline —
+   não some, não vira `500`, não fica `queued` para sempre.
+5. **Órion:** `grep -rn "sendText(" apps/ packages/` devolve **exatamente um** call site de produção
+   para mensagem de lead, e `evaluateSendGuard` é invocado na mesma função, sem I/O entre os dois.
+
+Os itens 1–4 são o aceite da **Fase 3** que nunca foi executado (§8). O item 5 é o que impede que a
+Fase 4 abra um segundo caminho de envio sem portão.
+
 ---
 
 ## 5. Design do scraper
@@ -951,6 +1323,20 @@ dependência externa em caminho crítico é risco desnecessário e a lista muda 
 `saturated: true` e o `health-check.job` pode gerar sub-tasks por bairro ou por célula geográfica
 (bounding box + zoom). **Não implementar na Fase 2** — apenas gravar a flag, para sabermos o tamanho do
 problema com dado real antes de investir.
+
+> ⚠️ **Correção v1.1 — a flag nunca foi instalada.** `reachedEnd` é calculado em
+> `packages/scraper/src/engine/navigate.ts` e devolvido em `SearchOutput.meta`, mas o
+> `scrape-search.job.ts` **descarta o valor** e não existe coluna `saturated` no schema. Ou seja: o
+> instrumento de medição da dívida **D4** não foi instalado, e a D4 chegaria à Fase 6 sem um único
+> dado — decidindo "no achismo" exatamente o que a flag existia para evitar. Persistir
+> `SearchTask.saturated` é item da Onda 1 (§8): é barato, e o custo de não ter é descobrir tarde.
+
+**Nota de leitura sobre o `resultCount`:** ele hoje pode estar inflado. A deduplicação de cards em
+`navigate.ts` usa um `Set` do `outerHTML`, que muda entre passos de scroll (imagem *lazy*, atributo
+`aria-*` de foco) — o mesmo negócio pode entrar duas vezes, inflando a contagem **e** consumindo
+`maxResults` antes da hora, o que **trunca resultados reais**. O `upsert` protege o banco, não a
+métrica nem a completude. Deduplicar por `externalRef`/`detailUrl` (ambos já extraídos) é mais
+barato e correto. Corrigir antes de tirar qualquer conclusão de taxa de preenchimento (§8, Onda 1).
 
 **Priorização:** tasks são enfileiradas por **população decrescente** (campo `City.population`). O usuário
 vê leads das capitais nos primeiros minutos em vez de esperar 645 municípios para ver valor.
@@ -1150,6 +1536,17 @@ flowchart TD
     style HALT fill:#ff9999
 ```
 
+> **v1.1 — o bloco `GUARD PRÉ-ENVIO` não é escrito aqui.** Ele é a mesma
+> `evaluateSendGuard(SendGuardFacts)` definida no **§4.9.3**, que já roda no envio unitário. O
+> `dispatch-tick.job` monta os `facts` a partir do `CampaignTarget` e chama a mesma função. Duas
+> diferenças, e só duas, entre campanha e manual:
+> - a **janela comercial é dura** na campanha (não existe `confirmOutsideBusinessWindow`);
+> - **não existe `allowNonMobile`** — fixo é `skipped/landline` (§3.2 regra 4), sem exceção.
+>
+> Ambas entram como `overrides: { allowNonMobile: false, confirmOutsideBusinessWindow: false }`.
+> O worker **não pode** ter uma segunda implementação do portão: se `evaluateSendGuard` aparecer
+> duplicada, o Órion reprova (§4.9.9, item 5).
+
 ### 6.2 Aquecimento de número novo (ramp-up)
 
 Número novo que dispara 200 mensagens no primeiro dia é banido no primeiro dia. A tabela de warmup é
@@ -1242,6 +1639,10 @@ Este é o ponto onde estou sendo mais rígida do documento inteiro, e é proposi
 1. **Consulta antes de cada envio, dentro do worker.** Não na montagem da campanha, não em cache de 5
    minutos, não em snapshot. É um `SELECT` indexado por `phoneE164` a cada mensagem. Sim, isso é uma query
    por envio — a 30 mensagens/hora, é irrelevante em custo e decisivo em risco.
+   *(v1.1)* Isso vale para **todo** caminho de envio, não só o worker: o envio unitário do §4.9 usa a
+   mesma consulta e a mesma função de decisão (`evaluateSendGuard`), com o carimbo `checkedAt` que
+   **quebra em runtime** se alguém cachear. O portão nasce lá, no volume 1, e o `dispatch-tick.job`
+   o herda já exercitado em produção — em vez de estreá-lo num disparo de 500 mensagens.
 2. **A chave é o telefone, não o lead.** Se o mesmo número aparecer como outro lead numa busca futura,
    continua bloqueado. Opt-out não é apagável por re-scraping.
 3. **Três formas de entrada:**
@@ -1304,7 +1705,12 @@ Isso responde, em segundos, a pergunta que importa numa solicitação do titular
 | **Eliminação** | Solicitação | 15 dias | Ação `delete_lead_data`: apaga `Lead`, `Message`, `LeadActivity` e **mantém apenas o hash do telefone no `OptOut`** — sem isso, uma busca futura recoletaria a mesma empresa e voltaríamos a incomodar quem pediu para sair. Registrar essa retenção mínima como o que ela é: cumprimento da própria oposição |
 
 ### 7.4 Conteúdo obrigatório da primeira mensagem
-Validado no `start` da campanha (`409 MISSING_OPTOUT_NOTICE` se ausente). O template precisa conter:
+Validado no `start` da campanha **e no envio unitário** (`409 MISSING_OPTOUT_NOTICE` se ausente —
+§4.9.3, portão G10). *(v1.1)* A regra vale para **primeiro contato frio**, definido como "não existe
+nenhuma `Message` outbound para este lead". Se o lead já respondeu (existe inbound), é uma conversa
+em curso: exigir "responda SAIR" numa resposta a quem perguntou o preço seria ruído, não proteção.
+Nesse caso a API devolve `warning: NO_OPTOUT_NOTICE_IN_REPLY` em vez de bloquear.
+O template precisa conter:
 1. **Quem fala** — nome da empresa remetente (variável `{{minha_empresa}}`, obrigatória no primeiro contato).
 2. **Saída fácil** — instrução literal de descadastro. Ex.: `Se preferir não receber mais, responda SAIR.`
    Aceita-se a variante com link público (`{{link_descadastro}}`).
@@ -1325,11 +1731,108 @@ escreve na Fase 6, a partir desta seção.
 
 ---
 
-## 8. Plano faseado
+## 8. Plano faseado (reescrito na v1.1)
 
-Princípio: **cada fase termina com algo que o usuário consegue usar de ponta a ponta.** Nada de "fase de
-backend" seguida de "fase de frontend" — isso produz três semanas sem nada demonstrável e esconde erro de
-integração até o fim.
+Princípio original, que mantenho: **cada fase termina com algo que o usuário consegue usar de ponta a
+ponta.** O que mudou é que a v1.0 não tinha como *verificar* isso — e o resultado foi 13.400 linhas,
+build verde e 164 testes sem que nada jamais tocasse Postgres, Redis, Google Maps ou WhatsApp.
+
+### 8.0 As quatro regras que passam a valer (e que a v1.0 violava)
+
+1. **"Escrito e com build passando" não é "entregue".** Só conta o que rodou contra serviço real.
+   Toda fase tem um aceite executável, e o aceite é executado por alguém (Íris) antes de a fase
+   fechar. Fase sem aceite executado é fase aberta, por mais verde que esteja o CI.
+2. **Nenhuma linha do plano sem contrato correspondente na §4.** Foi a omissão que matou a 3.7 e
+   deixou `sendText` sem chamador por duas fases. O §4 é a lista de trabalho; isto aqui é a
+   narrativa.
+3. **Função pura + teste ≠ funcionalidade. O wiring É a entrega.** O critério de aceite de uma regra
+   de proteção é o **comportamento observável quando ela dispara** — evento gravado, tela mudou,
+   alerta saiu — nunca o teste unitário da função que a calcula. Quatro peças (`evaluateSanity`,
+   `WARMUP_TABLE`/`effectiveDailyLimit`, `regressWarmupDay`, `deriveInstanceHealth`) pareciam prontas
+   em todo relatório de progresso e tinham zero chamadores. Nunca mais separar "escrever a regra" de
+   "ligar a regra" em itens diferentes do plano.
+4. **Todo modo degradado com default seguro e sinal mais barulhento que o normal.** Ao desenhar
+   qualquer flag ou fallback, a pergunta é: *"se isto ficar ligado por engano em produção, alguém
+   percebe?"*. Se a resposta for não, inverta o default e adicione sinal visível.
+
+### 8.1 Ordem de execução real — as ondas mandam
+
+As **fases** descrevem capacidade do produto (é assim que se conversa com o dono). As **ondas**
+descrevem a ordem de execução dado o estado real do código em 2026-08-03 (`REVISAO-ARQUITETURA.md`
+§5). **Onde divergirem, vale a onda.**
+
+| Onda | Objetivo | Bloqueia | Fases que toca |
+|---|---|---|---|
+| **0** | Provar que o núcleo funciona: infra de pé, uma busca real, **medir a taxa de celular** | tudo | Fase 0 (nova) + aceite da Fase 1 |
+| **1** | O sistema consegue **dizer que está quebrado** e ser retomado sem shell | uso real | resto da Fase 2 + lacunas novas |
+| **2** | **Fase 3 de verdade**: envio unitário real ponta a ponta (§4.9) | Fase 4 | Fase 3 (3.7 + aceite) |
+| **3** | Fase 4: campanhas com anti-ban | release | Fase 4 |
+| **4** | Profissional: backup, CI, testes de integração, alertas, docs | cliente pagante | Fase 5 + Fase 6 |
+
+**O que mudou de ordem, explicitamente:**
+- **Fases 2 e 3 não rodam mais em paralelo.** Rodavam na v1.0 porque "não compartilham código" — o
+  que continua verdade e continua irrelevante: o gargalo não é código, é **verificação**. A Onda 1
+  (saber que quebrou) precisa vir antes de qualquer coisa que produza volume.
+- **Saiu do caminho crítico:** `GET /leads/export` e `POST /leads/bulk` (eram 2.4, agora Onda 4).
+  São valiosos e não bloqueiam nada — deixá-los na Fase 2 empurrava a validação real para depois.
+- **Virou bloqueante e não estava no plano:** persistir o estado de pausa da fila fora do
+  `setTimeout` em memória; `POST /scraper/queue/resume`; heartbeat do worker; `requeue-orphans`.
+  A v1.0 tratava recuperação como detalhe de operação. Neste ambiente (sem terminal confiável, §0),
+  recuperação é **requisito de arquitetura**.
+- **Subiu para "ligar", não só "escrever":** as assertions A1–A4 (2.3) só fecham quando adulterar uma
+  fixture produzir banner vermelho na tela e fila pausada — não quando o teste unitário passar.
+
+### 8.2 🔴 Fase 0 — "Walking skeleton" (a fase que faltava)
+
+**Objetivo:** infra real de pé e **um** caminho fim-a-fim verdadeiro, por mais ridículo que seja o
+escopo, antes de qualquer domínio novo. Retroativa: deveria ter sido a primeira fase.
+
+| # | Entrega | Responsável |
+|---|---|---|
+| 0.1 | Postgres + Redis + `apps/web` + `apps/worker` no ar no EasyPanel; migrações aplicadas | Dono + Vulcano |
+| 0.2 | `GET /health` que reflete o mundo: banco, Redis, **worker vivo** (heartbeat) e estado da fila | Vega |
+| 0.3 | Uma busca real: "clínica odontológica" em Campinas-SP, executada de verdade | Íris |
+| 0.4 | **Medir e reportar: % de leads com telefone, e % com telefone móvel** | Íris |
+| 0.5 | Decisão sobre `scrape-detail` com base em 0.4 (critério em §8.3) | **Nova** |
+| 0.6 | Consumo real de RAM do Chromium na VPS (R8 nunca foi observado) | Vulcano |
+
+**Depende de:** nada. **Aceite:** uma busca real devolve ≥30 leads sem duplicatas em <3 min, **e**
+existe um número na mesa para "% de leads com celular". Sem 0.4, a Onda 2 é construída no escuro.
+
+### 8.3 🔑 O gatilho: a taxa de celular decide se `scrape-detail` é melhoria ou requisito
+
+Este é o furo de premissa mais caro do projeto e ele está **em aberto até a busca de Campinas rodar**.
+
+**O problema:** o produto inteiro depende de telefone **móvel** (só celular recebe WhatsApp, §3.2
+regra 4). O scraper extrai telefone **do card da lista** do Maps (`SELECTORS.card.phone`) — e o card
+do feed **frequentemente não traz telefone**: ele aparece no painel de detalhe. Eu rebaixei
+`scrape-detail.job.ts` para "v2" por disciplina de escopo e, na mesma revisão, escrevi um aceite de
+Fase 1 exigindo telefone. **As duas coisas são incompatíveis** — e a incompatibilidade só é visível
+quando alguém roda. Não afirmo a taxa: ela nunca foi medida (o scraper nunca abriu o Maps).
+
+**Critério de decisão (métrica: `% de leads com telefone MÓVEL em E.164 válido`, sobre a busca de
+Campinas, depois de corrigido o dedupe de card do §5.2 — senão a base do percentual está inflada):**
+
+| Taxa medida | Veredito sobre `scrape-detail` | Consequência no plano |
+|---|---|---|
+| **≥ 50%** | **Melhoria.** Fica na Fase 6 | Nada muda. O aceite da Fase 1 passa a citar a taxa medida, não um absoluto |
+| **25% – 50%** | **Requisito antes da Fase 4** (entra na Onda 2) | O operador precisa de 2–4× mais buscas para montar uma campanha. Campanha sobre base rala queima cota de warmup em alvos inexistentes |
+| **< 25%** | 🔴 **Bloqueante imediato** — sobe para a Onda 1 | A premissa comercial do produto não se sustenta. Reescrever o aceite da Fase 1 e tratar `scrape-detail` como parte do caminho de coleta, não como enriquecimento |
+
+**Por que estes cortes.** O custo de coleta é dominado pela busca (~40s/município) e independe da
+taxa; o passo de detalhe custa ~3–5s por lead e é **linear no que já capturamos**. Acima de 50%, pagar
+o detalhe para todos é desperdício — melhor rodar mais municípios. Abaixo de 25%, estamos pagando o
+custo integral da busca para produzir uma lista majoritariamente inútil para a promessa central do
+produto, e nenhum ganho de escala conserta isso. A faixa do meio é onde `scrape-detail` deixa de ser
+enriquecimento e vira **parte da coleta**, mas ainda dá para trabalhar enquanto ele não existe.
+
+**Corolário que já vale, independentemente do número:** o corte de escopo certo na Fase 1 teria sido
+*menos cidades e menos filtros* — **nunca menos telefone**. Disciplina de escopo aplicada contra a
+premissa comercial é escopo mal cortado.
+
+**Nota para a Íris:** reportar **dois** números, não um. `% com qualquer telefone` e `% dos telefones
+que são móveis`. Se a queda estiver no primeiro, o remédio é `scrape-detail`. Se estiver no segundo,
+o remédio é outro (nicho com predominância de fixo) e `scrape-detail` não resolve nada.
 
 ---
 
@@ -1347,9 +1850,14 @@ sofisticada.
 | 1.6 | Login + tela "Nova busca" + progresso ao vivo + tabela de leads com filtros | **Lyra** |
 | 1.7 | Testes: unit do extractor com fixtures; e2e "criar busca → ver leads" | **Íris** |
 
-**Depende de:** nada. **Critério de aceite:** buscar "clínica odontológica" em Campinas-SP retorna
-≥ 30 leads com nome e telefone em < 3 minutos, sem duplicatas.
-**Fora de escopo aqui:** fanout do estado inteiro, export, proxy, WhatsApp.
+**Depende de:** Fase 0. **Fora de escopo aqui:** fanout do estado inteiro, export, proxy, WhatsApp.
+
+**Critério de aceite (corrigido na v1.1):** buscar "clínica odontológica" em Campinas-SP retorna
+≥ 30 leads com **nome**, sem duplicatas, em < 3 minutos — **e a taxa de telefone móvel é medida e
+reportada**, não assumida. O aceite v1.0 exigia "nome e telefone" enquanto o `scrape-detail` estava
+rebaixado para v2: era um aceite impossível de cumprir por desenho (§8.3).
+
+**Estado real (2026-08-03):** tudo escrito, **nada executado**. O aceite nunca rodou.
 
 ---
 
@@ -1360,14 +1868,28 @@ sofisticada.
 |---|---|---|
 | 2.1 | Fanout por município (todos da UF), priorização por população, flag `saturated` | **Vega** |
 | 2.2 | Rate limiting, jitter, rotação de UA, humanização, `ProxyProvider` (Noop) | **Vega** |
-| 2.3 | Assertions de sanidade A1–A4 + `ScraperHealthEvent` + canário diário + captura de incidente | **Vega** |
-| 2.4 | `GET /leads/export` (CSV em stream, BOM) + `PATCH /leads/:id` + `POST /leads/bulk` | **Vega** |
-| 2.5 | UI: seleção de cidades, banner de saúde do scraper, export, edição de status/tags/notas | **Lyra** |
+| 2.3 | 🔴 **Ligar** as assertions A1–A4: chamar `evaluateSanity` ao fim de cada task, **gravar `ScraperHealthEvent`**, canário diário, captura de incidente | **Vega** |
+| 2.3b | 🆕 Estado de pausa da fila **persistido no Postgres** (não `setTimeout` em memória) + retomada no boot | **Vega** |
+| 2.3c | 🆕 `POST /api/v1/scraper/queue/resume` com `acknowledge` do incidente + heartbeat do worker em `GET /health` + `requeue-orphans` no boot | **Vega** (contrato: **Nova**) |
+| 2.3d | 🆕 Persistir `SearchTask.saturated` a partir de `reachedEnd` (instrumento da D4) e corrigir o dedupe de card por `externalRef`/`detailUrl` (§5.2) | **Cronos + Vega** |
+| 2.4 | ⬇️ `GET /leads/export` (CSV em stream, BOM) + `POST /leads/bulk` — **movidos para a Onda 4**; `PATCH /leads/:id` fica (já feito) | **Vega** |
+| 2.5 | UI: seleção de cidades, **banner de saúde do scraper + botão de retomar com motivo legível**, edição de status/tags/notas | **Lyra** |
 | 2.6 | Schema: `ScraperHealthEvent`, `RawCapture`, campos de origem LGPD | **Cronos** |
 | 2.7 | Teste de carga (1 UF completa) + teste de quebra de seletor (fixture adulterada deve alarmar) | **Íris** |
 
-**Depende de:** Fase 1 completa. **Aceite:** busca em UF média (ex.: ES, 78 municípios) conclui sem
-intervenção; adulterar um seletor faz a fila pausar e o banner vermelho aparecer.
+**Depende de:** Fase 1 **executada** (não só escrita).
+
+**Aceite (v1.1 — agora é comportamento, não código):** adulterar um seletor **ou** derrubar o Redis
+produz **sinal visível na tela em < 5 minutos**, e o operador retoma a operação **sem abrir um
+shell**. Busca em UF média (ex.: ES, 78 municípios) conclui sem intervenção.
+
+**Estado real (2026-08-03):** 2.1 ✅ · 2.2 ✅ · **2.3 🔴 código morto** (`evaluateSanity` existe,
+tem teste, tem zero chamadores; nenhum `ScraperHealthEvent` é gravado por ninguém) · 2.3b–d ❌ ·
+2.4 ❌ · 2.5 🟡 · 2.6 ✅ · 2.7 ❌.
+**Por que 2.3 é a dívida mais perigosa do projeto:** se o Google mudar o layout hoje, o sistema roda,
+não dá exceção, grava zero leads e **ninguém fica sabendo** — exatamente o cenário que a §5.7 existia
+para impedir. A separação entre "escrever a assertion" (2.3) e "ligar no job" (1.4) foi minha, e foi
+errada: não são itens independentes.
 
 ---
 
@@ -1382,12 +1904,20 @@ intervenção; adulterar um seletor faz a fila pausar e o banner vermelho aparec
 | 3.4 | API: instâncias (CRUD, QR, status), templates (CRUD, preview), webhook inbound | **Vega** |
 | 3.5 | `packages/core`: render de variáveis, spintax, `detectOptOut`, normalização E.164 | **Vega** |
 | 3.6 | UI: conectar número (modal QR com poll), editor de template com preview e contador de variações | **Lyra** |
-| 3.7 | Envio manual para 1 lead a partir da ficha (validação real ponta a ponta) | **Vega + Lyra** |
+| 3.7 | 🔴 **Envio unitário — agora com contrato: `POST /leads/:id/messages` (§4.9).** Inclui `evaluateSendGuard` em `packages/core` (o portão que a Fase 4 herda) | **Vega + Lyra** |
+| 3.7b | 🆕 Pinar a versão real da imagem da Evolution API (hoje `v2.2.3` é chute admitido) | **Vulcano** |
 | 3.8 | Testes: webhook idempotente, spintax, detecção de opt-out (incl. falsos positivos) | **Íris** |
 
-**Depende de:** Fase 1 (leads existem). Pode rodar **em paralelo com a Fase 2** — não compartilham código.
-**Aceite:** conectar número por QR, mandar mensagem para o próprio celular do operador, ver
-`sent → delivered → read`, responder "sair" e ver o `OptOut` criado automaticamente.
+**Depende de:** Fase 1 executada. **Não roda mais em paralelo com a Fase 2** — ver §8.1.
+
+**Aceite (é o aceite do §4.9.9, com número real):** conectar número por QR, mandar mensagem da ficha
+do lead para o celular do dono, ver `sent → delivered → read`, responder "SAIR", ver o `OptOut`
+criado automaticamente **e o segundo envio ser recusado com `409 / OPTED_OUT`**.
+
+**Estado real (2026-08-03):** 3.1 ✅ · 3.2 ✅ · 3.3 🟡 · 3.4 ✅ · 3.5 ✅ · 3.6 ✅ · **3.7 ❌** ·
+3.8 🟡. O `EvolutionClient` está completo e testado — **contra os próprios mocks do autor**. Zero
+chamadas reais. A 3.7 existia exatamente para derrubar esse risco antes da Fase 4, e não foi feita
+porque eu escrevi a linha aqui e esqueci o endpoint no §4. Corrigido na v1.1: §4.9.
 
 ---
 
@@ -1405,9 +1935,18 @@ intervenção; adulterar um seletor faz a fila pausar e o banner vermelho aparec
 | 4.7 | Testes: opt-out no meio da campanha **deve** ser honrado; quota respeitada; halt em desconexão; retomada sem duplicar envio | **Íris** |
 | 4.8 | Revisão dedicada: nenhum caminho de código envia sem passar pelo guard | **Órion** |
 
-**Depende de:** Fases 3 e 1. **Aceite:** campanha de 50 alvos com 2 instâncias respeita quota e janela,
-para sozinha ao desconectar um número, e um opt-out registrado durante a execução é honrado no envio
-seguinte. Este último item é **critério de bloqueio de release**.
+**Depende de:** Fase 3 **executada com número real** (não só escrita) e Fase 1. A dependência é dura:
+construir a Fase 4 sobre um acoplamento com a Evolution que nunca foi exercitado é empilhar em
+fundação não testada — é precisamente o que a 3.7 existia para evitar.
+
+**Aceite:** campanha de 50 alvos com 2 instâncias respeita quota e janela, para sozinha ao desconectar
+um número, e um opt-out registrado durante a execução é honrado no envio seguinte. Este último item é
+**critério de bloqueio de release**.
+
+**O que mudou na v1.1:** 4.2 não escreve o guard do zero — **importa o `evaluateSendGuard` já em
+produção desde a 3.7** (§4.9.3, §6.1). O que a Fase 4 acrescenta ao portão são dois `overrides` em
+`false` e o caminho `skipped/<reason>` no `CampaignTarget` (em vez de resposta HTTP). Se aparecer uma
+segunda implementação do portão no worker, o Órion reprova.
 
 ---
 
@@ -1418,12 +1957,25 @@ seguinte. Este último item é **critério de bloqueio de release**.
 | 5.2 | Hardening: `apikey` do Evolution em comparação de tempo constante, `instanceKey` não enumerável, CSP | **Órion + Vega** |
 | 5.3 | LGPD executável: `retention.job`, página pública de descadastro, ação de eliminação | **Vega** |
 | 5.4 | Validação do conteúdo obrigatório da 1ª mensagem no `start` | **Vega** |
-| 5.5 | Deploy: Caddy + TLS, backup diário do Postgres com restore testado, healthchecks, rollback | **Vulcano** |
-| 5.6 | Logs estruturados, alertas (scraper quebrado, número banido, Evolution fora) | **Vulcano + Vega** |
+| 5.4b | 🆕 Validação do mesmo conteúdo obrigatório **no envio unitário** (§4.9, G10) — já entregue na Fase 3 | **Vega** |
+| 5.5 | Deploy: TLS (EasyPanel), **backup diário do Postgres com restore testado**, healthchecks, rollback | **Vulcano** |
+| 5.6 | Logs estruturados, alertas lendo `ALERT_WEBHOOK_URL` (scraper quebrado, número banido, Evolution fora) | **Vulcano + Vega** |
 | 5.7 | Regressão completa + smoke test pós-deploy | **Íris** |
+| 5.8 | 🆕 CI: task `test` no `turbo.json` + script na raiz + pipeline (typecheck, lint, test, **`next build`**) | **Vulcano + Íris** |
 
 **Depende de:** Fase 4. **Aceite:** Órion sem achado `high`/`critical` aberto; restore de backup testado
 de verdade (não "configurado"); alerta de scraper quebrado chega ao operador.
+
+> ⚠️ **Antecipação condicional (v1.1):** **backup com restore testado sobe para a Onda 0** no dia em
+> que entrar dado de cliente — não espera a Fase 5. Enquanto o único conteúdo do banco é o seed do
+> IBGE, perder o volume é recuperável em minutos; com base de leads de um cliente, não é.
+> `infra/backup/pg-dump.sh` foi especificado no §2 e nunca criado.
+>
+> **Sobre o CI (5.8):** hoje não há `.github/`, e — pior — **não existe task `test` no `turbo.json`
+> nem script `test` na raiz**: um CI ligado hoje não teria o que executar. O gate de `next build`
+> precisa existir desde cedo porque aprendemos, pagando, que `next build` pega classes de bug que
+> `dev` e `typecheck` não pegam (componente como prop Server→Client, Prisma no Edge, imports `.js`
+> sem `transpilePackages`).
 
 ---
 
@@ -1432,30 +1984,61 @@ de verdade (não "configurado"); alerta de scraper quebrado chega ao operador.
 |---|---|---|
 | 6.1 | README, runbooks (scraper quebrado, número banido, Evolution caiu), `docs/lgpd.md` | **Alexandria** |
 | 6.2 | Dashboard de métricas: taxa de resposta por nicho/template, funil, custo por lead | **Lyra + Vega** |
-| 6.3 | Subdivisão de cidades saturadas (usa a flag `saturated` da Fase 2, agora com dado real) | **Vega** |
+| 6.3 | Subdivisão de cidades saturadas — **só é possível se a flag `saturated` da 2.3d existir**; sem ela, a D4 chega aqui sem dado nenhum | **Vega** |
 | 6.4 | `RotatingProxyProvider` (encaixe já existe) — **só se** houver bloqueio observado | **Vega** |
 | 6.5 | Motor `maps-pb` como caminho rápido, com fallback Playwright | **Vega** |
+| 6.6 | ⬆️ `GET /leads/export` + `POST /leads/bulk` (saíram da 2.4 — valiosos, não bloqueiam nada) | **Vega + Lyra** |
+| 6.7 | 🆕 `scrape-detail.job` — **posição depende de §8.3**: fica aqui só se a taxa de celular ficar ≥ 50% | **Vega** |
 
-### Grafo de dependências
+### Grafo de dependências (v1.1)
+
+A mudança em relação à v1.0: a Fase 3 não sai mais em paralelo com a 2, e a Fase 0 existe.
+
 ```mermaid
 graph LR
-    F1["Fase 1<br/>Leads na tela"] --> F2["Fase 2<br/>Estado + export"]
-    F1 --> F3["Fase 3<br/>1ª mensagem"]
-    F2 --> F4["Fase 4<br/>Campanhas"]
-    F3 --> F4
-    F4 --> F5["Fase 5<br/>Segurança + deploy"]
+    F0["Fase 0<br/>Infra real +<br/>taxa de celular"] --> F1["Fase 1<br/>Leads na tela<br/>(aceite executado)"]
+    F1 --> F2["Fase 2<br/>Escala + o sistema<br/>diz que quebrou"]
+    F2 --> F3["Fase 3<br/>Envio unitário real<br/>§4.9"]
+    F3 --> F4["Fase 4<br/>Campanhas"]
+    F4 --> F5["Fase 5<br/>Segurança + deploy + CI"]
     F5 --> F6["Fase 6<br/>Docs + otimização"]
-    style F1 fill:#d4f7d4
+    F0 -. "taxa &lt; 50%" .-> SD["scrape-detail<br/>vira requisito"]
+    SD -.-> F4
+    style F0 fill:#ffcccc
+    style F3 fill:#ffe0b3
     style F4 fill:#ffe0b3
+    style SD stroke-dasharray: 5 5
 ```
-**Fases 2 e 3 rodam em paralelo** — é o principal ganho de tempo do plano, e só é possível porque os
-contratos da §4 estão fechados agora.
+
+**Por que o paralelismo saiu.** A v1.0 rodava Fases 2 e 3 em paralelo "porque não compartilham
+código" — verdade que se provou irrelevante. O gargalo real nunca foi escrever código (13.400 linhas
+saíram rápido); foi **verificar**. Duas frentes de código não verificado em paralelo produzem o dobro
+de hipóteses empilhadas, não o dobro de entrega. O ganho de tempo do plano passa a vir de outro
+lugar: cada fase fecha com um aceite executado, então a fase seguinte não paga o custo de descobrir
+tarde que a base estava errada.
 
 ---
 
 ## 9. Riscos, mitigações e dívidas conscientes
 
 ### 9.1 Riscos
+
+> **Reavaliação v1.1 (o detalhe que muda a leitura da tabela abaixo).** A tabela lista as mitigações
+> **projetadas**. Em 2026-08-03, várias delas existem como código sem chamador — o que significa que
+> a coluna "Mitigação" descreve intenção, não proteção. Os três casos que mudam de patamar:
+> - **R1 (layout do Maps): Alta / Crítico.** A mitigação que eu contava (A1–A4 + canário) é código
+>   morto. Sobrou o `selectors.ts` isolado, que resolve o *conserto*, não a *detecção* — e sem
+>   detecção o conserto começa dias depois, pelo cliente.
+> - **R6 (qualidade do dado): Alta / Alto.** Subiu nas duas dimensões: telefone que não vem no card
+>   (§8.3) e dedupe de card por `outerHTML` (§5.2) são falhas concretas, não hipóteses. E a A4, que
+>   mediria isso, não roda.
+> - **R4 (Evolution instável): Alta / Alto.** `packages/messaging` inteiro é uma hipótese validada
+>   contra os próprios mocks do autor, e a versão da imagem é um chute. A §4.9 existe para derrubar
+>   isso antes da Fase 4.
+>
+> **R2 e R9** (ban e auto-sabotagem) estão artificialmente baixos hoje **só porque não há envio**.
+> Voltam ao patamar original no dia em que a Fase 4 subir — com metade das defesas ligadas, se a
+> Onda 2 não tiver acontecido antes.
 
 | # | Risco | Prob. | Impacto | Mitigação | Sinal de alerta |
 |---|---|---|---|---|---|
@@ -1482,6 +2065,8 @@ contratos da §4 estão fechados agora.
 | D5 | Só texto no disparo (sem mídia) | Texto puro tem menor risco de ban e cobre o caso de uso | Após 60 dias de operação estável |
 | D6 | Feriados em tabela estática | Baixo custo de manutenção anual vs. dependência de API | Se o usuário pedir feriado municipal |
 | D7 | Sem versionamento de template | Snapshot na campanha já resolve o problema real (corrupção de campanha ativa) | Se houver necessidade de auditoria histórica |
+| **D8** | **Sem reconciliação de status de mensagem** — se um `messages.update` chegar durante um restart do `web`, o evento se perde (respondemos sempre 200 por desenho) e a `Message` fica `sent` para sempre. Idem para `Message` `queued` órfã do write-ahead do §4.9.5 | O impacto é **métrica de entrega subestimada**, não mensagem duplicada nem envio perdido. O paliativo do §4.8 (re-busca única após 2s) cobre a corrida comum, e o `logger.warn` mede se o resto importa | Quando o `warn` aparecer com frequência, ou quando a taxa de entrega virar número de venda |
+| **D9** | **Não existe model de configuração** (`Settings`/`Organization`) — `{{minha_empresa}}` é lido de `APP_COMPANY_NAME` (env) | Há um único operador/empresa hoje; um model de configuração para uma linha é cerimônia. Mas isso significa que **trocar o nome do remetente exige redeploy**, e que multi-tenancy (D3) esbarra aqui | No primeiro cliente com marca própria — provavelmente junto com a D3 |
 
 ---
 
@@ -1511,9 +2096,23 @@ PROXY_PROVIDER=noop                 # noop | rotating (futuro)
 # --- Disparo ---
 DISPATCH_JITTER_MIN_S=45
 DISPATCH_JITTER_MAX_S=180
-DISPATCH_WINDOW_START=9
+DISPATCH_WINDOW_START=9             # janela COMERCIAL (mole no envio manual, dura na campanha)
 DISPATCH_WINDOW_END=18
 DISPATCH_MAX_DAILY_ABSOLUTE=300     # teto que nenhum override ultrapassa
+
+# Piso duro de horário (§4.9.6) — vale para TODO envio, inclusive manual.
+# Só pode ser ESTREITADO (start maior / end menor); alargar é ignorado pelo código.
+DISPATCH_QUIET_HOURS_START=20       # a partir desta hora, nenhum envio sai
+DISPATCH_QUIET_HOURS_END=8          # antes desta hora, nenhum envio sai
+DISPATCH_ALLOW_SATURDAY=true        # domingo e feriado nacional: nunca, não é configurável
+
+# Envio unitário (§4.9)
+MANUAL_SEND_RATE_PER_MIN=10         # por usuário; 429 acima disso
+MANUAL_SEND_DUPLICATE_WINDOW_S=60   # anti-duplo-clique por lead
+
+# --- Identidade do remetente (§7.4) ---
+APP_COMPANY_NAME=                   # resolve {{minha_empresa}}. Sem isso, 1º contato frio é bloqueado
+                                    # (409 MISSING_COMPANY_NAME) — ver dívida D9
 
 # --- Evolution API ---
 EVOLUTION_API_URL=http://evolution:8080
@@ -1545,4 +2144,11 @@ ALERT_WEBHOOK_URL=                  # opcional: Slack/Discord/Telegram
 | A12 | Opt-out consultado por telefone, no worker, antes de cada envio, sem cache | §6.7 |
 | A13 | Estado `halted` distinto de `paused`, com `acknowledgeHalt` obrigatório | §6.5, §6.6 |
 | A14 | Origem do dado gravada por lead e imutável | §7.2 |
-| A15 | Fase 1 = buscar 1 cidade e ver leads. Fases 2 e 3 em paralelo | §8 |
+| ~~A15~~ | ~~Fase 1 = buscar 1 cidade e ver leads. Fases 2 e 3 em paralelo~~ — **revogado na v1.1**: o paralelismo saiu (§8.1) | §8 |
+| **A16** | **O guard de envio nasce no envio unitário, não na campanha.** Uma única `evaluateSendGuard`, pura, compartilhada web↔worker; a Fase 4 herda um portão já exercitado em produção | **§4.9.1, §4.9.3, §6.1** |
+| **A17** | **Opt-out com carimbo `checkedAt`**: o guard **lança** se a consulta tiver mais de 5s. Cache de blacklist vira falha de runtime, não questão de disciplina | **§4.9.3** |
+| **A18** | **Write-ahead do `Message`**: grava `queued` + debita cota **antes** de chamar a Evolution. A cota erra sempre para menos, nunca para mais | **§4.9.5** |
+| **A19** | **Horário no envio manual = piso duro (08–20, sem domingo) + janela comercial com confirmação explícita.** O risco de "parecer robô" some com volume 1; o de irritar o destinatário, não | **§4.9.6** |
+| **A20** | **`error.reason`**: sub-código legível por máquina no envelope de erro. `code` governa o HTTP; `reason` é o único campo em que a UI ramifica | **§4.0** |
+| **A21** | **Fase 0 = walking skeleton com infra real** antes de qualquer domínio; fase só fecha com aceite executado contra serviço real | **§8.0, §8.2** |
+| **A22** | **A taxa medida de leads com celular decide se `scrape-detail` é melhoria, requisito ou bloqueante** — critério numérico fechado, não julgamento | **§8.3** |

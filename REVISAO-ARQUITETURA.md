@@ -174,6 +174,9 @@ API antes de construir a Fase 4 em cima dela** simplesmente não foi feita, e o 
 mitigava segue aberto. Regra nova para mim: **nenhuma linha do plano de fases sem contrato
 correspondente no §4.**
 
+> ✅ **Fechado em 2026-08-03** — `ARQUITETURA.md` §4.9 (`POST /api/v1/leads/:id/messages`). A regra
+> acima virou item do §8.0 do documento de arquitetura, para valer daqui em diante e não só para mim.
+
 **Presentes e conformes:** `locations/*`, `searches/*` (incl. `retry-failed`), `leads` (GET/PATCH),
 `templates/*` (incl. `preview`), `whatsapp/instances/*` (incl. `qr` e `connect|disconnect`),
 `optouts/*`, `public/optout`, `webhooks/evolution/:instanceKey`, `health`.
@@ -460,9 +463,24 @@ na tela em menos de 5 minutos, e o operador retoma a operação **sem abrir um s
 
 Corrige o erro de contrato descrito em §1/§4 e derruba o risco N5 antes de empilhar a Fase 4.
 
+> ✅ **Atualização 2026-08-03 — a 2.1 está entregue.** O contrato está em `ARQUITETURA.md` **§4.9**
+> (documento promovido a v1.1). O que ficou decidido e que o resto da onda precisa saber:
+> - **A rota vive no `apps/web`, síncrona**, não na fila — o operador precisa do motivo da recusa na
+>   mesma tela (§4.9.1).
+> - **O guard é uma função pura em `packages/core`** (`evaluateSendGuard`), com carimbo
+>   `optOut.checkedAt` que **lança** se a consulta tiver mais de 5s. O `dispatch-tick.job` importa a
+>   mesma função; segunda implementação é reprovação do Órion (§4.9.3).
+> - **Write-ahead do `Message`**: grava `queued` e debita cota antes de chamar a Evolution (§4.9.5).
+> - **Horário no manual**: piso duro 08–20 sem domingo (`409 QUIET_HOURS`, sem override) + janela
+>   comercial com `confirmOutsideBusinessWindow` explícito (§4.9.6).
+> - **Pré-requisito descoberto no caminho**: o envelope de erro ganhou `error.reason` (§4.0). Sem
+>   ele a UI não distingue "opt-out" (terminal) de "cota estourada" (tente amanhã).
+>
+> Segue pendente comigo o contrato da **1.3** (`POST /api/v1/scraper/queue/resume`), da Onda 1.
+
 | # | Entrega | Quem |
 |---|---|---|
-| 2.1 | **Definir o contrato** `POST /api/v1/leads/:id/messages` (envio manual) no §4 | **Nova** |
+| 2.1 | ✅ **Contrato definido** — `ARQUITETURA.md` §4.9 (envio unitário, portões G0–G11, erros, falha da Evolution) | **Nova** |
 | 2.2 | Implementar a rota — passando pelo mesmo guard de opt-out do futuro dispatch | Vega |
 | 2.3 | Botão de envio na ficha do lead | Lyra |
 | 2.4 | Pinar a versão real da imagem da Evolution API | Vulcano |

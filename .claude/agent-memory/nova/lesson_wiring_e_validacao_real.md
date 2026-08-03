@@ -37,4 +37,16 @@ Aplicam-se a qualquer arquitetura que eu escrever, não só a este projeto.
    **How to apply:** ao desenhar qualquer flag/fallback, perguntar "se isto ficar ligado por engano
    em produção, alguém percebe?". Se a resposta for não, inverter o default e adicionar sinal visível.
 
-Relacionado: [[innoprospect-arquitetura-v1]], [[innoprospect-armadilhas]].
+5. **Todo nome que aparece num contrato precisa de um campo onde morar.**
+   **Why:** escrevi `409 SEARCH_ALREADY_RUNNING`, `409 TEMPLATE_IN_USE`, `409 ALREADY_OPTED_OUT` e
+   mais meia dúzia ao longo do §4 como se fossem valores de `error.code` — que é um enum fechado de
+   8 valores ligado 1:1 ao status HTTP. Esses nomes não tinham onde existir. Passou por 21 rotas
+   implementadas sem ninguém notar, porque cada rota isolada "funciona": ela devolve 409 com uma
+   mensagem em pt-BR. Só que o cliente ficou sem como **decidir** — "opt-out" (nunca mais tente) e
+   "cota estourada" (tente amanhã) chegam idênticos.
+   **How to apply:** ao fechar um contrato, varrer os identificadores em `MAIÚSCULA_COM_UNDERSCORE`
+   e perguntar "em qual campo do envelope isto viaja?". Se não houver campo, ou eu crio o campo, ou
+   o nome é decoração.
+
+Relacionado: [[innoprospect-arquitetura-v1]], [[innoprospect-armadilhas]],
+[[innoprospect-envio-unitario-guard]].
