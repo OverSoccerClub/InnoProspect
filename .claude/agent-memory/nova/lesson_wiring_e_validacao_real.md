@@ -48,5 +48,16 @@ Aplicam-se a qualquer arquitetura que eu escrever, não só a este projeto.
    e perguntar "em qual campo do envelope isto viaja?". Se não houver campo, ou eu crio o campo, ou
    o nome é decoração.
 
+6. **Todo contrato que eu escrevo envelhece contra o código — e quem envelhece é o documento.**
+   **Why:** na revisão de 2026-09-22 achei quatro divergências entre `ARQUITETURA.md` e o que foi
+   implementado, e **as quatro eram melhorias do implementador**: `companyName` no guard (G10 não é
+   verificável sem saber que nome procurar), `MAX_DECISION_TO_SEND_MS`, `EvaluateSendGuardOptions`, e o
+   achatamento de `meta` em `details[]`. Eu tinha escrito "`meta` útil em `details[]`", que descreve
+   duas estruturas incompatíveis, e citado campos (`resetsAt`, `optedOutAt`) que nunca existiram.
+   **How to apply:** ao revisar, a pergunta não é "o código seguiu o documento?" — é "por que
+   divergiu?". Se a divergência tem um motivo melhor que o meu, o documento é que se corrige, e a
+   correção precisa dizer **qual era o erro**, senão alguém reverte a melhoria achando que está
+   consertando.
+
 Relacionado: [[innoprospect-arquitetura-v1]], [[innoprospect-armadilhas]],
-[[innoprospect-envio-unitario-guard]].
+[[innoprospect-envio-unitario-guard]], [[innoprospect-fase4-motor]].

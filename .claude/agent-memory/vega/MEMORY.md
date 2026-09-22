@@ -11,3 +11,4 @@
 - [Convenção: rate limit de login (5/e-mail, 20/IP, 15min)](convention_login_rate_limit.md) — peek antes, checkRateLimit só em falha, reset só de e-mail no sucesso.
 - [Bug: importar lib/auth.ts crua quebra em teste Vitest (next-auth → next/server)](bug_nextauth_vitest_server_import.md) — extrair authorize + mockar next-auth no teste.
 - [Convenção: envio unitário §4.9 (evaluateSendGuard, send-window, sendLeadMessage)](convention_envio_unitario_send_guard.md) — split G1-G3 (serviço) vs G4-G11 (core), gaps de contrato preenchidos e por quê.
+- [Convenção: leads/export (CSV streaming) e leads/bulk (ações em massa)](convention_leads_export_bulk.md) — separador `;`, escape de fórmula, expectedCount, chunking, contrato-rascunho revisado.

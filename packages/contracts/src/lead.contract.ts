@@ -196,45 +196,126 @@ export type PatchLeadBody = z.infer<typeof patchLeadBodySchema>;
 
 // ─────────────────────────────────────────────────────────────────────────
 // POST /api/v1/leads/bulk
+//
+// 🆕 Revisão de 2026-09-22 (uso próprio, sem multi-cliente): o rascunho
+// original desta seção (Fase 1, ARQUITETURA §4.3) tinha `{ ok, affected }` e
+// nenhuma proteção de `expectedCount`. Ficou provado insuficiente antes de
+// qualquer rota consumir — ninguém implementou contra ele ainda — então esta
+// revisão substitui o formato em vez de versionar por cima:
+//   1. `discard`/`opt_out` saíram do enum de ação: `discard` é só
+//      `set_status` com `value.status: 'discarded'` (mesma máquina de
+//      estados); `opt_out` grava em `OptOut` com `source`, o que é uma
+//      operação de escopo diferente (não uma edição de `Lead`) — melhor como
+//      endpoint próprio no futuro do que forçado aqui sem o contrato de
+//      `source` decidido.
+//   2. `expectedCount` (obrigatório com `filter`, proibido com `leadIds`):
+//      sem isso, um filtro que mudou de contagem entre a tela carregar e o
+//      operador clicar "aplicar" muda mais (ou menos) leads do que ele viu —
+//      a chamada é recusada com `409 CONFLICT`/`EXPECTED_COUNT_MISMATCH` em
+//      vez de aplicar sobre um conjunto diferente do conferido.
+//   3. Resposta rica (`updatedIds`/`skipped`/`summary`) em vez de só
+//      `affected`: a operação nunca falha o lote inteiro por um item ruim
+//      (lead sumiu, transição inválida) — o chamador precisa saber QUAL item
+//      e POR QUÊ, não só um total.
 // ─────────────────────────────────────────────────────────────────────────
 
-export const leadBulkActionSchema = z.enum([
-  'set_status',
-  'add_tags',
-  'remove_tags',
-  'discard',
-  'opt_out',
-]);
+export const leadBulkActionSchema = z.enum(['set_status', 'add_tags', 'remove_tags']);
 export type LeadBulkAction = z.infer<typeof leadBulkActionSchema>;
 
 /** Limite duro de 10.000 leads por chamada (ARQUITETURA §4.3, `422` acima disso). */
 export const LEAD_BULK_MAX_IDS = 10_000;
 
+export const bulkLeadsValueSchema = z.object({
+  status: leadStatusSchema.optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(50).optional(),
+});
+export type BulkLeadsValue = z.infer<typeof bulkLeadsValueSchema>;
+
 export const bulkLeadsBodySchema = z
   .object({
     action: leadBulkActionSchema,
-    leadIds: z.array(idSchema).max(LEAD_BULK_MAX_IDS).optional(),
+    leadIds: z.array(idSchema).min(1).max(LEAD_BULK_MAX_IDS).optional(),
     filter: leadFilterSchema.optional(),
-    value: z
-      .object({
-        status: leadStatusSchema.optional(),
-        tags: z.array(z.string().trim().min(1).max(40)).optional(),
-      })
-      .optional(),
+    /**
+     * Obrigatório quando `filter` é usado; proibido com `leadIds` (que já é
+     * uma lista exata, sem ambiguidade de contagem). Ver nota da seção.
+     */
+    expectedCount: z.number().int().min(0).optional(),
+    value: bulkLeadsValueSchema.default({}),
   })
-  .refine((body) => Boolean(body.leadIds?.length) !== Boolean(body.filter), {
-    message: 'Informe exatamente um entre leadIds e filter',
+  .superRefine((body, ctx) => {
+    const hasIds = Boolean(body.leadIds?.length);
+    const hasFilter = Boolean(body.filter);
+    if (hasIds === hasFilter) {
+      ctx.addIssue({ code: 'custom', path: ['leadIds'], message: 'Informe exatamente um entre leadIds e filter' });
+    }
+    if (hasFilter && body.expectedCount === undefined) {
+      ctx.addIssue({ code: 'custom', path: ['expectedCount'], message: 'expectedCount é obrigatório ao usar filter' });
+    }
+    if (hasIds && body.expectedCount !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['expectedCount'], message: 'expectedCount só se aplica a filter, não a leadIds' });
+    }
+    if (body.action === 'set_status') {
+      if (!body.value.status) {
+        ctx.addIssue({ code: 'custom', path: ['value', 'status'], message: 'Informe value.status para action="set_status"' });
+      }
+      if (body.value.tags) {
+        ctx.addIssue({ code: 'custom', path: ['value', 'tags'], message: 'value.tags não se aplica a action="set_status"' });
+      }
+    } else {
+      if (!body.value.tags?.length) {
+        ctx.addIssue({ code: 'custom', path: ['value', 'tags'], message: `Informe value.tags para action="${body.action}"` });
+      }
+      if (body.value.status) {
+        ctx.addIssue({ code: 'custom', path: ['value', 'status'], message: 'value.status só se aplica a action="set_status"' });
+      }
+    }
   });
 export type BulkLeadsBody = z.infer<typeof bulkLeadsBodySchema>;
 
+/**
+ * Por que um lead alvo pode ficar de fora da alteração — nunca derruba o
+ * lote inteiro (ARQUITETURA §3.2 regra 2 continua valendo por item).
+ *   - `NOT_FOUND`: id em `leadIds` que não existe (mais provável: já excluído).
+ *   - `INVALID_STATUS_TRANSITION`: a transição viola a máquina de estados
+ *     (mesma regra de `checkStatusTransition` usada em `PATCH /leads/:id`).
+ *   - `NO_CHANGE`: já estava no estado/tags pedidos — não é erro, só não
+ *     gera `LeadActivity` (ruído zero na timeline por uma não-mudança).
+ */
+export const bulkLeadsSkipReasonSchema = z.enum(['NOT_FOUND', 'INVALID_STATUS_TRANSITION', 'NO_CHANGE']);
+export type BulkLeadsSkipReason = z.infer<typeof bulkLeadsSkipReasonSchema>;
+
+export const bulkLeadsSkippedItemSchema = z.object({
+  id: idSchema,
+  reason: bulkLeadsSkipReasonSchema,
+  message: z.string(),
+});
+export type BulkLeadsSkippedItem = z.infer<typeof bulkLeadsSkippedItemSchema>;
+
 export const bulkLeadsResponseSchema = z.object({
   ok: z.literal(true),
-  affected: z.number().int().min(0),
+  updatedIds: z.array(idSchema),
+  skipped: z.array(bulkLeadsSkippedItemSchema),
+  summary: z.object({
+    requested: z.number().int().min(0),
+    updated: z.number().int().min(0),
+    skipped: z.number().int().min(0),
+  }),
 });
 export type BulkLeadsResponse = z.infer<typeof bulkLeadsResponseSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────
 // GET /api/v1/leads/export
+//
+// 🆕 Revisão de 2026-09-22: duas mudanças sobre o rascunho original —
+//   1. Separador `;`, não `,` (ARQUITETURA dizia `,`): o Excel PT-BR usa
+//      VÍRGULA como separador DECIMAL (ex.: "4,5" em `nota`) — abrir um CSV
+//      separado por vírgula faz cada célula numérica quebrar em duas colunas.
+//      `;` é o separador padrão de facto do Excel em locale pt-BR.
+//   2. Coluna `descadastrado` adicionada: quem exporta para outra ferramenta
+//      precisa saber quem não pode ser contatado, e o rascunho original não
+//      trazia `isOptedOut` nenhuma — ARQUITETURA §4.3 deve ser atualizada
+//      para refletir isto (fora do meu escopo tocar o arquivo).
 // ─────────────────────────────────────────────────────────────────────────
 
 export const LEAD_EXPORT_COLUMNS = [
@@ -250,6 +331,7 @@ export const LEAD_EXPORT_COLUMNS = [
   'avaliacoes',
   'status',
   'tags',
+  'descadastrado',
   'origem_url',
   'coletado_em',
 ] as const;

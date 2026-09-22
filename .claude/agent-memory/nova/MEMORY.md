@@ -6,3 +6,5 @@
 - [Estado real vs. escrito](project_innoprospect_estado_real.md) — peças completas e testadas SEM chamador; correções ao ARQUITETURA.md já aplicadas (v1.1) e o furo de telefone ainda aberto.
 - [Envio unitário e o guard](decision_envio_unitario_guard.md) — por que o portão de opt-out nasce no §4.9 e não na campanha; write-ahead, carimbo checkedAt, piso de horário.
 - [Lições de plano faseado](lesson_wiring_e_validacao_real.md) — Fase 0 com infra real, nada no plano sem contrato, wiring é a entrega, default degradado seguro.
+- [Uso próprio (decisão travada)](decision_uso_proprio.md) — D3 encerrada e D9 aceita; o que "uso próprio" NÃO relaxa (LGPD, auth, anti-ban).
+- [Fase 4: campanhas e motor](decision_fase4_motor.md) — cadência é do número, lease sem status `sending`, incerto nunca retentado, alvos no POST.

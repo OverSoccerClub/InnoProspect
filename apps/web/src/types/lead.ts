@@ -1,10 +1,10 @@
 // TODO: trocar o resto por import de @inno/contracts quando o Vega publicar
-// (ARQUITETURA.md §4.3). `LeadMessageItem`/`MessageItem`/`MessageStatus`/
-// `MessageDirection` já vêm de lá — publicados em paralelo a esta entrega
+// (ARQUITETURA.md Â§4.3). `LeadMessageItem`/`MessageItem`/`MessageStatus`/
+// `MessageDirection` jÃ¡ vÃªm de lÃ¡ â€” publicados em paralelo a esta entrega
 // (`packages/contracts/src/{lead,whatsapp,common}.contract.ts`, 2026-09-22).
-// `import type` (não só `export type ... from`) porque `LeadMessageItem` é
-// usado abaixo, dentro deste arquivo — um `export...from` puro não cria
-// vínculo local (ES modules), só reexporta.
+// `import type` (nÃ£o sÃ³ `export type ... from`) porque `LeadMessageItem` Ã©
+// usado abaixo, dentro deste arquivo â€” um `export...from` puro nÃ£o cria
+// vÃ­nculo local (ES modules), sÃ³ reexporta.
 import type { LeadMessageItem, MessageItem, MessageStatus, MessageDirection } from '@inno/contracts';
 export type { LeadMessageItem, MessageItem, MessageStatus, MessageDirection };
 
@@ -52,6 +52,8 @@ export type LeadListResponse = {
 export type LeadActivityType =
   | 'status_changed'
   | 'note_added'
+  | 'tags_added'
+  | 'tags_removed'
   | 'message_sent'
   | 'message_failed'
   | 'message_received'

@@ -9,6 +9,8 @@ const ICON: Record<LeadActivityType, typeof CheckCircle2> = {
   created: PlusCircle,
   status_changed: CheckCircle2,
   note_added: Tag,
+  tags_added: Tag,
+  tags_removed: Tag,
   message_sent: MessageSquare,
   message_failed: AlertTriangle,
   message_received: MessageSquare,
@@ -19,6 +21,8 @@ const LABEL: Record<LeadActivityType, string> = {
   created: 'Lead criado',
   status_changed: 'Status alterado',
   note_added: 'Nota adicionada',
+  tags_added: 'Marcadores adicionados',
+  tags_removed: 'Marcadores removidos',
   message_sent: 'Mensagem enviada',
   message_failed: 'Falha no envio',
   message_received: 'Mensagem recebida',
@@ -26,10 +30,26 @@ const LABEL: Record<LeadActivityType, string> = {
 };
 
 /**
- * O payload guarda o valor interno do enum (`new`, `responded`...). Mostrá-lo
+ * O backend registra o tipo da atividade como texto livre, entÃ£o a tela pode
+ * receber um tipo que ainda nÃ£o conhece â€” foi o que quase aconteceu quando as
+ * aÃ§Ãµes em massa criaram `tags_added`/`tags_removed`: `ICON[tipo]` sairia
+ * `undefined` e o React derrubaria a ficha inteira com "tipo de elemento
+ * invÃ¡lido". Um histÃ³rico com um item genÃ©rico Ã© muito melhor do que uma
+ * pÃ¡gina que nÃ£o abre.
+ */
+function iconePara(type: string): typeof CheckCircle2 {
+  return ICON[type as LeadActivityType] ?? CheckCircle2;
+}
+
+function rotuloPara(type: string): string {
+  return LABEL[type as LeadActivityType] ?? type.replace(/_/g, ' ');
+}
+
+/**
+ * O payload guarda o valor interno do enum (`new`, `responded`...). MostrÃ¡-lo
  * cru deixava a linha do tempo dizendo `de "new" para "responded"` na tela.
  * Traduz pelo mesmo mapa que o `LeadStatusBadge` usa; um valor desconhecido
- * (payload antigo ou estado novo ainda sem rótulo) aparece como veio em vez de
+ * (payload antigo ou estado novo ainda sem rÃ³tulo) aparece como veio em vez de
  * sumir.
  */
 function statusLabel(value: string): string {
@@ -47,7 +67,7 @@ function describePayload(activity: LeadActivity): string | null {
 
 export function LeadTimeline({ activities }: { activities: LeadActivity[] }) {
   if (activities.length === 0) {
-    return <EmptyState title="Sem atividades ainda" description="As ações sobre este lead vão aparecer aqui." />;
+    return <EmptyState title="Sem atividades ainda" description="As aÃ§Ãµes sobre este lead vÃ£o aparecer aqui." />;
   }
 
   const sorted = [...activities].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -55,7 +75,7 @@ export function LeadTimeline({ activities }: { activities: LeadActivity[] }) {
   return (
     <ol className="flex flex-col">
       {sorted.map((activity, index) => {
-        const Icon = ICON[activity.type];
+        const Icon = iconePara(activity.type);
         const detail = describePayload(activity);
         const isLast = index === sorted.length - 1;
         return (
@@ -68,11 +88,11 @@ export function LeadTimeline({ activities }: { activities: LeadActivity[] }) {
             </div>
             <div className="pb-0.5">
               <p className="text-sm font-medium">
-                {LABEL[activity.type]}
-                {detail && <span className="font-normal text-muted-foreground"> — {detail}</span>}
+                {rotuloPara(activity.type)}
+                {detail && <span className="font-normal text-muted-foreground"> â€” {detail}</span>}
               </p>
               <p className="text-xs text-muted-foreground">
-                {formatDateTime(activity.createdAt)} · {actorLabel(activity.actor)}
+                {formatDateTime(activity.createdAt)} Â· {actorLabel(activity.actor)}
               </p>
             </div>
           </li>
@@ -83,7 +103,7 @@ export function LeadTimeline({ activities }: { activities: LeadActivity[] }) {
 }
 
 function actorLabel(actor: LeadActivity['actor']): string {
-  if (actor === 'user') return 'você';
+  if (actor === 'user') return 'vocÃª';
   if (actor === 'lead') return 'o lead';
   return 'sistema';
 }

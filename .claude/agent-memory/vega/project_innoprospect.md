@@ -63,6 +63,13 @@ validado contra o serviço real.
 Atlas). `getLeadDetail` (`lib/services/leads.ts`) agora devolve `messages`/`lastContactedAt` reais.
 Detalhe completo, gaps de contrato preenchidos e por quê, em [[convention-envio-unitario-send-guard]].
 
+**Meu escopo entregue (export CSV + ações em massa, 2026-09-22, decisão do dono: uso próprio):**
+`GET /api/v1/leads/export` (streaming, CSV separado por `;`, coluna `descadastrado`) e
+`POST /api/v1/leads/bulk` (`set_status`/`add_tags`/`remove_tags`, `expectedCount` obrigatório com
+`filter`, resposta por item). Revisei o contrato-rascunho da Fase 1 (nunca consumido) em vez de
+versionar por cima. Detalhe completo, motivos e o que não validei em
+[[convention-leads-export-bulk]].
+
 **Como aplicar:** antes de tocar em `apps/web/src/app/api/**`, `lib/api-handler.ts`, `lib/auth*.ts`,
 `middleware.ts` ou `apps/worker/**`, ler este arquivo + [[convention-api-routes-fase1]] +
 [[bug-nextauth-edge-prisma-split]] + [[bug-nextjs-workspace-ts-source-imports]] antes de reabrir

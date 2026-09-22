@@ -1,8 +1,33 @@
 # InnoProspect — Documento de Arquitetura
 
-> Versão 1.1 · Autora: Nova (arquitetura) · Data: 2026-08-03 (v1.0: 2026-07-30)
+> Versão 1.2 · Autora: Nova (arquitetura) · Data: 2026-09-22 (v1.1: 2026-08-03 · v1.0: 2026-07-30)
 > Status: **fechado para implementação** nas partes marcadas como CONTRATO.
 > Alterações em seções CONTRATO exigem aviso ao Atlas antes de codificar (Vega/Lyra dependem delas).
+
+### O que mudou na v1.2 — "a Fase 4 desenhada contra o código que existe"
+
+A v1.1 escreveu o envio unitário. Ele **foi implementado e está em produção no código** (§4.9), e com
+ele vieram fatos que a v1.1 não tinha: um resultado de envio **incerto**, um guard puro com um único
+call site, e um schema de campanha já criado pelo Cronos. Esta revisão fecha a Fase 4 contra isso.
+
+| # | Mudança | Seção | Tipo |
+|---|---|---|---|
+| 0 | **Decisão do dono: o InnoProspect é de USO PRÓPRIO.** Sem venda, sem conta por cliente, sem isolamento por organização. A dívida **D3 (multi-tenancy) está ENCERRADA, não adiada** | **§0.1**, §9.2 | 🔒 decisão travada |
+| 1 | §4.5 reescrita contra o schema e os contratos que já existem; `POST /campaigns/preview`, `PATCH`, `DELETE`, exclusão `alreadyTargeted`, tabela de erros por `reason` | **§4.5** | 🔒 CONTRATO fechado |
+| 2 | **Convenção `meta` → `details[]`** declarada: o envelope de erro não tem campo `meta`; o mapa do guard viaja em `details[]` com `path` = nome da chave | §4.0 | correção de fato |
+| 3 | **`dispatch-tick.job` especificado ponta a ponta**: claim por lease, rotação, gate de cadência, micro-pausa, incerto, kill switch | **§6.8 (nova)** | 🔒 CONTRATO novo |
+| 4 | **Cadência é propriedade do NÚMERO, não do chamador** — `WhatsAppInstance.nextSendAllowedAt` é o gate único, honrado pelo manual e pela campanha. Fecha o achado médio do Órion (2026-09-22) | **§4.9.10 (nova)**, §6.8 | 🔒 CONTRATO alterado |
+| 5 | **O guard continua um só**: 2 fatos novos (`lastInboundAt`, `instance.nextSendAllowedAt`), 1 override novo (`ignorePaceLock`), 2 `reason` novos. Nenhuma segunda implementação no worker | §4.9.3, §6.1 | 🔒 CONTRATO alterado |
+| 6 | **Resultado incerto na campanha**: alvo vira `failed`, **nunca é retentado**, cota não volta, e 3 incertos seguidos tiram a instância da rotação | §6.8.6 | regra nova |
+| 7 | `warmup-roll` e um `health-check` **mínimo** entram na Fase 4; `retention` fica na Fase 5 — com o critério escrito | §6.9, §8 Fase 4 | plano |
+| 7b | **Pausa global do disparo** — um botão que para tudo num incidente, espelho do que o scraper já tem | **§4.10 (nova)**, §6.8.9 | 🔒 CONTRATO novo |
+| 8 | Fase 4 reescrita em 6 entregas testáveis isoladamente, com dono e critério de pronto | **§8** | reescrita |
+
+**Critério que separou "entra na Fase 4" de "fica para depois":** entra o que é necessário para o
+sistema **parar**; fica para depois o que é necessário para o sistema **otimizar**. Um job que impede
+queimar cota contra um provedor morto é Fase 4; um job que detecta shadow-ban por taxa de resposta
+precisa de 100+ envios de histórico para significar alguma coisa — não é sequer testável no aceite da
+Fase 4 (50 alvos), e por isso não entra nela.
 
 ### O que mudou na v1.1
 
@@ -33,7 +58,7 @@ seguinte** — se alguma premissa estiver errada, avise antes da Fase 1, porque 
 | Dimensão | Premissa assumida | Impacto na arquitetura |
 |---|---|---|
 | Maturidade | **MVP evoluindo para produto**, não sistema maduro em escala | Monólito modular, não microserviços |
-| Usuários | 1 a ~20 operadores internos/clientes iniciais | Sem multi-tenancy pesado; `User` + `orgId` opcional já preparado |
+| Usuários | **Poucos operadores internos de um único dono** (§0.1, v1.2) | **Sem multi-tenancy, nem preparado** — `orgId` sai do horizonte |
 | Volume de leads | 10k–500k leads no primeiro ano | Postgres único aguenta com folga; índices bem feitos > sharding |
 | Volume de disparo | Dezenas a poucos milhares de mensagens/dia, divididas por instância | Fila com rate limit, não streaming distribuído |
 | Equipe | Time pequeno (agentes especializados), 1 ambiente de produção | Menos peças móveis = melhor |
@@ -63,6 +88,39 @@ suficiente para virar serviço separado sem reescrita.
 - WhatsApp: **Evolution API** (não-oficial, Baileys, pareamento por QR).
 - Stack base: **Next.js 15 (App Router) + TypeScript + Prisma + PostgreSQL**, com scraper e disparo em
   processo Node separado.
+- 🔒 **O InnoProspect é de USO PRÓPRIO** — decidido pelo dono em 2026-09-22. Ver §0.1.
+
+### 0.1 🔒 Uso próprio — a decisão que fecha uma família inteira de requisitos
+
+**Decisão do dono, fechada em 2026-09-22: o InnoProspect não será vendido para clientes.** Não há conta
+por cliente, não há isolamento de dados por organização, não há planos nem cobrança. Os dados têm **um
+único dono**, e os usuários do sistema são **poucos operadores internos** dessa mesma empresa.
+
+Isto não é uma premissa minha nem uma hipótese a validar: é restrição de contorno, no mesmo nível de
+"a fonte é scraping próprio" e "o canal é Evolution API". **Não reabrir.**
+
+**O que isso encerra (não adia):**
+
+| Item | Antes | Agora |
+|---|---|---|
+| **D3 — multi-tenancy** | dívida "pagar no primeiro cliente que exigir isolamento" | **ENCERRADA.** Não haverá esse cliente. `ownerId` no `Lead` continua existindo, mas como **atribuição de responsável** entre operadores, não como fronteira de segurança |
+| **D9 — model de configuração** | "pagar junto com a D3, no primeiro cliente com marca própria" | **ACEITA em definitivo.** `APP_COMPANY_NAME` por env é a resposta certa para uma única empresa; trocar o nome do remetente é evento raro e um redeploy é aceitável |
+| `orgId` em índices, escopo por organização em toda query, tela de gestão de organizações | "já preparado" | **não construir.** Preparar terreno para um requisito cancelado é custo puro |
+| Planos, limites por plano, cobrança, onboarding de cliente | fora do MVP | fora do produto |
+
+**O que isso NÃO encerra** — e é onde erra quem lê "uso próprio" como "pode ser relaxado":
+- **Autenticação e autorização continuam de pé.** O domínio é público na internet (§0, correção v1.1).
+  "Poucos usuários internos" muda quantos são, não se o sistema fica exposto.
+- **LGPD continua valendo integralmente.** O titular do dado é o lead, não o cliente do software. Quem
+  prospecta em nome próprio é controlador do dado exatamente igual — opt-out, base legal, retenção e
+  eliminação (§7) não têm nada a ver com o modelo de negócio.
+- **Anti-ban continua valendo integralmente.** O número que cai é o do próprio dono.
+- **Papéis `admin` / `operator` continuam.** Remover opt-out exige `admin` (§4.7) porque é operação
+  perigosa, não porque é "de outro cliente".
+
+**Impacto direto na Fase 4:** nenhuma campanha precisa de escopo por organização. `GET /campaigns` lista
+todas as campanhas do sistema, e qualquer `operator` autenticado vê e opera qualquer campanha. Isso
+**simplifica** a Fase 4 de verdade — e é a razão de a §4.5 não ter um único filtro por dono.
 
 ### Decisões que ainda tinham espaço — e onde apresento opções
 Como a stack base está fechada, minhas opções ficam nas camadas que **não** foram decididas:
@@ -583,6 +641,30 @@ type ApiError = {
 > Isto é pré-requisito da §4.9: sem `reason`, a UI do envio unitário não distingue "bloqueado por
 > opt-out" (nunca mais tente) de "estourou a cota do dia" (tente amanhã) — e são ações opostas.
 
+> 🔧 **Correção v1.2 — `meta` não existe no envelope; ele viaja em `details[]`.**
+> A v1.1 escreveu, em vários pontos do §4.9, que certos erros "incluem `meta` útil em `details[]`". Isso
+> descreve duas coisas incompatíveis: `meta` é `Record<string, unknown>` (é o que `SendGuardVerdict`
+> devolve) e `details` é `Array<{ path, message }>`. Não há campo `meta` no `ApiError`, e **não vai
+> haver** — seria a segunda alteração de envelope em duas versões, para ganhar pouco.
+>
+> **Convenção fechada:** o `meta` do guard é achatado em `details[]`, uma entrada por chave, com
+> `path` = **nome da chave** e `message` = valor serializado como string.
+> ```ts
+> // verdict.meta = { nextWindowOpensAt: '2026-09-23T12:00:00.000Z' }
+> // vira:
+> details: [{ path: 'nextWindowOpensAt', message: '2026-09-23T12:00:00.000Z' }]
+> ```
+> Consequência assumida: em erro de **regra de negócio**, `path` não é caminho de campo JSON — é nome
+> de chave. Em erro de **validação** (422), `path` continua sendo caminho de campo, como sempre foi. A
+> UI distingue pelos dois eixos que já tem: `code` (`VALIDATION_ERROR` vs `CONFLICT`) e `reason`.
+>
+> **Divergência real a corrigir no código (Vega, item pequeno):** hoje só `QUIET_HOURS` e
+> `OUTSIDE_BUSINESS_WINDOW` propagam `meta` (`apps/web/src/lib/services/messages.ts`). O guard já
+> devolve `meta` em `DAILY_LIMIT_REACHED` (`dailyLimit`, `sentToday`), `LEAD_NOT_MOBILE` (`phoneType`),
+> `INSTANCE_NOT_CONNECTED` (`status`) e `DUPLICATE_SEND` (`lastOutboundAt`) — e tudo isso é descartado
+> no caminho. **Propagar sempre que `meta` existir**, em vez de manter uma lista de `reason`
+> privilegiados: a lista é justamente o tipo de coisa que envelhece quando um `reason` novo entra.
+
 **Paginação:** cursor (`?cursor=<id>&limit=<1..100>`, default 25). Ordenação padrão `createdAt desc`.
 
 ---
@@ -772,74 +854,334 @@ type TemplateItem = {
 
 ---
 
-### 4.5 Campanhas
+### 4.5 Campanhas (🔒 CONTRATO — reescrito na v1.2 contra o código real)
 
-#### `POST /api/v1/campaigns` — cria em `draft` (NÃO dispara)
+> **Por que esta seção foi reescrita.** Quando escrevi a v1.0, `Campaign` não existia em lugar nenhum.
+> Hoje existem `Campaign`, `CampaignInstance` e `CampaignTarget` no schema (com os contadores de funil e
+> o índice de seleção), e `packages/contracts/src/campaign.contract.ts` está inteiro escrito. O que
+> **não** existe é qualquer rota: `find apps/web/src/app/api/v1 -name route.ts` não devolve nada com
+> "campaign". Ou seja, é mais um caso de "escrito ≠ ligado". Esta seção fecha o contrato **em cima do
+> que já está no disco**, para ninguém precisar adivinhar onde o documento e o código divergiam.
+
+#### 4.5.0 O que já existe e não se discute mais
+
+| Peça | Onde | Observação para quem for implementar |
+|---|---|---|
+| Schemas Zod de request/response | `packages/contracts/src/campaign.contract.ts` | Fonte da verdade dos tipos. As adições da v1.2 estão marcadas 🆕 abaixo |
+| `Campaign`, `CampaignInstance`, `CampaignTarget` | `packages/db/prisma/schema.prisma` | Já migrado |
+| Contadores de funil (`sentCount`…`skippedCount`) | `Campaign` | **Incrementados, nunca `COUNT(*)`** |
+| Índice do hot path `(campaignId, status, scheduledFor)` | `CampaignTarget` | É o que o §6.8.2 usa |
+| Transição de status do alvo + incremento atômico do contador | `apps/web/src/lib/services/campaign-targets.ts` | **Único** lugar autorizado a mudar `CampaignTarget.status` |
+| Halt por instância que caiu | `haltCampaignsSoleInstanceDisconnected()` no mesmo arquivo | Já chamado pelo webhook, pelo disconnect manual e pelo envio unitário |
+
+**Regra de ouro desta seção:** nenhuma rota de campanha escreve `campaignTarget.status` direto.
+Sempre por `advanceCampaignTargetStatus()`. O contador e o status saem da mesma transação ou saem
+dessincronizados desde o primeiro dia — foi o Cronos que pediu isso, e está certo.
+
+#### 4.5.1 Ciclo de vida (a máquina de estados, normativa)
+
+```
+                    ┌──────────── PATCH / DELETE permitidos ────────────┐
+                    │                                                   │
+  POST ─→ draft ──────────────────── start ───────────────→ running ─┐
+            │  └─ scheduledFor? ─→ scheduled ── start/auto ─┘         │
+            │                                                          │
+            │                              pause ↕ resume              │
+          DELETE                                                       │
+            ↓                              paused ←──────────────┐     │
+          (some)                             │                   │     │
+                                             │   ┌── halt automático (§6.6)
+                                             │   ↓                     │
+                                             │ halted ── resume(acknowledgeHalt:true) ─→ running
+                                             │                         │
+                        cancel (de qualquer ativo) ─→ cancelled        │
+                                                                       │
+                                     último alvo processado ─→ completed
+```
+
+**Invariantes:**
+1. `draft` e `scheduled` **já têm alvos materializados** (ver §4.5.2). O que não têm é
+   `renderedTemplateSnapshot` nem `scheduledFor` preenchido nos alvos.
+2. `completed` e `cancelled` são **terminais**. Não há `restart` — copiar campanha é outro recurso, e
+   não entra na Fase 4 (§4.5.9).
+3. `halted` ≠ `paused`, e a diferença é o `acknowledgeHalt`. `paused` é decisão humana; `halted` é
+   incidente. Se `resume` de `halted` não exigisse confirmação, o operador retomaria sem nunca ficar
+   sabendo que o número foi banido — que é a única informação que importava.
+4. Em **qualquer** parada (pause, halt, cancel de alvos pendentes), alvo `pending` **continua
+   `pending`**. Nunca vira `failed`. A campanha retoma de onde parou (§6.6).
+
+#### 4.5.2 Quando os alvos são materializados — e por quê no `POST`, não no `start`
+
+**Decisão: `POST /campaigns` já grava as linhas de `CampaignTarget`.** A alternativa (materializar só
+no `start`) é mais barata, e foi descartada por um motivo de produto: o operador precisa **ver quais
+leads entraram**, não só quantos. "800 viraram 430" sem lista é um número que ele não tem como
+auditar; com `GET /campaigns/:id/targets` em `draft`, ele confere nome por nome antes de disparar.
+
+Consequência assumida: um `draft` abandonado deixa linhas no banco. É barato (o `DELETE` de draft
+existe, e `onDelete: Cascade` limpa), e o `draft` é reaproveitável — que é o comportamento que o
+operador espera de um rascunho.
+
+**Duas passagens de exclusão, deliberadamente:**
+
+| Momento | O que avalia | Resultado |
+|---|---|---|
+| `POST` (ou `PATCH` de audiência) | opt-out, telefone, duplicata, contato recente, já-alvo-de-outra-campanha | lead excluído **não vira linha**; entra só na contagem de `audience.excluded` |
+| `start` | **reavalia** opt-out e contato recente sobre os alvos já materializados | alvo que passou a ser inelegível vira `skipped` com `skipReason`, e o contador `skippedCount` sobe |
+
+Por que duas: entre criar e iniciar podem passar horas ou dias, e opt-out não espera. A segunda
+passagem é barata (um `UPDATE ... WHERE phoneE164 IN (SELECT ...)`) e é a diferença entre "o documento
+diz que respeitamos opt-out" e "respeitamos". Ela **não** substitui o portão do §6.8/§4.9 — que
+continua consultando por telefone imediatamente antes de cada envio.
+
+#### 4.5.3 `POST /api/v1/campaigns/preview` — 🆕 v1.2, a prévia sem criar nada
+
 ```ts
+// Request — o mesmo `audience` e os mesmos `settings` do POST /campaigns
 {
-  name: string;
   templateId: string;
-  instanceIds: string[];              // 1..n; rotação round-robin ponderada por quota
-  audience:
-    | { mode: 'ids'; leadIds: string[] }
-    | { mode: 'filter'; filter: LeadFilter };
-  settings?: {
-    dailyLimitPerInstance?: number;   // default = quota de warmup vigente (§6.2)
-    sendWindow?: { startHour: number; endHour: number; daysOfWeek: number[] }; // default 9–18, seg–sex
-    jitterSeconds?: { min: number; max: number };   // default {min:45,max:180}; min>=30 obrigatório
-    skipRecentlyContactedDays?: number;             // default 30
-  };
-  scheduledFor?: string;              // ISO; se ausente, começa quando chamarem /start
+  instanceIds: string[];
+  audience: { mode: 'ids'; leadIds: string[] } | { mode: 'filter'; filter: LeadFilter };
+  settings?: CampaignSettingsInput;
 }
 ```
-`201` →
 ```ts
+// 200 OK — nenhuma linha gravada
 {
-  id: string; name: string; status: 'draft';
-  templateId: string; instanceIds: string[];
-  audience: { totalMatched: number; eligible: number;
-              excluded: { optedOut: number; landline: number; noPhone: number;
-                          recentlyContacted: number; duplicatePhone: number } };
-  settings: {...};                    // efetivas, com defaults resolvidos
+  audience: {
+    totalMatched: number;
+    eligible: number;
+    excluded: {
+      optedOut: number; landline: number; noPhone: number;
+      recentlyContacted: number; duplicatePhone: number;
+      alreadyTargeted: number;            // 🆕 v1.2 — ver §4.5.4
+    };
+  };
+  settings: CampaignSettings;             // efetivas, com defaults resolvidos
   estimate: { days: number; messagesPerDay: number; finishesAround: string };
-  createdAt: string;
+  sample: Array<{ leadId: string; name: string; phoneE164: string; city: string }>;  // 🆕 até 10 elegíveis
+  blockers: Array<{ reason: string; message: string }>;   // 🆕 o que impediria o `start` HOJE
 }
 ```
+
+**Por que `preview` existe e não basta criar um `draft`:** a tela de montagem de campanha recalcula a
+audiência a cada mexida no filtro. Criar um `draft` por mexida produziria lixo, e o operador nem sabe
+ainda se vai criar a campanha. `preview` é `GET` disfarçado de `POST` (é `POST` só porque o filtro não
+cabe em query string) — **não escreve nada, e por isso pode ser chamado a cada debounce de 400ms**.
+
+**`blockers[]` é a parte que muda a UI.** Ele antecipa, na tela de montagem, tudo o que faria o `start`
+devolver 409 depois: `INSUFFICIENT_TEXT_VARIATION`, `MISSING_OPTOUT_NOTICE`, `MISSING_COMPANY_NAME`,
+`INSTANCE_NOT_CONNECTED`, `EMPTY_AUDIENCE`. Sem isso, o operador monta a campanha inteira, clica em
+iniciar e só então descobre que o template não tem variação suficiente. Os mesmos `reason` do `start`,
+de propósito: uma lista só, em dois lugares.
+
+> **Lyra:** `blockers` é aviso, não bloqueio — o operador **pode** criar a campanha em `draft` com
+> blockers pendentes (ele pode estar montando aos poucos). Quem bloqueia é o `start`.
+
+#### 4.5.4 `POST /api/v1/campaigns` — cria em `draft` (NÃO dispara)
+
+Request: `createCampaignBodySchema` (já existe em `packages/contracts`) — `name`, `templateId`,
+`instanceIds[]`, `audience`, `settings?`, `scheduledFor?`.
+
+`201` → `createCampaignResponseSchema`, com **uma adição**: `audience.excluded.alreadyTargeted` 🆕.
+
+**Os seis motivos de exclusão, em ordem de avaliação (a ordem importa: cada lead conta em UM motivo
+só, o primeiro que casar — senão as parcelas não somam `totalMatched`):**
+
+| # | `excluded.*` | Regra | Por que existe |
+|---|---|---|---|
+| 1 | `noPhone` | `phoneE164 IS NULL` | Não há para onde mandar |
+| 2 | `landline` | `phoneType != 'mobile'` | §3.2 regra 4 — fixo não recebe WhatsApp, e na campanha não existe `allowNonMobile` |
+| 3 | `optedOut` | `EXISTS (SELECT 1 FROM opt_outs WHERE phoneE164 = lead.phoneE164)` | O portão inegociável (§6.7) |
+| 4 | `duplicatePhone` | mesmo `phoneE164` de outro lead já elegível nesta audiência | Dois leads, um telefone, duas mensagens para a mesma pessoa. Mantém o de `createdAt` mais antigo |
+| 5 | `recentlyContacted` | existe `Message` outbound para o lead nos últimos `skipRecentlyContactedDays` | Abordagem repetida é o padrão que gera denúncia |
+| 6 | 🆕 `alreadyTargeted` | o lead é alvo `pending` de **outra** campanha não terminal (`draft`, `scheduled`, `running`, `paused`, `halted`) | **Buraco da v1.0.** `recentlyContacted` olha mensagem já *enviada*; duas campanhas criadas no mesmo dia com públicos que se cruzam passam as duas pela regra 5 e a pessoa recebe duas abordagens frias. É o mesmo dano, e não havia regra cobrindo |
+
+**`totalMatched = eligible + soma(excluded.*)`** é invariante testável. Íris valida isso com números
+que não fecham por acidente (ex.: um lead que é ao mesmo tempo fixo e opt-out conta **uma vez**, em
+`landline`, porque é o motivo que aparece primeiro).
+
+**`estimate`** = `eligible / (nº de instâncias × cota diária efetiva de cada uma hoje)`, arredondado
+para cima em dias úteis da janela configurada. É estimativa, não promessa: a cota cresce com o warmup
+(§6.2), então a campanha tende a terminar **antes** do previsto. Melhor errar para mais.
+
 > **Importante para Lyra:** o bloco `audience.excluded` é a tela de conferência antes de iniciar.
-> Mostrar sempre, com os motivos discriminados. O usuário precisa ver *por que* 800 leads viraram 430 alvos.
+> Mostrar sempre, com os motivos discriminados e **clicáveis** — "430 elegíveis · 180 sem celular ·
+> 120 já contatados · 70 sem telefone". O usuário precisa ver *por que* 800 leads viraram 430 alvos, e
+> cada motivo tem uma ação diferente do lado dele (buscar mais, esperar, ou conferir o dado).
 
-#### `GET /api/v1/campaigns` → `Paginated<CampaignSummary>`
-```ts
-type CampaignSummary = {
-  id: string; name: string;
-  status: 'draft'|'scheduled'|'running'|'paused'|'completed'|'cancelled'|'halted';
-  templateName: string; instanceCount: number;
-  stats: { total: number; pending: number; sent: number; delivered: number;
-           read: number; responded: number; failed: number; skipped: number };
-  rates: { deliveryRate: number; responseRate: number };   // 0..1
-  haltReason: string | null;         // preenchido quando status='halted' (§6.6)
-  createdAt: string; startedAt: string | null; finishedAt: string | null;
-  nextSendAt: string | null;
-};
-```
+**Erros do `POST`:**
 
-#### `GET /api/v1/campaigns/:id` → `CampaignSummary & { settings, renderedTemplateSnapshot, perInstance: Array<{ instanceId, name, sent, failed, quotaRemaining, status }> }`
+| HTTP | `code` | `reason` | Quando |
+|---|---|---|---|
+| 422 | `VALIDATION_ERROR` | — | Zod: nome curto, `instanceIds` vazio, `jitter.min < 30`, `sendWindow` fora de 08–20 |
+| 404 | `NOT_FOUND` | `TEMPLATE_NOT_FOUND` · `INSTANCE_NOT_FOUND` | id inexistente (lista quais em `details[]`) |
+| 409 | `CONFLICT` | `EMPTY_AUDIENCE` | `eligible === 0` — criar campanha sem ninguém é sempre erro de quem montou |
+| 409 | `CONFLICT` | `AUDIENCE_TOO_LARGE` | `eligible > CAMPAIGN_MAX_TARGETS` (default 5.000). Teto de sanidade: a `POST` materializa as linhas, e 200k alvos numa transação derruba o request. Acima disso, fatie |
 
-#### `GET /api/v1/campaigns/:id/targets`
-Query: `?status=&cursor=&limit=`
-`200` → `Paginated<{ id, leadId, leadName, phoneE164, status, skipReason, attempt, scheduledFor, sentAt, messagePreview }>`
+#### 4.5.5 `PATCH /api/v1/campaigns/:id` — 🆕 v1.2: o que acontece com os alvos quando se edita
 
-#### Ações de campanha — `POST /api/v1/campaigns/:id/{action}`
+A pergunta que faltava responder. **Decisão: o que pode ser editado depende do estado, e a audiência só
+é editável enquanto ninguém recebeu mensagem.**
 
-| Action | De → Para | Body | Response | Efeito |
-|---|---|---|---|---|
-| `start` | `draft`/`scheduled` → `running` | — | `200 { ok:true, status:'running', firstSendAt }` | Congela snapshot do template, reavalia opt-outs, agenda tick |
-| `pause` | `running` → `paused` | — | `200 { ok:true, status:'paused', pendingTargets }` | Para de enfileirar; envio em voo termina |
-| `resume` | `paused`/`halted` → `running` | `{ acknowledgeHalt?: boolean }` | `200 { ok:true, status:'running' }` | De `halted` exige `acknowledgeHalt:true`, senão `409 HALT_NOT_ACKNOWLEDGED` |
-| `cancel` | qualquer ativo → `cancelled` | — | `200 { ok:true, cancelledTargets }` | Irreversível |
+| Estado | `name` | `settings` | `instanceIds` | `templateId` | `audience` | `scheduledFor` |
+|---|---|---|---|---|---|---|
+| `draft` / `scheduled` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `paused` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `halted` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `running` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `completed` / `cancelled` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
-Erros de transição: `409 INVALID_CAMPAIGN_TRANSITION` com `message` explicando o estado atual.
-`start` com instância desconectada → `409 INSTANCE_NOT_CONNECTED` listando quais.
+`409 CAMPAIGN_NOT_EDITABLE` quando o estado não permite; `409 FIELD_NOT_EDITABLE_IN_STATE` (com o campo
+em `details[]`) quando o estado permite editar, mas não *aquele* campo.
+
+**Por que `running` não aceita nada:** editar cadência no meio de um disparo cria uma janela em que o
+tick já leu as configurações antigas e vai gravar com elas. Resolver isso direito custa versionamento
+de settings; resolver errado produz envio fora da janela nova. **Pausar primeiro custa um clique e
+elimina a classe inteira de bug.** É uma restrição de contorno deliberada, não uma limitação.
+
+**Efeito de cada edição sobre os alvos:**
+
+| Campo | Efeito |
+|---|---|
+| `audience` (só em `draft`/`scheduled`) | Recalcula do zero: `DELETE` dos alvos `pending` que saíram, `INSERT` dos que entraram, **mantém** os que permaneceram (preserva `createdAt` e não reembaralha a ordem). `totalTargets` é reescrito |
+| `templateId` (só em `draft`/`scheduled`) | Nenhum efeito nos alvos. O snapshot só é congelado no `start` (§3.2 regra 5) |
+| `instanceIds` | **Adicionar** é sempre seguro. **Remover** uma instância não mexe em alvo nenhum: `CampaignTarget` não é ligado a instância (a instância é escolhida no momento do envio, §6.5). Mensagens já enviadas por ela continuam na timeline. `409 LAST_INSTANCE_REMOVED` se a lista ficar vazia |
+| `settings.sendWindow` / `jitterSeconds` / `dailyLimitPerInstance` | Vale a partir do próximo tick. Alvos com `scheduledFor` fora da janela nova são **reagendados** para a próxima abertura, em lote, na mesma transação do `PATCH` |
+| `settings.skipRecentlyContactedDays` | Só afeta cálculo de audiência. Em `paused`, **não** reexecuta a exclusão (seria um recálculo surpresa sobre alvos que o operador já conferiu) — só vale se a audiência for reeditada |
+
+**Adicionar leads a uma campanha `running`/`paused` não existe na Fase 4** (§4.5.9). Quem precisa disso
+cria uma segunda campanha — o custo é um nome a mais, e o ganho é não ter que testar a interação entre
+"audiência crescendo" e "tick consumindo".
+
+#### 4.5.6 `DELETE /api/v1/campaigns/:id`
+
+`204`. **Só em `draft`.** Em qualquer outro estado → `409 CAMPAIGN_NOT_DELETABLE`.
+
+Campanha que já enviou mensagem é registro histórico: os `Message` apontam para `CampaignTarget`
+(`onDelete: SetNull`), e apagar a campanha transformaria mensagens reais em órfãs sem contexto. Para
+tirar da frente sem apagar, o caminho é `cancel` — que é irreversível e mantém o histórico. Se a lista
+ficar poluída, o remédio é filtro na UI, não `DELETE`.
+
+#### 4.5.7 Leitura: lista, detalhe, alvos e progresso
+
+**`GET /api/v1/campaigns`** → `Paginated<CampaignSummary>`. Query: `?status=&q=&cursor=&limit=`.
+Índice `(status, createdAt)` já existe. Sem filtro por dono (§0.1).
+
+**`GET /api/v1/campaigns/:id`** → `CampaignDetail` = `CampaignSummary` + `settings` +
+`renderedTemplateSnapshot` + `perInstance[]`.
+
+**`GET /api/v1/campaigns/:id/targets`** → `Paginated<CampaignTargetItem>`, `?status=&cursor=&limit=`.
+Índice `(campaignId, status)` já existe.
+
+**De onde vem cada número (isto é contrato com o Cronos e com a Íris, não detalhe de implementação):**
+
+| Campo | Origem | Regra |
+|---|---|---|
+| `stats.total`, `sent`, `delivered`, `read`, `responded`, `failed`, `skipped` | contadores de `Campaign` | **Incrementados.** São contadores de **funil**: um alvo que chegou a `responded` incrementou os quatro. Não são partição — não tente somar para achar o total |
+| `stats.pending` | `COUNT(*) WHERE status='pending'` ao vivo | De propósito sem contador: é estado atual, não histórico (comentário do Cronos no schema) |
+| `rates.deliveryRate` | `deliveredCount / sentCount` (0 se `sentCount = 0`) | — |
+| `rates.responseRate` | `respondedCount / sentCount` | É o número que o §6.2 usa como freio de warmup |
+| `nextSendAt` | `MIN(scheduledFor) WHERE status='pending'`, limitado por baixo pelo `nextSendAllowedAt` das instâncias | `null` se não há pendente ou a campanha não está `running`/`scheduled` |
+| `perInstance[].sent` / `.failed` | 🆕 **contadores em `CampaignInstance`** — ver §4.5.8 | — |
+| `perInstance[].quotaRemaining` | `effectiveDailyLimit(warmupDay, override) − InstanceDailyStat.sentCount` de hoje | Ao vivo. É cota **da instância**, compartilhada entre campanhas e com o envio manual |
+| `perInstance[].status` | `deriveInstanceHealth(instance)` | Mesma função da §4.6 — não derivar de novo aqui |
+
+> **Polling (D2):** a tela de campanha faz poll de 3s em `GET /campaigns/:id`, igual à de busca. Não
+> introduzir SSE/WebSocket na Fase 4 — a dívida D2 está aceita e o gatilho dela (>50 usuários
+> simultâneos) não vai acontecer num produto de uso próprio (§0.1).
+
+#### 4.5.8 🔴 O único campo que falta no schema (pedido formal ao Cronos)
+
+`CampaignDetail.perInstance[].sent` e `.failed` são **"quanto esta instância enviou NESTA campanha"**.
+Hoje isso não existe em lugar nenhum:
+- `InstanceDailyStat.sentCount` é por instância **por dia**, somando todas as campanhas e o envio manual;
+- `Campaign.sentCount` é por campanha, somando todas as instâncias;
+- descobrir o cruzamento exige `COUNT(*)` em `Message JOIN CampaignTarget`, a cada poll de 3s, numa
+  tabela que cresce para sempre — exatamente o que a invariante "contadores incrementados, nunca
+  `COUNT(*)`" existe para impedir.
+
+**Pedido:** `CampaignInstance.sentCount Int @default(0)` e `failedCount Int @default(0)`, incrementados
+na mesma transação do `advanceCampaignTargetStatus()` quando o alvo vai para `sent`/`failed`. É a única
+adição de coluna que a §4.5 exige. As demais (`nextSendAllowedAt`, `sendsSinceMicroPause`,
+`consecutiveUncertain`) são do §6.8 e ficam em `WhatsAppInstance`.
+
+#### 4.5.9 Ações — `POST /api/v1/campaigns/:id/{action}`
+
+| Action | De → Para | Body | Response |
+|---|---|---|---|
+| `start` | `draft`/`scheduled` → `running` | — | `200 { ok:true, status:'running', firstSendAt }` |
+| `pause` | `running` → `paused` | — | `200 { ok:true, status:'paused', pendingTargets }` |
+| `resume` | `paused`/`halted` → `running` | `{ acknowledgeHalt?: boolean }` | `200 { ok:true, status:'running' }` |
+| `cancel` | `draft`/`scheduled`/`running`/`paused`/`halted` → `cancelled` | — | `200 { ok:true, cancelledTargets }` |
+
+**`start` — a sequência exata, em uma transação:**
+1. Transição válida? Senão `409 INVALID_CAMPAIGN_TRANSITION` (com o estado atual em `details[]`).
+2. Todas as `instanceIds` estão `connected` e não banidas? Senão `409 INSTANCE_NOT_CONNECTED`, com
+   **uma entrada por instância** em `details[]` (`path` = id, `message` = motivo). É a diferença entre
+   "conecte um número" e "espere até amanhã".
+3. **Validação de conteúdo da 1ª mensagem** (era 5.4, sobe para cá — ver §4.5.10):
+   `MISSING_OPTOUT_NOTICE` · `MISSING_COMPANY_NAME`.
+4. **Validação de spintax:** `variações < 10` e `alvos > 50` → `409 INSUFFICIENT_TEXT_VARIATION` com a
+   mensagem do §6.4. **É bloqueio, não aviso.**
+5. `eligible === 0` (todos os alvos já `skipped`) → `409 EMPTY_AUDIENCE`.
+6. Congela `renderedTemplateSnapshot` = corpo **do template**, com spintax intacto e variáveis não
+   resolvidas. A resolução por alvo acontece no envio (§6.8.4); o texto final de cada um fica em
+   `Message.body`.
+7. **Segunda passagem de exclusão** (§4.5.2): alvos que viraram opt-out ou foram contatados desde a
+   criação → `skipped`, via `advanceCampaignTargetStatus()`.
+8. `scheduledFor` de **todos** os alvos `pending` = `firstSendAt` (§6.8.2 explica por que nenhum alvo
+   pode ficar com `scheduledFor = NULL` a partir daqui).
+9. `status = 'running'`, `startedAt = now()`. Devolve `firstSendAt`.
+
+**`pause`:** `status = 'paused'`. Envio em voo termina (não há como cancelar um `sendText` no meio, e
+tentar produziria exatamente o resultado incerto que o §6.8.6 evita). Alvos ficam `pending`.
+
+**`resume`:** de `halted` sem `acknowledgeHalt: true` → `409 HALT_NOT_ACKNOWLEDGED`, com o `haltReason`
+em `details[]`. Ao retomar, **limpa `haltReason`** e reagenda os pendentes para a próxima abertura de
+janela. Se a causa do halt ainda estiver de pé (instância ainda desconectada), o `start`/`resume`
+recusa com o mesmo `INSTANCE_NOT_CONNECTED` — retomar para parar de novo em 30s é pior que recusar.
+
+**`cancel`:** irreversível. Alvos `pending` → `cancelled`? **Não**: o enum de `CampaignTargetStatus` não
+tem `cancelled`, e não vai ganhar um valor novo por isto. Os pendentes viram `skipped` com
+`skipReason = 'campaign_cancelled'`, e `cancelledTargets` é quantos foram. `skippedCount` sobe.
+
+**O que NÃO entra na Fase 4** (cortado de propósito, para a fase ser entregável):
+- **Adicionar/remover leads de campanha viva** — crie outra campanha.
+- **Duplicar campanha / reenviar para quem não respondeu** — é a Fase 6, e depende de ter dado real.
+- **Agendamento recorrente.** `scheduledFor` é um instante, não um cron.
+- **A/B de template.** Precisa de significância estatística para significar algo; não com 50 alvos.
+- **Exportar resultado da campanha em CSV.** Já está na Onda 4 junto com `GET /leads/export`.
+
+#### 4.5.10 Tabela consolidada de `reason` das rotas de campanha
+
+Fechada. Todo nome em `MAIÚSCULA_COM_UNDERSCORE` abaixo é valor de `error.reason` (§4.0) — nenhum é
+`error.code`, e **a Lyra só ramifica por `reason`**.
+
+| HTTP | `code` | `reason` | Rota |
+|---|---|---|---|
+| 404 | `NOT_FOUND` | `CAMPAIGN_NOT_FOUND` · `TEMPLATE_NOT_FOUND` · `INSTANCE_NOT_FOUND` | todas |
+| 409 | `CONFLICT` | `EMPTY_AUDIENCE` | `POST`, `start` |
+| 409 | `CONFLICT` | `AUDIENCE_TOO_LARGE` | `POST`, `PATCH` |
+| 409 | `CONFLICT` | `INVALID_CAMPAIGN_TRANSITION` | ações |
+| 409 | `CONFLICT` | `INSTANCE_NOT_CONNECTED` | `start`, `resume` |
+| 409 | `CONFLICT` | `INSUFFICIENT_TEXT_VARIATION` | `start` |
+| 409 | `CONFLICT` | `MISSING_OPTOUT_NOTICE` · `MISSING_COMPANY_NAME` | `start` |
+| 409 | `CONFLICT` | `HALT_NOT_ACKNOWLEDGED` | `resume` |
+| 409 | `CONFLICT` | `CAMPAIGN_NOT_EDITABLE` · `FIELD_NOT_EDITABLE_IN_STATE` | `PATCH` |
+| 409 | `CONFLICT` | `LAST_INSTANCE_REMOVED` | `PATCH` |
+| 409 | `CONFLICT` | `CAMPAIGN_NOT_DELETABLE` | `DELETE` |
+
+> **Por que `MISSING_OPTOUT_NOTICE` é erro do `start` e não do envio.** O snapshot é congelado no
+> `start` e é **o mesmo para todos os alvos**. Se ele não tem aviso de descadastro, o portão G10 do
+> §4.9.3 reprovaria os 430 alvos, um por um, transformando um erro de configuração em 430 falhas.
+> Validar uma vez, na hora em que dá para consertar, é a única leitura razoável — e o G10 continua
+> rodando no envio como defesa em profundidade, onde agora nunca deve disparar.
+>
+> **Como validar spintax + variável no `start`:** roda `hasOptOutNotice()` e `hasCompanyNameMention()`
+> sobre a **parte fixa** do snapshot — grupos `{a|b}` removidos e `{{minha_empresa}}` resolvido com
+> `APP_COMPANY_NAME`. Verificar todas as variações é combinatório; exigir o aviso na parte fixa é
+> cheque O(1) e é a regra certa de qualquer jeito: aviso de descadastro que aparece só em 1 de 12
+> variações não é aviso.
 
 ---
 
@@ -1069,6 +1411,21 @@ export type SendGuardVerdict =
 export function evaluateSendGuard(facts: SendGuardFacts): SendGuardVerdict;
 ```
 
+> 🔧 **O bloco acima é o desenho da v1.1. O arquivo real já divergiu dele três vezes, e as três
+> divergências são melhorias — o documento é que estava atrasado:**
+> 1. `facts.companyName: string | null` (adição do Vega). G10 não é verificável sem saber *qual* nome
+>    procurar no texto; sem o campo a checagem adivinharia, o que é pior que declarar a dependência.
+>    `packages/core` continua sem ler `process.env` — quem lê `APP_COMPANY_NAME` é o serviço.
+> 2. `MAX_DECISION_TO_SEND_MS` (5s) — teto entre o veredito e a chamada de rede, medido **pelo
+>    chamador**, não pelo guard. O carimbo do opt-out protege a leitura até a decisão; este protege a
+>    decisão até o envio, que é o intervalo que a transação de write-ahead pode esticar.
+> 3. `EvaluateSendGuardOptions` (`windowConfig`, `duplicateWindowMs`, `optOutMaxAgeMs`) — é o que
+>    permite ao `dispatch-tick` passar a janela **da campanha** sem reimplementar nada (§6.8.3).
+>
+> **Adições da v1.2, detalhadas no §4.9.10:** `facts.lastInboundAt`,
+> `facts.instance.nextSendAllowedAt`, `facts.overrides.ignorePaceLock`, e os `reason`
+> `SEND_PACE_LOCKED` e `LEAD_CONTACT_COOLDOWN`.
+
 O carimbo `optOut.checkedAt` converte uma regra de disciplina em **falha de runtime**: um chamador
 que cachear a blacklist, ou que ler o opt-out no começo de uma função longa e enviar 3 segundos
 depois, quebra em execução — não passa despercebido numa revisão de código. É o mesmo truque que o
@@ -1223,12 +1580,27 @@ onde G10 não se aplica).
 | 409 | `CONFLICT` | `QUIET_HOURS` | fora do piso duro | informa a próxima abertura; **sem** botão de forçar |
 | 409 | `CONFLICT` | `OUTSIDE_BUSINESS_WINDOW` | fora do comercial, dentro do piso | diálogo de confirmação → reenvia com a flag |
 | 409 | `CONFLICT` | `DUPLICATE_SEND` | outbound < 60s para o mesmo lead | "acabamos de enviar" |
+| 409 | `CONFLICT` | 🆕 `LEAD_CONTACT_COOLDOWN` | 2º contato frio em 24h para quem nunca respondeu (§4.9.10) | informa quando libera; **não** oferece forçar |
+| 409 | `CONFLICT` | 🆕 `SEND_PACE_LOCKED` | o número ainda está no intervalo do envio anterior (§4.9.10) | mostra o contador até `nextSendAllowedAt`; botão volta a habilitar sozinho |
 | 409 | `CONFLICT` | `MISSING_OPTOUT_NOTICE` · `MISSING_COMPANY_NAME` | 1º contato frio sem saída fácil / sem remetente | leva ao editor do template |
 | 429 | `RATE_LIMITED` | `MANUAL_SEND_RATE_LIMIT` | > `MANUAL_SEND_RATE_PER_MIN` por usuário | "aguarde" |
 | 502 | `UPSTREAM_ERROR` | `EVOLUTION_*` (§4.9.5) | falha do provedor | "tente de novo"; a mensagem fica `failed` na timeline |
 
-`DAILY_LIMIT_REACHED`, `QUIET_HOURS` e `OPTED_OUT` incluem `meta` útil em `details[]`
-(`resetsAt`, `nextWindowOpensAt`, `optedOutAt`) — sem isso a UI só sabe dizer "não deu".
+> 🔧 **Correção v1.2.** A v1.1 dizia aqui: "`DAILY_LIMIT_REACHED`, `QUIET_HOURS` e `OPTED_OUT` incluem
+> `meta` útil em `details[]` (`resetsAt`, `nextWindowOpensAt`, `optedOutAt`)". Três coisas estavam
+> erradas, e a §4.0 (v1.2) fecha a convenção: (a) **não existe campo `meta` no envelope** — o mapa do
+> guard é achatado em `details[]` com `path` = nome da chave; (b) `resetsAt` e `optedOutAt` **não
+> existem** em lugar nenhum (o guard nunca os produziu, e `OPTED_OUT` é terminal — não precisa de
+> metadado, precisa de texto claro); (c) hoje o serviço só propaga `meta` de `QUIET_HOURS` e
+> `OUTSIDE_BUSINESS_WINDOW`, descartando o de `DAILY_LIMIT_REACHED` (`dailyLimit`, `sentToday`),
+> `LEAD_NOT_MOBILE` (`phoneType`), `INSTANCE_NOT_CONNECTED` (`status`) e `DUPLICATE_SEND`
+> (`lastOutboundAt`), que o guard já devolve.
+>
+> **Regra que passa a valer:** sempre que `verdict.meta` existir, propagar **inteiro** para
+> `details[]`. Nada de lista de `reason` privilegiados — a lista é o que envelhece quando entra um
+> `reason` novo (e a v1.2 acabou de entrar com dois: `SEND_PACE_LOCKED`, `LEAD_CONTACT_COOLDOWN`).
+> `SEND_PACE_LOCKED` traz `nextSendAllowedAt`; `LEAD_CONTACT_COOLDOWN` traz `lastOutboundAt` e
+> `cooldownUntil` — sem eles a UI só sabe dizer "não deu".
 
 #### 4.9.8 O que NÃO entra nesta rota
 
@@ -1255,6 +1627,99 @@ Só está pronto quando, **com número real e Evolution real** (nada de mock):
 
 Os itens 1–4 são o aceite da **Fase 3** que nunca foi executado (§8). O item 5 é o que impede que a
 Fase 4 abra um segundo caminho de envio sem portão.
+
+#### 4.9.10 🆕 v1.2 — Cadência do manual × cadência da campanha (achado do Órion, 2026-09-22)
+
+**O achado.** O endpoint unitário não tem jitter nem intervalo mínimo por instância. Ele tem três
+controles — anti-duplo-clique de 60s **por lead** (G9), `MANUAL_SEND_RATE_PER_MIN` **por usuário** e
+cota diária **por instância** (G8) — e nenhum deles impede o que interessa: um script autenticado
+percorrendo 300 leads diferentes, um por um, dispara em ritmo de campanha **sem nenhum dos controles
+de cadência do §6.3**. Fica dentro da cota diária e fora de qualquer intervalo mínimo. Severidade
+média, e legítima: é literalmente o comportamento que o warmup existe para impedir.
+
+**Decisão: cadência é propriedade do NÚMERO, não do chamador.**
+
+Esse é o ponto que eu tinha errado ao desenhar dois caminhos. Eu estava tratando ritmo como atributo
+de *quem chama* (manual é humano, logo é lento; campanha é robô, logo precisa de freio). Do lado do
+WhatsApp isso não existe: o que ele observa é a **taxa de emissão de um número**. Dois caminhos
+disciplinados separadamente somam, e a soma não tem dono.
+
+**O mecanismo — um gate, uma coluna:** `WhatsAppInstance.nextSendAllowedAt DateTime?` (pedido ao
+Cronos no §6.8.1). **Todo** envio bem-sucedido por aquela instância, venha de onde vier, empurra o
+gate para frente com o jitter log-normal do §6.3.
+
+Por que Postgres e não Redis: o Redis é volátil por desenho neste projeto, e um gate de cadência que
+se perde no restart produz **rajada logo depois de um incidente** — o pior momento possível. É o
+mesmo raciocínio que já fez `InstanceDailyStat` ser tabela e não contador em memória.
+
+**As duas cadências, e como conversam:**
+
+| Caminho | Respeita o gate? | Empurra o gate? | Racional |
+|---|---|---|---|
+| `dispatch-tick` (campanha) | **Sim, sempre.** Se `now < nextSendAllowedAt`, a instância simplesmente não é elegível neste tick | Sim, com jitter cheio | É o caso de uso para o qual o freio foi desenhado |
+| Manual, **1º contato frio** (`isColdFirstContact === true`) | **Sim.** `409 CONFLICT` / `reason: SEND_PACE_LOCKED`, com `nextSendAllowedAt` em `details[]` | Sim, com jitter cheio | É exatamente o abuso que o Órion descreveu. Prospecção fria é prospecção fria, tenha ou não uma campanha em volta |
+| Manual, **resposta em conversa aberta** (`isColdFirstContact === false`) | **Não** — `overrides.ignorePaceLock: true` | Sim, com o **piso** do jitter (`jitterSeconds.min`) | Responder alguém que escreveu primeiro é o tráfego menos parecido com bot que existe. Bloquear isso seria fazer o produto atrapalhar o trabalho que ele deveria acelerar. Mas a mensagem **sai pelo mesmo número**, então ela adia o próximo envio da campanha — o número não emite duas coisas ao mesmo tempo |
+
+**Onde a regra mora: dentro do guard puro, não no chamador.** `evaluateSendGuard` ganha o override
+`ignorePaceLock`, e **ele mesmo o anula quando `isColdFirstContact === true`**:
+
+```ts
+// packages/core/src/whatsapp/send-guard.ts — adições da v1.2
+facts.lastInboundAt: Date | null;                    // 🆕 alimenta G9b
+facts.instance.nextSendAllowedAt: Date | null;       // 🆕 alimenta G9c
+facts.overrides.ignorePaceLock: boolean;             // 🆕 — ignorado se isColdFirstContact
+
+// novos valores de SendBlockReason:
+| 'SEND_PACE_LOCKED'          // G9c — o número ainda está no intervalo do envio anterior
+| 'LEAD_CONTACT_COOLDOWN'     // G9b — 2º contato frio para quem nunca respondeu
+```
+
+Se a checagem ficasse no serviço, existiriam duas implementações da mesma política em duas semanas —
+que é a coisa que o §4.9.9 item 5 existe para impedir. O `ignorePaceLock` entra no guard **e o guard
+decide quando ele vale**: um chamador não consegue liberar o gate para um contato frio nem mentindo.
+
+**G9b — `LEAD_CONTACT_COOLDOWN`, o "limite por lead" que o Órion pediu.** G9 (60s) impede duplo
+clique; não impede insistir. Regra: **se o lead nunca respondeu (`lastInboundAt === null`) e já houve
+outbound nas últimas `COLD_FOLLOWUP_COOLDOWN_H` (default 24h), bloqueia.** Segunda abordagem fria no
+mesmo dia para quem não respondeu é o padrão que produz denúncia, e a denúncia derruba o número.
+Simétrico ao `skipRecentlyContactedDays` da campanha (default 30 dias): no manual o teto é mais
+frouxo, porque o operador tem contexto que o motor não tem — mas não é ilimitado.
+
+**Portões atualizados (substitui a tabela do §4.9.3 nas linhas G9 em diante):**
+
+| # | Portão | Falha → | `reason` | Manual | Campanha |
+|---|---|---|---|---|---|
+| G9 | Anti-duplo-clique (60s, mesmo lead) | 409 | `DUPLICATE_SEND` | ✅ | ✅ |
+| G9b 🆕 | Cooldown de contato frio sem resposta (24h) | 409 | `LEAD_CONTACT_COOLDOWN` | ✅ | ✅ (vira `skipped/recently_contacted`) |
+| G9c 🆕 | Gate de cadência da instância | 409 | `SEND_PACE_LOCKED` | ✅ salvo resposta em conversa | ✅ (não vira erro: a instância só não é elegível) |
+| G10 | 1º contato frio: aviso + remetente | 409 | `MISSING_OPTOUT_NOTICE` · `MISSING_COMPANY_NAME` | ✅ | ✅ (validado no `start`, §4.5.10) |
+| G11 | 🔴 OPT-OUT | 409 | `OPTED_OUT` | ✅ | ✅ (vira `skipped/opted_out`) |
+
+**`warnings[]` novo:** `PACE_LOCK_BYPASSED_FOR_REPLY` — a resposta saiu antes do intervalo porque é
+conversa aberta. Não bloqueia; existe para o desvio ficar **visível** no log e na tela, como toda
+confirmação do §4.9.6. Desvio autorizado é aceitável; desvio invisível não.
+
+### 4.10 Fila de disparo — pausa global (🔒 CONTRATO — 🆕 v1.2)
+
+Espelho exato de `/api/v1/scraper/queue`, aplicado à fila `dispatch:tick`. Existe porque o operador
+precisa de **um** botão que para todo o disparo num incidente, e não há terminal confiável (§0). O
+motivo e a diferença entre esta pausa, `paused` e `halted` estão no §6.8.9.
+
+#### `GET /api/v1/dispatch/queue`
+`200` → `{ paused: boolean, pausedAt: string | null, pausedBy: string | null, reason: string | null,
+runningCampaigns: number, pendingTargets: number, lastTickAt: string | null }`
+
+`lastTickAt` é o heartbeat do motor (§6.8.8): sem ele, "nenhuma mensagem saiu hoje" e "o worker está
+morto" são a mesma tela.
+
+#### `POST /api/v1/dispatch/queue` — pausa
+`{ reason?: string }` → `200 { ok: true, paused: true, pausedAt }`
+
+#### `POST /api/v1/dispatch/queue/resume`
+`200 { ok: true, paused: false, resumedTargets: number }`
+
+Estado **persistido** (não `setTimeout` em memória — lição já paga na Onda 1). Nenhuma campanha muda
+de status: elas seguem `running` e voltam de onde pararam. Papel: `operator` pausa, `operator` retoma.
 
 ---
 
@@ -1556,6 +2021,23 @@ flowchart TD
 > Ambas entram como `overrides: { allowNonMobile: false, confirmOutsideBusinessWindow: false }`.
 > O worker **não pode** ter uma segunda implementação do portão: se `evaluateSendGuard` aparecer
 > duplicada, o Órion reprova (§4.9.9, item 5).
+>
+> **v1.2 — a frase acima fica ainda mais simples: a campanha não sobrescreve nada.** Com o override
+> `ignorePaceLock` da §4.9.10, são três, e o `dispatch-tick` passa os três em `false`:
+> ```ts
+> overrides: { allowNonMobile: false, confirmOutsideBusinessWindow: false, ignorePaceLock: false }
+> ```
+> A regra de leitura fica: **`overrides` é o vocabulário do envio manual; no motor, todo override é
+> `false`.** Se um dia alguém precisar ligar um deles no worker, não é ajuste de configuração — é
+> mudança de arquitetura e passa por aqui.
+>
+> O que a campanha acrescenta, e que o guard **não** faz, é traduzir o veredito em estado do alvo:
+> `{ allow: false, reason }` vira `skipped`/`pending reagendado`/`halt` conforme a tabela do §6.8.5.
+> Essa tradução é do worker, porque depende de `CampaignTarget`, que o `packages/core` não conhece.
+>
+> O fluxograma acima também está desatualizado em dois pontos, corrigidos no §6.8 (que manda):
+> `retry c/ backoff (máx 3)` **não existe mais** para envio — `sendText` nunca é retentado
+> (§6.8.6), e o desenho não previa o resultado **incerto**.
 
 ### 6.2 Aquecimento de número novo (ramp-up)
 
@@ -1590,8 +2072,8 @@ Regras:
 | Dias | Seg–Sex | sim | Mensagem comercial no domingo gera denúncia |
 | Horário | 09:00–18:00 (America/Sao_Paulo) | sim (dentro de 08:00–20:00) | Fora disso o sistema **recusa**, não avisa |
 | Pausa de almoço | 12:00–13:30 sem envio | sim | Humano almoça |
-| Jitter entre envios | 45–180s, distribuição não-uniforme | sim (mín. 30s) | Intervalo constante é a assinatura de bot mais óbvia |
-| Micro-pausa | 5–12min a cada 18–25 envios | não | Simula atendimento em lotes |
+| Jitter entre envios | 45–180s, distribuição não-uniforme | sim (mín. 30s) | Intervalo constante é a assinatura de bot mais óbvia. **v1.2:** o jitter é materializado em `WhatsAppInstance.nextSendAllowedAt` (§6.8.7) — é um gate da INSTÂNCIA, compartilhado com o envio manual (§4.9.10), não um `sleep` dentro do job |
+| Micro-pausa | 5–12min a cada 18–25 envios | sim, via env (§10) | Simula atendimento em lotes. **v1.2:** é o mesmo gate com outra distribuição, contado por `sendsSinceMicroPause` — não é um mecanismo separado |
 | Feriados nacionais | pulados | sim (desligável) | Tabela estática em `policies/send-window.ts` |
 
 O jitter usa distribuição **log-normal**, não uniforme: a maioria dos intervalos fica em torno de ~70s com
@@ -1641,6 +2123,15 @@ Enviar a mesma string 300 vezes é o sinal mais fácil de detectar do lado do Wh
 Toda parada automática grava `haltReason` legível, que aparece na UI e vai no `CampaignSummary`.
 `pending` nunca vira `failed` numa parada — os alvos ficam pendentes e a campanha retoma de onde parou.
 
+> **v1.2 — o que entra na Fase 4 desta tabela, e o gatilho que faltava.** As linhas de webhook
+> (`connection.update`) e a de ≥5 falhas consecutivas **já existem em produção** desde o envio
+> unitário. Das linhas de `health-check`, só "Evolution fora do ar (3x)" e "taxa de falha > 30% em 50
+> envios" entram na Fase 4; as duas heurísticas de shadow-ban ficam para depois, pelo critério do
+> §6.9. E acrescenta-se um gatilho que a v1.1 não tinha como prever, porque o resultado **incerto** não
+> existia: **≥3 incertos consecutivos → instância fora da rotação + alerta `high`; ≥5 → `halt`**
+> (§6.8.6). É o único gatilho da tabela que dispara sem nenhuma falha confirmada — e é de propósito:
+> não saber o que saiu é motivo suficiente para parar.
+
 ### 6.7 Opt-out — o portão inegociável
 
 Este é o ponto onde estou sendo mais rígida do documento inteiro, e é proposital: um opt-out desrespeitado
@@ -1668,6 +2159,270 @@ Este é o ponto onde estou sendo mais rígida do documento inteiro, e é proposi
    reiniciada nem sequer notada.
 5. **Remover opt-out exige `role=admin`** e gera registro de auditoria em `LeadActivity`. Não é operação
    de rotina.
+
+---
+
+### 6.8 🆕 v1.2 — `dispatch-tick.job` ponta a ponta (🔒 CONTRATO — Vega implementa)
+
+O §6.1 desenha a intenção. Esta seção é a especificação executável: o que o job lê, em que ordem, com
+qual transação, e o que faz com **cada** resultado possível. Ela existe porque a v1.1 deixou o motor
+como fluxograma, e fluxograma não responde "o que acontece se o processo morrer entre a reserva e o
+envio" — que é a pergunta que decide se um lead recebe a mensagem duas vezes.
+
+#### 6.8.1 Estado que precisa estar no Postgres (pedido ao Cronos)
+
+Cadência é estado, e estado de cadência **não pode viver no Redis**: se ele se perde num restart, o
+número volta emitindo em rajada logo depois do incidente — o pior momento possível. Três colunas em
+`WhatsAppInstance`:
+
+| Coluna | Tipo | Para quê |
+|---|---|---|
+| `nextSendAllowedAt` | `DateTime?` | O gate único de cadência (§4.9.10). Honrado pelo manual e pela campanha |
+| `sendsSinceMicroPause` | `Int @default(0)` | Conta envios desde a última micro-pausa (§6.3). Sem isso a micro-pausa some no restart, que é quando ela mais importa |
+| `consecutiveUncertain` | `Int @default(0)` | Distinto de `consecutiveFailures`: incerto **não é falha** e não pode punir a instância pelo mesmo caminho (§6.8.6) |
+
+Mais `CampaignInstance.sentCount` / `failedCount` (§4.5.8). **Nenhuma outra migração é necessária** —
+o índice do hot path, os contadores de funil e o `Message.campaignTargetId @unique` já existem.
+
+#### 6.8.2 Seleção do alvo — `FOR UPDATE SKIP LOCKED` e o lease
+
+```sql
+-- dentro da transação de claim
+SELECT id, "leadId", "phoneE164", attempt
+  FROM campaign_targets
+ WHERE "campaignId" = $1
+   AND status = 'pending'
+   AND "scheduledFor" <= now()
+ ORDER BY "scheduledFor"
+   FOR UPDATE SKIP LOCKED
+ LIMIT 1;
+```
+
+**Duas decisões escondidas nessa query, e ambas são armadilha se erradas:**
+
+1. **`scheduledFor` nunca é `NULL` a partir do `start`** (§4.5.9 passo 8). Parece detalhe e não é: em
+   Postgres, `ORDER BY col ASC` é `NULLS LAST` por padrão, e é assim que o índice
+   `(campaignId, status, scheduledFor)` está construído. Escrever `ORDER BY "scheduledFor" NULLS FIRST`
+   para "pegar primeiro os sem agendamento" faz o planner **abandonar o índice** e varrer a tabela a
+   cada 15 segundos. Preencher `scheduledFor` no `start` custa um `UPDATE` e elimina a questão.
+2. **Não existe status `sending`.** Acrescentar um valor ao enum `CampaignTargetStatus` propagaria
+   para os contratos, para a UI e para os filtros de `GET /targets` — caro por uma necessidade
+   interna do worker. Em vez disso, **lease**: na mesma transação do `SELECT`, o alvo continua
+   `pending` mas leva `scheduledFor = now() + DISPATCH_LEASE_S` (default 120s) e `attempt += 1`.
+
+**O lease dá três coisas de graça:** dois workers nunca pegam o mesmo alvo (o `SKIP LOCKED` resolve o
+instante; o lease resolve o minuto seguinte); se o processo morrer no meio, o alvo volta a ser
+elegível sozinho depois do lease — **sem job de resgate**; e `attempt` passa a ser o contador natural
+de tentativas, com `DISPATCH_MAX_ATTEMPTS` (default 3) virando `failed` / `skipReason='max_attempts'`
+no claim seguinte.
+
+> 🔒 **A garantia dura contra envio duplicado não é o lease — é `Message.campaignTargetId @unique`.**
+> O write-ahead insere um `Message` amarrado ao alvo; um segundo write-ahead para o mesmo alvo
+> **viola o índice único e a transação aborta**, aconteça o que acontecer com locks, leases e
+> restarts. O lease é performance; o `@unique` é correção. É essa coluna que fecha o risco R7, e é
+> por isso que a resposta a "e se o worker reiniciar no meio?" é curta.
+
+#### 6.8.3 O tick, passo a passo
+
+Job repetível BullMQ na fila `dispatch:tick` (já reservada em `apps/worker/src/queues.ts`), a cada
+`DISPATCH_TICK_INTERVAL_S` (default 15s), **concorrência 1**. Um tick:
+
+```
+ 1. Pausa global da fila ligada?  ─→ encerra (§6.8.9)
+ 2. Para cada Campaign status='running', ordenada por startedAt:
+ 2.1  Janela da campanha aberta agora?
+        não → reagenda os pendentes para a próxima abertura; próxima campanha
+ 2.2  Monta a lista de instâncias ELEGÍVEIS:
+        status='connected' · não banida · quota restante > 0 · nextSendAllowedAt <= now
+        vazia, e a causa é quota/gate  → nada a fazer neste tick
+        vazia, e a causa é conexão     → 🔴 halt (§6.6) + alerta
+ 2.3  Repete, até (a) acabarem alvos elegíveis ou (b) acabarem instâncias elegíveis:
+        a) claim de 1 alvo (lease, §6.8.2)
+        b) resolve a instância: AFINIDADE primeiro, senão round-robin ponderado (§6.8.4)
+        c) renderiza o texto (snapshot + variáveis do lead + spintax semeado por targetId)
+        d) SELECT de opt-out por phoneE164  ← sem nada entre isto e o passo (e)
+        e) evaluateSendGuard(facts, { windowConfig: janela da campanha })
+             allow:false → traduz pela tabela do §6.8.5 e volta para (a)
+        f) write-ahead: Message(queued) + InstanceDailyStat.sentCount+1     [transação]
+        g) EvolutionClient.sendText()   ← teto de MAX_DECISION_TO_SEND_MS desde (e)
+        h) trata o resultado pelo §6.8.6                                    [transação]
+        i) empurra o gate: nextSendAllowedAt = now + jitter (§6.8.7)
+ 3. Campanha sem nenhum alvo 'pending' restante → status='completed', finishedAt=now
+```
+
+**Por que um tick de 15s e não um job por mensagem agendado no futuro.** Agendar 5.000 jobs BullMQ com
+`delay` calculado no `start` coloca a cadência dentro do Redis (volátil) e congela decisões que
+mudam: cota, janela, instância caindo, opt-out. O tick relê o mundo a cada 15s e é **reconstruível a
+partir do Postgres** — coerente com "Redis é volátil por design, Postgres é a verdade" (§1.3).
+
+**Por que concorrência 1.** Um único processo worker, poucos milhares de mensagens/dia e um gate por
+instância que já serializa o que importa. Concorrência >1 traria contenção no mesmo gate sem ganho de
+vazão. `SKIP LOCKED` continua no lugar porque ele protege contra o caso real que **vai** acontecer:
+duas instâncias do worker no ar durante um deploy.
+
+**Teto por tick:** no máximo uma mensagem por instância elegível por tick. Com jitter mínimo de 30s e
+tick de 15s, o gate é sempre o limitante — o teto existe só para um tick não virar laço longo.
+
+#### 6.8.4 Escolha de instância, rotação e afinidade
+
+**Ordem deliberada: primeiro o alvo, depois a instância.** O inverso (escolher instância e depois
+buscar alvo) impede honrar a afinidade lead→instância, que depende de *qual lead* saiu da fila.
+
+1. **Afinidade** (§6.5): se o lead já trocou mensagem (qualquer direção) com uma instância desta
+   campanha, e ela está elegível **agora**, é ela. Trocar de número no meio de uma conversa confunde o
+   prospect e parece spam.
+2. Senão, **round-robin ponderado**: peso = `quotaRestante × (isDegraded ? 0.3 : 1)`, sorteio
+   proporcional. Ponderar pela cota restante distribui naturalmente sem precisar guardar "de quem era
+   a vez" — um estado a menos para dessincronizar.
+3. Nenhuma elegível depois do claim: **solta o alvo** (`scheduledFor` = o menor `nextSendAllowedAt`
+   entre as instâncias, ou a próxima abertura de janela) e encerra o loop desta campanha.
+
+**Renderização:** `renderedTemplateSnapshot` (congelado no `start`) + variáveis do `CampaignTarget`/
+`Lead` + spintax com semente **`campaignTargetId`** (§6.4). Semente por alvo, não por envio: se o
+mesmo alvo for renderizado duas vezes, sai o mesmo texto. Duas versões da mesma mensagem chegando à
+mesma pessoa é pior que nenhuma.
+
+#### 6.8.5 🔒 Tradução do veredito do guard em estado do alvo
+
+Esta tabela é o contrato que faltava. O guard devolve `reason`; o worker traduz. **Sem essa tabela,
+cada `reason` novo vira uma decisão improvisada dentro do job.**
+
+| `reason` do guard | Alvo vira | `skipReason` | Contador | Por quê |
+|---|---|---|---|---|
+| `OPTED_OUT` | `skipped` | `opted_out` | `skippedCount` | Terminal. Nunca reagendar |
+| `LEAD_NOT_MOBILE` | `skipped` | `landline` | `skippedCount` | Não muda com o tempo |
+| `LEAD_CONTACT_COOLDOWN` | `skipped` | `recently_contacted` | `skippedCount` | Se entrou aqui, outro caminho falou com o lead. Reagendar seria insistir |
+| `DUPLICATE_SEND` | `skipped` | `recently_contacted` | `skippedCount` | Idem — e em 60s não há o que esperar num motor de cadência de minutos |
+| `QUIET_HOURS` · `OUTSIDE_BUSINESS_WINDOW` | volta a `pending` | — | — | `scheduledFor` = próxima abertura. É espera, não recusa |
+| `DAILY_LIMIT_REACHED` | volta a `pending` | — | — | `scheduledFor` = amanhã na abertura; **a instância sai da rotação até a virada do dia** |
+| `SEND_PACE_LOCKED` | volta a `pending` | — | — | `scheduledFor` = `nextSendAllowedAt`. Em regime normal nem chega aqui (o passo 2.2 já filtrou) — é a corrida contra um envio manual simultâneo |
+| `INSTANCE_NOT_CONNECTED` · `INSTANCE_BANNED` | volta a `pending` | — | — | Tira a instância da rotação e reavalia 2.2. Sem nenhuma sobrando → **halt** |
+| `MISSING_OPTOUT_NOTICE` · `MISSING_COMPANY_NAME` | volta a `pending` | — | — | 🔴 **`halt` da campanha**, `haltReason` explicando. Nunca `skipped`: o texto é o mesmo para todos, então falhar alvo a alvo produziria N falhas de um erro único. Validado no `start` (§4.5.10) — chegar aqui é bug, e o halt é o que o torna visível |
+
+**Regra de leitura:** *skip* é para o que é **do lead** e não muda; *reagendar* é para o que é **do
+momento**; *halt* é para o que é **da campanha** e nenhum alvo vai resolver sozinho.
+
+#### 6.8.6 O resultado do `sendText` — incluindo o caso `uncertain`, que não existia na v1.1
+
+`sendText` roda com `retryable: false`. **Retry de envio duplica mensagem no WhatsApp do lead** — o
+lead não vê "uma tentativa", vê duas mensagens. Isso vale no motor com ainda mais força do que no
+manual, porque aqui não há humano olhando.
+
+| Resultado | `Message` | `CampaignTarget` | Cota | Instância |
+|---|---|---|---|---|
+| **Sucesso** | `sent` + `providerMessageId` | `sent` + `sentAt` (via `advanceCampaignTargetStatus`) | debitada (já estava) | `consecutiveFailures=0`, `consecutiveUncertain=0`, gate empurrado |
+| **Falha confirmada** (`INSTANCE_DISCONNECTED`, `INSTANCE_NOT_FOUND`, `INVALID_NUMBER`, `AUTH_ERROR`, `RATE_LIMITED`, `VALIDATION_ERROR`, `UNKNOWN`) | `failed` + `errorCode` | `failed`, `skipReason` = o `reason` | **compensada** (`sentCount−1`, `failedCount+1`) | efeitos colaterais da tabela do §4.9.5, idênticos ao manual |
+| 🆕 **Incerto** (`TIMEOUT`, `TRANSIENT_ERROR` → `EVOLUTION_SEND_UNCERTAIN`) | `failed` + `errorCode='EVOLUTION_SEND_UNCERTAIN'` | **`failed`**, `skipReason='send_uncertain'` — **nunca retentado** | **NÃO compensada** | `consecutiveFailures` intacto; `consecutiveUncertain += 1`; gate empurrado normalmente |
+
+**As três decisões do caso incerto, e o motivo de cada uma:**
+
+1. **O alvo vira `failed` terminal, não volta para `pending`.** Incerto significa "pode ter chegado".
+   Reagendar é a única opção que consegue mandar a mesma abordagem duas vezes para a mesma pessoa — e
+   o dano de uma mensagem duplicada (denúncia, ban) é maior que o de uma não enviada. A linha fica
+   visível na tela com um texto que diz "não confirmada", e o operador decide olhar a conversa. É o
+   mesmo princípio de "a cota erra sempre para menos" do §4.9.5, aplicado ao alvo.
+2. **A cota não volta.** Ela pode ter sido gasta de verdade. Devolver cota que talvez tenha saído é
+   furar o warmup sem ninguém ver — o modo de falha que o §6.2 inteiro existe para impedir.
+3. **A instância não é punida.** Timeout de rede não é a instância falhando, e marcar `degraded` por
+   isso derrubaria um número saudável por causa de uma oscilação de rede.
+
+> ⚠️ **O buraco que o item 3 abre, e como ele é fechado.** Se incerto não conta como falha, uma
+> Evolution agonizante devolve incerto indefinidamente, o motor continua, a cota é queimada e nós
+> perdemos o registro do que saiu — mensagens possivelmente entregues, contabilizadas como falha.
+> Por isso existe `consecutiveUncertain`, com dois patamares:
+> - **≥ 3 seguidos na mesma instância:** ela sai da rotação neste ciclo e sai alerta `high`.
+> - **≥ 5 seguidos:** 🔴 **`halt` da campanha**, `haltReason` = "resultado incerto repetido — confira
+>   no WhatsApp o que realmente saiu antes de retomar".
+>
+> Parar é o movimento conservador aqui **justamente porque não sabemos o que aconteceu**. Continuar
+> às cegas é a única forma de mandar mensagem duplicada para centenas de pessoas sem perceber.
+> Qualquer sucesso zera o contador.
+
+**Ordem de chegada do webhook.** O `messages.update` da Evolution pode chegar antes de gravarmos o
+`providerMessageId` — a §4.8 (v1.1) já cobre isso com a re-busca única após 2s e o `logger.warn`.
+Vale igual aqui; nada novo.
+
+#### 6.8.7 Jitter, micro-pausa e por que a distribuição importa
+
+Depois de **todo** envio (sucesso, falha ou incerto), o gate é empurrado:
+
+```ts
+// packages/core/src/whatsapp/jitter.ts — puro, RNG injetável (Íris testa a distribuição)
+nextSendAllowedAt = now + drawJitter({ min, max, rng })
+```
+
+- **Distribuição log-normal**, não uniforme, entre `jitterSeconds.min` e `max` (default 45–180s), com
+  moda em torno de ~70s e cauda longa. Intervalo uniforme tem média perfeitamente estável e é
+  estatisticamente identificável — é a assinatura de bot mais óbvia que existe. Custo zero, e é o
+  tipo de detalhe que separa "funciona" de "funciona por meses".
+- **Micro-pausa:** `sendsSinceMicroPause += 1` a cada envio; ao cruzar um limiar sorteado em 18–25, o
+  jitter da vez é sorteado em **5–12 min** e o contador zera. Uma coisa só: micro-pausa é um jitter
+  longo, não um mecanismo à parte. Um gate, duas distribuições.
+- **O gate é da instância, não da campanha.** Duas campanhas usando o mesmo número compartilham o
+  freio — é o número que emite, não a campanha (§4.9.10).
+
+#### 6.8.8 Observabilidade mínima (sem ela, a Fase 4 não é verificável)
+
+O `dispatch-tick` é o primeiro código do projeto que produz efeito irreversível no mundo sem um
+humano olhando. Três sinais, todos usando o que já existe (`observability/logger.ts`,
+`observability/alerts.ts`, heartbeat):
+
+| Sinal | Quando | Onde aparece |
+|---|---|---|
+| `logger.info` por envio | sempre | `campaignId`, `targetId`, `instanceId`, `reason`/`ok`, `jitterMs`. **Nunca o texto da mensagem nem o telefone completo** |
+| Alerta `high` | 3 incertos seguidos · instância `degraded` · campanha `halted` | `ALERT_WEBHOOK_URL` (já implementado) |
+| Alerta `critical` | instância `banned` · Evolution fora do ar | idem |
+| Heartbeat do tick | a cada tick | mesma tabela do heartbeat do scraper — "o motor está vivo" tem que ser observável **sem** haver campanha rodando, senão "parado" e "quebrado" ficam idênticos |
+
+O último item é a lição do §8.0 regra 4 aplicada ao motor: o estado degradado precisa de um sinal
+mais barulhento que o normal, e "nenhuma mensagem saiu hoje" é ambíguo por natureza.
+
+#### 6.8.9 Pausa global do disparo — o botão único do incidente
+
+Parar campanha por campanha funciona quando há duas. Num incidente ("a Evolution está mandando coisa
+errada", "o número está estranho"), o operador precisa de **um** lugar que para tudo, e precisa dele
+pela UI: não há terminal confiável neste ambiente (§0, correção v1.1), e um `halt` por campanha é
+justamente o que ele não consegue fazer rápido sob estresse.
+
+**Decisão: reusar o mecanismo de pausa persistida que o scraper já tem** (`apps/worker/src/lib/
+queue-state.ts`), aplicado à fila `dispatch:tick`, com o par de rotas
+`GET/POST /api/v1/dispatch/queue` e `POST /api/v1/dispatch/queue/resume` — espelho exato do que já
+existe em `/api/v1/scraper/queue`. Nada novo para aprender, e a lição já paga vale igual aqui: a
+pausa **não pode** ser um `setTimeout` em memória, senão o restart do worker a desfaz sem avisar.
+
+**Pausa global ≠ `halted` ≠ `paused`:** a global não muda o status de nenhuma campanha (elas seguem
+`running`, só não são atendidas), e por isso é a única das três que não precisa de decisão por
+campanha para ser desfeita. A campanha volta exatamente de onde estava.
+
+---
+
+### 6.9 🆕 v1.2 — Jobs periódicos: o que entra na Fase 4 e o que fica para depois
+
+**O critério:** entra na Fase 4 o que é necessário para o sistema **parar**; fica para depois o que é
+necessário para o sistema **otimizar**. Um segundo critério de corte, prático: se a regra precisa de
+mais histórico do que o aceite da Fase 4 produz (50 alvos), ela não é testável agora — e regra não
+testável entregue é exatamente como nasceram as quatro funções sem chamador deste projeto.
+
+| Job | Fase | Por quê |
+|---|---|---|
+| **`warmup-roll.job`** | 🟠 **Fase 4 — obrigatório** | Sem ele `warmupDay` **nunca avança** e toda instância fica presa em 20 msgs/dia para sempre. Não é melhoria: é o que faz o §6.2 existir de fato. Hoje `WARMUP_TABLE`/`effectiveDailyLimit` são lidos, mas ninguém escreve `warmupDay` |
+| **`health-check.job` (fatia mínima)** | 🟠 **Fase 4** | Só o que **para**: ping na Evolution (3 falhas seguidas → `halt` em todas as campanhas `running`) e taxa de falha > 30% em 50 envios → `degraded`. É o que impede queimar cota contra um provedor morto |
+| `health-check` (heurísticas de shadow-ban) | 🔵 Fase 5/6 | "Resposta < 2% com ≥100 enviadas" e "ausência de resposta em 100+ envios" precisam de 100+ mensagens de histórico. Com 50 alvos no aceite, a regra nunca dispara — entregá-la agora seria entregar código que ninguém viu funcionar |
+| **`retention.job`** | 🔵 **Fase 5** | Apaga dado. É o job mais destrutivo do sistema, e nenhum dado atinge o prazo de retenção durante a Fase 4 (a base tem dias de idade). Subir o motor de disparo e o apagador de dados na mesma semana é concentrar risco sem ganho |
+| `requeue-orphans` (disparo) | ❌ não existe | O lease do §6.8.2 já devolve alvo órfão sozinho. Job de resgate seria uma segunda solução para um problema resolvido |
+
+**`warmup-roll.job` — especificação curta** (diário, ~00:10 `APP_TIMEZONE`):
+1. Para cada instância, se `InstanceDailyStat` de **ontem** tem `sentCount > 0` → `warmupDay += 1`.
+   Instância parada não amadurece sozinha (§6.2).
+2. Se a taxa de resposta de 48h estiver abaixo do piso **com amostra suficiente**, **congela** o
+   avanço (não recua). O congelamento entra na Fase 4; o alerta de shadow-ban derivado dele, não.
+3. Zera `sendsSinceMicroPause` e `consecutiveUncertain` do dia anterior.
+
+**`regressWarmupDay` (recuo de 30% ao reconectar) é código escrito sem chamador desde a Fase 3.** Ele
+não é um job: o gatilho é o webhook `connection.update` levando a instância de `disconnected`/`banned`
+de volta a `connected`. **Ligar isso é entrega da Fase 4** — pela regra §8.0 nº 3, "função pura +
+teste ≠ funcionalidade", o aceite é o `warmupDay` visivelmente menor na tela depois de uma reconexão,
+não o teste unitário passando.
 
 ---
 
@@ -1777,7 +2532,7 @@ descrevem a ordem de execução dado o estado real do código em 2026-08-03 (`RE
 | **1** | O sistema consegue **dizer que está quebrado** e ser retomado sem shell | uso real | resto da Fase 2 + lacunas novas |
 | **2** | **Fase 3 de verdade**: envio unitário real ponta a ponta (§4.9) | Fase 4 | Fase 3 (3.7 + aceite) |
 | **3** | Fase 4: campanhas com anti-ban | release | Fase 4 |
-| **4** | Profissional: backup, CI, testes de integração, alertas, docs | cliente pagante | Fase 5 + Fase 6 |
+| **4** | Profissional: backup, CI, testes de integração, alertas, docs | operação diária confiável | Fase 5 + Fase 6 |
 
 **O que mudou de ordem, explicitamente:**
 - **Fases 2 e 3 não rodam mais em paralelo.** Rodavam na v1.0 porque "não compartilham código" — o
@@ -1931,32 +2686,70 @@ porque eu escrevi a linha aqui e esqueci o endpoint no §4. Corrigido na v1.1: �
 
 ---
 
-### 🟠 Fase 4 — "Campanha com anti-ban de verdade"
-**Objetivo:** o coração do produto. Só entra depois que a Fase 3 provou que o envio unitário funciona.
+### 🟠 Fase 4 — "Campanha com anti-ban de verdade" (reescrita na v1.2)
 
-| # | Entrega | Responsável |
-|---|---|---|
-| 4.1 | Schema: `Campaign`, `CampaignTarget` + índices de seleção (`FOR UPDATE SKIP LOCKED`) | **Cronos** |
-| 4.2 | `policies/`: janela de envio, quota de warmup, jitter log-normal, **guard pré-envio** | **Vega** |
-| 4.3 | `dispatch-tick.job` com rotação de instâncias, afinidade e retomada | **Vega** |
-| 4.4 | Kill switch (§6.6), `halted` + `acknowledgeHalt`, `warmup-roll.job` | **Vega** |
-| 4.5 | API de campanhas completa (criar com prévia de exclusões, start/pause/resume/cancel, targets) | **Vega** |
-| 4.6 | UI: montar campanha (com painel de exclusões), acompanhar ao vivo, pausar, saúde das instâncias | **Lyra** |
-| 4.7 | Testes: opt-out no meio da campanha **deve** ser honrado; quota respeitada; halt em desconexão; retomada sem duplicar envio | **Íris** |
-| 4.8 | Revisão dedicada: nenhum caminho de código envia sem passar pelo guard | **Órion** |
+**Objetivo:** o coração do produto. Só entra depois que a Fase 3 provou, **com número real**, que o
+envio unitário funciona ponta a ponta.
+
+**Princípio desta reescrita:** a v1.1 listava 8 itens que só podiam ser verificados juntos, no fim
+("4.3 `dispatch-tick.job` com rotação, afinidade e retomada" é uma linha e três semanas). A v1.2
+quebra em **6 entregas que fecham sozinhas**, cada uma com um critério de pronto que alguém consegue
+executar sem esperar a seguinte. É a regra §8.0 nº 1 aplicada dentro da fase, não só no fim dela.
+
+| # | Entrega | Dono | Critério de pronto (executável) |
+|---|---|---|---|
+| **4.A** | **Schema da cadência.** 3 colunas em `WhatsAppInstance` (`nextSendAllowedAt`, `sendsSinceMicroPause`, `consecutiveUncertain`) + 2 em `CampaignInstance` (`sentCount`, `failedCount`). Migração aplicada em produção | **Cronos** | `prisma migrate` roda contra o banco real; `EXPLAIN` da query do §6.8.2 usa `campaign_targets_campaignId_status_scheduledFor_idx` (Index Scan, não Seq Scan) com ≥5.000 alvos semeados |
+| **4.B** | **Políticas puras** em `packages/core`: `drawJitter` log-normal com RNG injetável, micro-pausa, janela da campanha (`intersect(pisoEnv, campanha)`), e as **adições ao guard** do §4.9.10 (`lastInboundAt`, `nextSendAllowedAt`, `ignorePaceLock`, `SEND_PACE_LOCKED`, `LEAD_CONTACT_COOLDOWN`) | **Vega** | Testes provam: 10k amostras de `drawJitter` têm moda ~70s e cauda até `max`; `ignorePaceLock` é **ignorado** quando `isColdFirstContact`; guard continua com **um** arquivo e **zero** I/O |
+| **4.C** | **Cadência ligada no envio unitário** — §4.9.10 no caminho que já existe: manual passa a respeitar e empurrar `nextSendAllowedAt`, G9b e G9c ativos, `warnings[PACE_LOCK_BYPASSED_FOR_REPLY]` | **Vega + Lyra** | Dois envios frios seguidos pela ficha: o 2º devolve `409 / SEND_PACE_LOCKED` com o horário de liberação na tela. **Responder** a uma conversa aberta no mesmo intervalo **passa**, com o aviso visível. Fecha o achado médio do Órion |
+| **4.D** | **API de campanha sem motor**: `preview`, `POST`, `PATCH`, `DELETE`, `GET`s, `start`/`pause`/`resume`/`cancel` — tudo do §4.5, com o `start` congelando snapshot e agendando os alvos. O tick **ainda não existe** | **Vega** | Criar campanha de 50 alvos por filtro; `totalMatched = eligible + Σ excluded`; `start` congela o snapshot, marca os alvos com `scheduledFor` e **nada é enviado**; template sem "responda SAIR" recusa com `409 / MISSING_OPTOUT_NOTICE` |
+| **4.E** | **UI de campanha**: montagem com painel de exclusões clicável (consumindo `preview` com debounce), lista, acompanhamento ao vivo (poll 3s), pausar/retomar com o diálogo de `acknowledgeHalt`, saúde das instâncias | **Lyra** | Operador monta, vê "800 → 430" discriminado por motivo **antes** de criar, inicia, pausa e retoma sem tocar em API. `blockers[]` aparece na montagem, não só no clique de iniciar |
+| **4.F** | **O motor**: `dispatch-tick.job` completo (§6.8) + `warmup-roll.job` + fatia mínima do `health-check` + `regressWarmupDay` ligado no webhook + pausa global da fila de disparo | **Vega** | Aceite da fase (abaixo) |
+| **4.G** | **Testes** | **Íris** | Ver "aceite" — e cada um dos 5 itens é um teste, não uma conferência visual |
+| **4.H** | **Revisão dedicada**: nenhum caminho de código envia sem passar pelo guard; `grep -rn "sendText("` continua com **um** call site de produção por caminho, e o do worker importa o mesmo `evaluateSendGuard` | **Órion** | Sem achado `high`/`critical` aberto |
+
+**Ordem e paralelismo (o quadro que o Atlas usa para distribuir):**
+
+```
+4.A (Cronos) ─┬─→ 4.C (Vega+Lyra) ────────────────┐
+              │                                    ├─→ 4.F (Vega) ─→ 4.G (Íris) ─→ 4.H (Órion)
+4.B (Vega) ───┴─→ 4.D (Vega) ──→ 4.E (Lyra) ──────┘
+```
+- **4.A e 4.B saem juntas, no primeiro dia** — não dependem uma da outra.
+- **4.D e 4.E em paralelo** assim que o §4.5 estiver lido: o contrato existe, é o que ele serve para
+  fazer. A Lyra trabalha contra os schemas de `packages/contracts`, não contra a rota pronta.
+- **4.F é a última por desenho.** É a única entrega que produz efeito irreversível no mundo; ela entra
+  depois que tudo em volta já foi exercitado. Se 4.F atrasar, 4.A–4.E **já entregaram valor**: dá para
+  montar campanha, conferir exclusões e enviar manualmente com cadência — que é mais do que existe
+  hoje.
+- **4.C antes de 4.F, e isto não é negociável:** é o mesmo princípio do §4.9.1. A cadência estreia com
+  volume 1 e um humano olhando, e o motor a **herda** exercitada.
 
 **Depende de:** Fase 3 **executada com número real** (não só escrita) e Fase 1. A dependência é dura:
-construir a Fase 4 sobre um acoplamento com a Evolution que nunca foi exercitado é empilhar em
-fundação não testada — é precisamente o que a 3.7 existia para evitar.
+construir o motor sobre um acoplamento com a Evolution que nunca foi exercitado é empilhar em fundação
+não testada — é precisamente o que a 3.7 existia para evitar, e o que a v1.1 documentou como erro.
 
-**Aceite:** campanha de 50 alvos com 2 instâncias respeita quota e janela, para sozinha ao desconectar
-um número, e um opt-out registrado durante a execução é honrado no envio seguinte. Este último item é
-**critério de bloqueio de release**.
+**Aceite da fase (executado pela Íris, com Evolution real e 2 instâncias):**
+1. Campanha de 50 alvos com 2 números respeita **cota** e **janela**: nenhum envio fora da janela
+   configurada, nenhuma instância passa de `effectiveDailyLimit`.
+2. Os intervalos entre envios **não são constantes** e há pelo menos uma micro-pausa observável no log.
+3. Desconectar um número no meio → campanha **`halted`** (não `paused`), `haltReason` legível na tela,
+   e `resume` sem `acknowledgeHalt` é **recusado**.
+4. 🔴 **Um `OptOut` registrado durante a execução é honrado no envio seguinte.** **Critério de bloqueio
+   de release** — se este falhar, a fase não fecha, por melhor que esteja o resto.
+5. **Retomada sem duplicar:** matar o worker no meio do disparo e subir de novo não produz nenhuma
+   mensagem repetida no celular de teste (`Message.campaignTargetId @unique` é quem garante, §6.8.2).
+6. 🆕 **Incerto não vira mensagem dobrada:** com a Evolution artificialmente lenta (timeout forçado), o
+   alvo termina `failed/send_uncertain`, a cota **não** volta, e o motor **não** tenta de novo.
 
-**O que mudou na v1.1:** 4.2 não escreve o guard do zero — **importa o `evaluateSendGuard` já em
-produção desde a 3.7** (§4.9.3, §6.1). O que a Fase 4 acrescenta ao portão são dois `overrides` em
-`false` e o caminho `skipped/<reason>` no `CampaignTarget` (em vez de resposta HTTP). Se aparecer uma
-segunda implementação do portão no worker, o Órion reprova.
+**O que a v1.2 mudou em relação ao plano da v1.1:**
+- 4.2 não escreve o guard do zero — **importa o `evaluateSendGuard` que está em produção desde a 3.7**.
+  O que a Fase 4 acrescenta são três `overrides` em `false` (§6.1), dois fatos novos e a tradução
+  `reason → estado do alvo` (§6.8.5). **Segunda implementação do portão = reprovação do Órion.**
+- `warmup-roll` saiu de "junto com o kill switch" e virou item explícito, porque sem ele o warmup
+  **nunca avança** — a tabela do §6.2 seria decoração.
+- A validação de conteúdo da 1ª mensagem (era 5.4, Fase 5) **sobe para o `start`** (§4.5.10): deixá-la
+  na Fase 5 significaria disparar a Fase 4 inteira sem ela.
+- `retention.job` continua na Fase 5, agora com critério escrito (§6.9).
 
 ---
 
@@ -1966,7 +2759,7 @@ segunda implementação do portão no worker, o Órion reprova.
 | 5.1 | Auditoria OWASP: authz por rota, IDOR, injeção, secrets, rate limit, headers, SSRF no webhook | **Órion** |
 | 5.2 | Hardening: `apikey` do Evolution em comparação de tempo constante, `instanceKey` não enumerável, CSP | **Órion + Vega** |
 | 5.3 | LGPD executável: `retention.job`, página pública de descadastro, ação de eliminação | **Vega** |
-| 5.4 | Validação do conteúdo obrigatório da 1ª mensagem no `start` | **Vega** |
+| ~~5.4~~ | ~~Validação do conteúdo obrigatório da 1ª mensagem no `start`~~ — ⬆️ **subiu para a Fase 4** (§4.5.10): deixá-la aqui significaria disparar a Fase 4 inteira sem ela | **Vega** |
 | 5.4b | 🆕 Validação do mesmo conteúdo obrigatório **no envio unitário** (§4.9, G10) — já entregue na Fase 3 | **Vega** |
 | 5.5 | Deploy: TLS (EasyPanel), **backup diário do Postgres com restore testado**, healthchecks, rollback | **Vulcano** |
 | 5.6 | Logs estruturados, alertas lendo `ALERT_WEBHOOK_URL` (scraper quebrado, número banido, Evolution fora) | **Vulcano + Vega** |
@@ -2070,13 +2863,13 @@ tarde que a base estava errada.
 |---|---|---|---|
 | D1 | Sem proxy rotativo | Custo recorrente sem problema comprovado; encaixe pronto | Ao primeiro `CAPTCHA_DETECTED` recorrente |
 | D2 | Polling em vez de WebSocket/SSE | Polling de 3s resolve para ~20 usuários; SSE adiciona complexidade de infra | > 50 usuários simultâneos |
-| D3 | Sem multi-tenancy real (só `ownerId`) | Uso interno/poucos clientes; adicionar `orgId` depois é migração simples se os índices já preverem | Primeiro cliente que exige isolamento |
+| ~~D3~~ | ~~Sem multi-tenancy real (só `ownerId`)~~ | 🔒 **ENCERRADA em 2026-09-22 (v1.2), não adiada.** O dono decidiu que o produto é de **uso próprio** (§0.1): não existe "primeiro cliente que exige isolamento". `ownerId` no `Lead` permanece como **atribuição de responsável** entre operadores, não como fronteira de segurança | **Nunca.** Não construir `orgId`, escopo por organização nem tela de organizações |
 | D4 | Sem subdivisão de cidades saturadas | Não sabemos o tamanho do problema; a flag `saturated` vai medir | Fase 6, com dado real |
 | D5 | Só texto no disparo (sem mídia) | Texto puro tem menor risco de ban e cobre o caso de uso | Após 60 dias de operação estável |
 | D6 | Feriados em tabela estática | Baixo custo de manutenção anual vs. dependência de API | Se o usuário pedir feriado municipal |
 | D7 | Sem versionamento de template | Snapshot na campanha já resolve o problema real (corrupção de campanha ativa) | Se houver necessidade de auditoria histórica |
 | **D8** | **Sem reconciliação de status de mensagem** — se um `messages.update` chegar durante um restart do `web`, o evento se perde (respondemos sempre 200 por desenho) e a `Message` fica `sent` para sempre. Idem para `Message` `queued` órfã do write-ahead do §4.9.5 | O impacto é **métrica de entrega subestimada**, não mensagem duplicada nem envio perdido. O paliativo do §4.8 (re-busca única após 2s) cobre a corrida comum, e o `logger.warn` mede se o resto importa | Quando o `warn` aparecer com frequência, ou quando a taxa de entrega virar número de venda |
-| **D9** | **Não existe model de configuração** (`Settings`/`Organization`) — `{{minha_empresa}}` é lido de `APP_COMPANY_NAME` (env) | Há um único operador/empresa hoje; um model de configuração para uma linha é cerimônia. Mas isso significa que **trocar o nome do remetente exige redeploy**, e que multi-tenancy (D3) esbarra aqui | No primeiro cliente com marca própria — provavelmente junto com a D3 |
+| **D9** | **Não existe model de configuração** (`Settings`/`Organization`) — `{{minha_empresa}}` é lido de `APP_COMPANY_NAME` (env) | 🔒 **ACEITA EM DEFINITIVO (v1.2).** Com uso próprio (§0.1) há uma única empresa remetente, e um model de configuração para uma linha é cerimônia. O custo residual — trocar o nome do remetente exige redeploy — é evento raro. O gatilho antigo ("primeiro cliente com marca própria") foi cancelado junto com a D3 | Só se um dia o dono operar sob mais de uma marca |
 
 ---
 
@@ -2119,6 +2912,20 @@ DISPATCH_ALLOW_SATURDAY=true        # domingo e feriado nacional: nunca, não é
 # Envio unitário (§4.9)
 MANUAL_SEND_RATE_PER_MIN=10         # por usuário; 429 acima disso
 MANUAL_SEND_DUPLICATE_WINDOW_S=60   # anti-duplo-clique por lead
+COLD_FOLLOWUP_COOLDOWN_H=24         # 🆕 v1.2 (§4.9.10, G9b) — 2º contato frio para quem nunca
+                                    # respondeu. Vale para o manual E para a campanha
+
+# Motor de disparo (§6.8) — 🆕 v1.2
+DISPATCH_TICK_INTERVAL_S=15         # período do job repetível dispatch:tick
+DISPATCH_LEASE_S=120                # lease do alvo reservado; expirado, ele volta sozinho
+DISPATCH_MAX_ATTEMPTS=3             # acima disso o alvo vira failed/max_attempts
+DISPATCH_MICRO_PAUSE_EVERY_MIN=18   # micro-pausa a cada 18..25 envios (§6.3)
+DISPATCH_MICRO_PAUSE_EVERY_MAX=25
+DISPATCH_MICRO_PAUSE_MIN_S=300      # duração da micro-pausa: 5..12 min
+DISPATCH_MICRO_PAUSE_MAX_S=720
+DISPATCH_UNCERTAIN_DEGRADE_AT=3     # incertos seguidos → instância sai da rotação + alerta high
+DISPATCH_UNCERTAIN_HALT_AT=5        # incertos seguidos → halt da campanha (§6.8.6)
+CAMPAIGN_MAX_TARGETS=5000           # teto de alvos por campanha no POST (§4.5.4)
 
 # --- Identidade do remetente (§7.4) ---
 APP_COMPANY_NAME=                   # resolve {{minha_empresa}}. Sem isso, 1º contato frio é bloqueado
@@ -2162,3 +2969,10 @@ ALERT_WEBHOOK_URL=                  # opcional: Slack/Discord/Telegram
 | **A20** | **`error.reason`**: sub-código legível por máquina no envelope de erro. `code` governa o HTTP; `reason` é o único campo em que a UI ramifica | **§4.0** |
 | **A21** | **Fase 0 = walking skeleton com infra real** antes de qualquer domínio; fase só fecha com aceite executado contra serviço real | **§8.0, §8.2** |
 | **A22** | **A taxa medida de leads com celular decide se `scrape-detail` é melhoria, requisito ou bloqueante** — critério numérico fechado, não julgamento | **§8.3** |
+| **A23** | 🔒 **Uso próprio.** Sem venda, sem conta por cliente, sem isolamento por organização. **D3 encerrada, não adiada**; D9 aceita em definitivo. LGPD, auth e anti-ban continuam valendo integralmente | **§0.1, §9.2** |
+| **A24** | **Cadência é propriedade do NÚMERO, não do chamador.** Um gate (`WhatsAppInstance.nextSendAllowedAt`) honrado pelo motor e pelo envio manual; resposta em conversa aberta passa, contato frio não | **§4.9.10, §6.8.7** |
+| **A25** | **Resultado incerto não é retentado, e a cota não volta.** Alvo vira `failed/send_uncertain`; 3 incertos seguidos tiram a instância da rotação, 5 dão `halt` na campanha | **§6.8.6** |
+| **A26** | **Claim de alvo por lease sobre `scheduledFor`**, sem status `sending` no enum. A garantia dura contra envio duplicado é `Message.campaignTargetId @unique`, não o lock | **§6.8.2** |
+| **A27** | **Alvos materializados no `POST`, não no `start`** — o operador confere *quais* leads entraram, não só quantos; `start` reavalia opt-out numa segunda passagem | **§4.5.2** |
+| **A28** | **Campanha `running` não é editável.** Pausar primeiro custa um clique e elimina a classe inteira de bug de cadência lida antes e gravada depois | **§4.5.5** |
+| **A29** | **`meta` não existe no envelope**: o mapa do guard viaja em `details[]` com `path` = nome da chave, e é propagado **sempre** que existir — não por lista de `reason` privilegiados | **§4.0, §4.9.7** |
