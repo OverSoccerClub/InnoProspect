@@ -1,101 +1,125 @@
 # PROGRESSO — InnoProspect
 
 Sistema de prospecção B2B: filtra empresas por **setor/nicho + UF**, coleta os
-contatos, e dispara **mensagens de WhatsApp** para os leads.
+contatos no Google Maps e aborda os leads por **WhatsApp**, com descadastro e
+anti-ban.
 
 - **Repositório:** github.com/OverSoccerClub/InnoProspect
 - **Produção:** EasyPanel (projeto `inno-prospect`)
-- **Arquitetura:** `ARQUITETURA.md` **v1.1** · **Deploy:** `DEPLOY.md`
-- **Revisões:** `REVISAO-ARQUITETURA.md` (Nova) · `REVISAO-QA.md` (Íris)
-- **Última atualização:** 2026-08-03
+- **Documentos:** `ARQUITETURA.md` (v1.1) · `DEPLOY.md` · `DESIGN-SYSTEM.md` ·
+  `REVISAO-ARQUITETURA.md` · `REVISAO-QA.md`
+- **Última atualização:** 2026-09-22
 
 ---
 
-## Estado atual
+## ⚠️ Estado atual em uma linha
 
-O `frontend` está no ar, o login funciona e o banco está migrado. As Fases 1, 2
-(parcial) e 3 estão escritas e testadas. A **Fase 4 (campanhas e disparo) não
-existe**.
-
-⚠️ **Continua valendo:** o **worker nunca subiu em produção** e **nenhum lead
-real foi coletado**. O scraper jamais abriu o Google Maps.
-
-### Métricas
-
-| | |
-|---|---|
-| Testes | **219** (core 81, messaging 48, web 48, scraper 35, contracts 7) |
-| Rotas de API | 23 |
-| `pnpm test` na raiz | ✅ existe e roda tudo |
+O código evoluiu muito, mas **nada disso está no GitHub nem em produção**: o push
+está bloqueado (credencial do GitHub expirada nesta máquina, 8 commits à frente
+do remoto) e a produção devolve **404 em todas as rotas** desde pelo menos
+2026-09-22. O sistema **nunca coletou um lead real nem enviou uma mensagem real**.
 
 ---
 
-## Revisão profunda (2026-08-03) — o diagnóstico
+## Por área
 
-Três auditorias independentes convergiram no mesmo ponto: **o problema não era
-o que faltava escrever, era o que estava escrito e não estava ligado.**
-
-| Achado | Estado |
+| Área | Situação |
 |---|---|
-| Assertions de sanidade do scraper eram **código morto** (zero chamadores) | ✅ ligadas |
-| Pausa da fila era `setTimeout` **em memória** — sumia no restart | ✅ persistida no Redis |
-| `/health` respondia **"ok" com o worker morto** | ✅ reporta cada dependência |
-| Rotas públicas **sem rate limit**, corpo parseado antes da auth | ✅ corrigido |
-| UI tratava `RATE_LIMITED` que o backend **nunca emitia** | ✅ backend emite |
-| `USE_MOCKS` era **fail-open** (default = dado falso) | ✅ invertido |
-| `isOptedOut` chumbado em `false`, filtro no-op | ✅ consulta real |
-| `apps/web` com **zero testes** | ✅ 48 testes |
-| **Sem backup** do Postgres | ✅ documentado + scripts |
-| Imagem da Evolution API **órfã desde 2025** | ✅ `evoapicloud/evolution-api:v2.3.7` |
-| Nada no sistema chama `sendText` | ⏳ contrato §4.9 escrito, **falta implementar** |
+| Landing pública com hero, painel premium, identidade visual | ✅ Pronto (v3) |
+| Coleta (busca por nicho/UF, scraper, fila, sanidade, pausa, heartbeat) | ✅ Escrito e testado · ❌ nunca rodou de verdade |
+| Lista e ficha de leads | ✅ Pronto |
+| WhatsApp: conectar número, templates, descadastro público | ✅ Pronto |
+| **Envio de mensagem individual** (contrato §4.9) | ✅ Pronto (2026-09-22) · ❌ nunca rodou contra Evolution real |
+| **Conversa na ficha do lead** | ✅ Pronto |
+| Alertas por webhook, limite de tentativas no login | ✅ Pronto |
+| **Campanhas e motor de disparo em massa** | ❌ Não existe |
+| Gestão de usuários, recuperação de senha, configurações | ❌ Não existe |
+| LGPD: retenção e exclusão a pedido | ❌ Não existe |
 
-### Commits da rodada
+**Testes:** 340 (core 130, web 108, messaging 49, scraper 35, worker 11,
+contracts 7). `pnpm test` na raiz roda tudo.
 
-`addc7d4` opt-out real na listagem · `17d81c1` ARQUITETURA v1.1 + contrato do
-envio unitário · `a1d3a2e` infra de teste · `fc46446` sanidade, pausa,
-heartbeat, rate limit · `f9014fd` backup, headers, Evolution despinada
+---
+
+## Commits de 2026-09-22 (todos só locais)
+
+| Commit | O quê |
+|---|---|
+| `6eae2d1` | Landing pública com hero e painel com abertura |
+| `167ac18` | Painel premium v2 + `GET /api/v1/dashboard/summary` + correção de fuso no SQL |
+| `49fe809` | Layout v3 + CSP com `unsafe-eval` só em dev |
+| `217724e` | Índices do painel |
+| `1c8c086` | Alertas por webhook + limite de login + `DEPLOY.md` com `OPTOUT_TOKEN_SECRET` |
+| `838bdbd` | **Primeiro envio de WhatsApp** + conversa na ficha do lead |
 
 ---
 
 ## Próximos passos, em ordem
 
-### 1. Subir o worker (ação do dono — BLOQUEIA tudo)
-`inno-prospect-backend`: `apps/worker/Dockerfile`, contexto `/`, **sem porta,
-sem domínio, sem health check HTTP**. Sem ele toda busca fica em `queued`.
+### 1. Destravar (ações do dono, sem código)
+1. **Push:** `git -C C:\Projetos\Web\InnoProspect push origin main` (abre o login
+   do GitHub; depois disso os próximos pushes voltam a funcionar).
+2. **Produção:** o domínio do `frontend` devolve 404 vazio em tudo, o que indica
+   o proxy do EasyPanel sem serviço atendendo (serviço parado, domínio trocado ou
+   deploy que não subiu). Conferir no painel.
+3. **Redis:** no último diagnóstico o `web` não conectava. O `/api/v1/health`
+   agora mostra em `checks.redis.target` para onde tentou conectar.
+4. **Worker** (`inno-prospect-backend`) nunca subiu.
+5. **Variáveis novas no EasyPanel**, antes do primeiro envio real:
+   `OPTOUT_TOKEN_SECRET` (**obrigatória**: sem ela o descadastro público recusa
+   todos os links) e `APP_COMPANY_NAME` no `frontend`; `ALERT_WEBHOOK_URL`
+   (opcional) no `worker`. Ver `DEPLOY.md`.
+6. **Backup** ativado e **restore testado** (`infra/backup/README.md`).
 
-### 2. Ativar o backup (ação do dono)
-`infra/backup/README.md`. O EasyPanel tem recurso **nativo** de backup de
-Postgres com destino S3-compatível — usar como primário. **Testar o restore**
-num serviço descartável; backup sem restore testado não é backup.
+### 2. Primeira busca real
+"clínica odontológica" em Campinas-SP. Medir **% com telefone** e **% de
+celular**: os cortes do `ARQUITETURA.md §8.3` decidem se `scrape-detail` vira
+requisito.
 
-### 3. Rodar a busca de Campinas — o dado que decide uma feature
-"clínica odontológica" em Campinas-SP. Precisa reportar **dois números**: % de
-leads com telefone e % dos telefones que são móveis. Cortes em `ARQUITETURA.md
-§8.3` (≥50% / 25–50% / <25%) decidem se `scrape-detail` é melhoria ou requisito
-— o card da lista do Maps frequentemente não traz telefone.
+### 3. Primeiro envio real
+Um envio manual pela ficha do lead, conferindo na Evolution real o que só foi
+testado com mock (formato do QR, `messageTimestamp`, códigos de erro).
 
-### 4. Implementar o §4.9 — envio unitário
-`POST /api/v1/leads/:id/messages`. **A primeira mensagem que o sistema envia.**
-O guard de opt-out nasce aqui, com carimbo de 5s que faz o código quebrar se
-alguém cachear a blacklist. A Fase 4 herda um portão já exercitado.
+### 4. Fase 4: campanhas e motor de disparo
+Público, template, números e janela; `dispatch-tick` com
+`FOR UPDATE SKIP LOCKED`; aquecimento; rotação; jitter; kill switch. **Herda o
+guard de envio** que já está em produção no envio unitário.
+**Pendência do Órion para esta fase:** o endpoint unitário não tem jitter nem
+limite por lead/instância; comparar com o ritmo do motor.
 
-### 5. Fase 4 — campanhas e disparo com anti-ban
-`dispatch-tick`, `warmup-roll`, janela, jitter, rotação, kill switch.
-
-### 6. Fase 5 — retenção LGPD, eliminação do titular, monitoramento
+### 5. Depois
+Exportar CSV · ações em massa · gestão de usuários · recuperação de senha ·
+configurações · LGPD (retenção, exclusão) · testes de ponta a ponta · polimento
+das telas de Buscas.
 
 ---
 
 ## Decisões em aberto (dependem do dono)
 
-1. **Horário de envio:** piso 08:00–20:00, sem domingo (§4.9.6), ancorado no
-   parâmetro de telemarketing porque é o que sustenta a base legal de legítimo
-   interesse. Se o nicho tiver praxe diferente, o número é do dono — **mas só
-   para estreitar**.
-2. **HTTPS no painel do EasyPanel** — acessado por IP sobre HTTP.
-3. **Quantos números de WhatsApp?** Define se a rotação entre instâncias é
-   essencial na Fase 4.
-4. **Texto de descadastro na 1ª mensagem:** "responda SAIR" ou link público?
+1. **Uso próprio ou venda para clientes?** A mais estrutural. Se for vendido,
+   entra um bloco inteiro: conta por cliente com dados isolados, planos e
+   cobrança. Afeta o banco e a gestão de usuários, que por isso está esperando.
+2. **Horário de envio:** piso 08:00–20:00, sem domingo (§4.9.6), configurável só
+   para **estreitar**.
+3. **Quantos números de WhatsApp.**
+4. **Descadastro na 1ª mensagem:** "responda SAIR" ou link público.
+5. **Canal de contato da landing** (nenhum foi inventado).
+6. **Serviço de e-mail** (necessário para recuperação de senha).
+7. **HTTPS no painel do EasyPanel** (acessado por IP, sem criptografia).
+
+---
+
+## Rodar localmente para avaliar (sem banco)
+
+Há um servidor de demonstração configurado em `.claude/launch.json` (fora do git),
+com `NEXT_PUBLIC_USE_MOCKS=true`. Mostra **dados de exemplo**. Como não há banco,
+o login pela tela não funciona: o Atlas gera uma sessão local com um segredo
+descartável e a coloca no navegador do app (procedimento da Lyra em
+`.claude/agent-memory/lyra/convention_test_session_cookie.md`).
+
+⚠️ Com o servidor de dev ligado, `pnpm typecheck` na raiz e o build falham no
+Windows (o `next dev` trava o binário do Prisma). Desligue o servidor antes da
+validação completa.
 
 ---
 
@@ -103,31 +127,33 @@ alguém cachear a blacklist. A Fase 4 herda um portão já exercitado.
 
 - **Fonte:** scraping próprio. **Canal:** Evolution API. **Stack:** Next 15 + TS
   + Prisma + Postgres.
-- **Opt-out é por telefone**, checado antes de cada envio. O guard **lança
-  exceção** se a checagem tiver mais de 5s — impossível cachear por acidente.
-- **Só pode existir UM call site de `sendText`** em produção. Mais de um =
-  segundo caminho sem portão. Auditoria: `grep -rn "sendText(" apps/ packages/`.
-- **Seletores do Maps em UM arquivo.** **Evolution API só em `packages/messaging`.**
+- **Descadastro é por telefone** e checado imediatamente antes de cada envio. O
+  guard **lança** se a checagem tiver mais de 5s: é impossível cachear.
+- **Um único ponto de chamada ao `sendText`** em produção
+  (`apps/web/src/lib/services/messages.ts`). Mais de um é um segundo caminho sem
+  portão.
+- **`sendText` nunca é retentado automaticamente.** Retry de transporte é decisão
+  por operação: retentar um envio pode duplicar a mensagem no WhatsApp do lead.
+  Timeout é resultado **incerto** ("Não confirmada" na tela), não falha.
+- **Seletores do Maps em um arquivo; Evolution API só em `packages/messaging`.**
 - **Re-scraping nunca sobrescreve dado humano** (`buildMachineUpdate` lança).
-- **Contadores incrementados, nunca `COUNT(*)`** — telas fazem polling.
-- **Eliminação LGPD apaga `CampaignTarget`** (guarda snapshot do telefone); os
-  contadores agregados preservam o histórico anônimo.
-- **`halted` ≠ `paused`.** **Pausa por mudança de layout é indefinida** — só sai
-  com decisão humana.
-- **`apps/web` nunca importa `@inno/scraper`.**
-- **Modo degradado tem que ser difícil de ativar**, nunca o padrão.
+- **Contadores incrementados, nunca `COUNT(*)`.**
+- **`halted` ≠ `paused`. Pausa por mudança de layout só sai por decisão humana.**
+- **Modo degradado é difícil de ativar, nunca o padrão** (`USE_MOCKS` é opt-in).
+- **CSP de produção sem `unsafe-eval`**; a liberação existe só em `NODE_ENV=development`.
+- **Rate limit de login conta só falhas**; sucesso zera o e-mail, nunca o IP.
 
 ## Armadilhas já pagas (não repetir)
 
-- Bugs que **só aparecem em `next build`**: componente como prop de
-  Server→Client; middleware Edge + Prisma; imports `.js` sem `transpilePackages`.
-- **`COPY` de pacote do workspace esquecido no Dockerfile não quebra o
-  `pnpm install`** — falha só no bundle. Há guarda nos dois Dockerfiles agora.
-- `COPY` de pasta inexistente aborta o build — `apps/web/public/.gitkeep`.
+- **`DateTime` do Prisma é `TIMESTAMP` sem fuso, gravado em UTC.** SQL cru por dia
+  de São Paulo exige `AT TIME ZONE` duplo. Mock de `$queryRaw` prova forma, nunca fuso.
+- Bugs que só aparecem em `next build`: componente como prop de Server→Client;
+  middleware Edge + Prisma; imports `.js` sem `transpilePackages`.
+- `COPY` de pacote do workspace esquecido no Dockerfile não quebra o `pnpm install`;
+  há guarda nos dois Dockerfiles. `apps/web/public/.gitkeep` precisa existir.
 - pnpm em Docker exige `--shamefully-hoist`.
-- **`node node_modules/.bin/tsx` NÃO funciona** (shell script). Use
-  `node node_modules/tsx/dist/cli.mjs`.
-- E-mail do admin precisa ser gravado em minúsculas.
-- `next build` falha no Windows no passo `standalone` (EPERM de symlink) — é o
-  SO, não o código.
-- **`Queue#client` do BullMQ não é o cliente do ioredis** — abstração própria.
+- `node node_modules/.bin/tsx` não funciona (é shell script). Localmente o Node 24
+  executa `.ts` direto.
+- E-mail do admin gravado em minúsculas.
+- `next build` falha no Windows no passo `standalone` (EPERM de symlink): é o SO.
+- `git grep` só busca arquivos versionados; arquivo novo precisa de busca no disco.
