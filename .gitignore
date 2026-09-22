@@ -18,6 +18,14 @@ build/
 # --- Prisma ---
 packages/db/src/generated/
 
+# --- Build de @inno/db (tsc -p tsconfig.build.json, ver package.json#exports) ---
+# index.ts/client.ts compilam EM LUGAR (ao lado do .ts) para o Node em
+# produção conseguir importar @inno/db sem bundler — artefato, não fonte.
+packages/db/src/index.js
+packages/db/src/index.js.map
+packages/db/src/client.js
+packages/db/src/client.js.map
+
 # --- Testes ---
 coverage/
 playwright-report/

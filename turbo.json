@@ -8,12 +8,25 @@
     },
     "build": {
       "dependsOn": ["^build", "^generate", "generate"],
-      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+      // "src/*.js"/"src/*.js.map" (raso, não "src/**") é só pra @inno/db —
+      // ele compila index.ts/client.ts EM LUGAR (tsc, ver
+      // packages/db/tsconfig.build.json) em vez de num dist/ próprio. Sem
+      // isso o turbo cacheia o task mas não sabe restaurar o output ("no
+      // output files found" — visto ao rodar `turbo run build --filter=worker`
+      // em 2026-09-22). Raso de propósito: não alcança src/generated/** (já
+      // coberto pelos outputs do task "generate" acima).
+      "outputs": [".next/**", "!.next/cache/**", "dist/**", "src/*.js", "src/*.js.map"]
     },
     "dev": {
       "cache": false,
       "persistent": true,
-      "dependsOn": ["^generate", "generate"]
+      // "^build" entrou em 2026-09-22: @inno/db agora tem script "build"
+      // (tsc -p tsconfig.build.json, compila index.ts/client.ts EM LUGAR —
+      // ver package.json#exports do pacote). Sem isso, `pnpm dev` quebraria
+      // pro worker (e para o web, embora lá o Next tolere .ts via
+      // transpilePackages) na primeira vez que @inno/db#build nunca rodou:
+      // "exports"."default" aponta pro .js compilado, não mais pro .ts fonte.
+      "dependsOn": ["^generate", "generate", "^build"]
     },
     "lint": {
       "outputs": []

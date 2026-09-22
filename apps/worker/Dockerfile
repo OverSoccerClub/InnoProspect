@@ -6,17 +6,37 @@
 # Build context DEVE ser a RAIZ do monorepo:
 #   docker build -f apps/worker/Dockerfile -t innoprospect-worker .
 #
-# HISTÓRICO: apps/worker depende de @inno/db, @inno/core e @inno/scraper
-# (fila scrape:search real, Fase 1.4 do Vega). @inno/core também depende de
-# @inno/contracts (workspace:^) — por isso ela entra abaixo mesmo sem o
-# worker importar dela diretamente. O worker NÃO é bundlado pelo tsup com os
-# pacotes internos dentro (tsup só empacota apps/worker/src/index.ts; deps
-# workspace:* ficam `external` por padrão) — o `dist/index.js` importa esses
-# pacotes em runtime via `node_modules` (symlink do pnpm pro código-fonte em
-# `packages/*/src`), então o CÓDIGO-FONTE deles precisa estar presente na
-# imagem final, não só o `dist` do worker. @inno/db também precisa do
-# Prisma Client GERADO (binário de engine para Linux) — feito no stage
-# `build`, dentro do container (nunca copiado do host).
+# HISTÓRICO: apps/worker depende de @inno/db, @inno/core, @inno/contracts e
+# @inno/scraper (fila scrape:search real, Fase 1.4 do Vega).
+#
+# INCIDENTE REAL DE PRODUÇÃO (Vulcano, 2026-09-22): o build passava no
+# EasyPanel, o container subia e morria no boot com
+# `TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".ts" for
+# .../packages/db/src/index.ts`. Causa: `@inno/core`/`@inno/contracts`/
+# `@inno/scraper`/`@inno/db` exportam `.ts` fonte direto (sem build próprio) —
+# o `apps/web` nunca sentiu isso porque o Next transpila esses pacotes
+# (`transpilePackages`), mas `node dist/index.js` puro não tem esse
+# tratamento, e Node não entende `.ts`.
+#
+# Correção (ver `apps/worker/tsup.config.ts` e `packages/db/tsconfig.build.json`):
+#   - `@inno/core`, `@inno/contracts`, `@inno/scraper` (só TypeScript, sem
+#     binário nativo) agora são EMBUTIDOS dentro de `dist/index.js` pelo tsup
+#     (`noExternal`). O worker não precisa mais do código-fonte deles na
+#     imagem FINAL — só no stage `build`, onde o tsup lê os `.ts` pra
+#     empacotar (por isso o `COPY` completo deles continua abaixo, mas SÓ até
+#     o stage `build`; não são copiados pro stage `runner`).
+#   - `@inno/db` fica de fora do bundle DE PROPÓSITO: ele expõe o Prisma
+#     Client GERADO, cujo query engine é localizado por `__dirname` relativo
+#     ao PRÓPRIO arquivo gerado — embutir quebraria essa resolução em
+#     runtime, contra banco real. Em vez disso, `@inno/db` ganhou um build
+#     próprio e pequeno (`tsc -p tsconfig.build.json`, compila só
+#     `src/index.ts`/`src/client.ts`, em lugar — o resultado fica ao LADO do
+#     `.ts`) e continua sendo resolvido via `node_modules` normalmente.
+#     O CÓDIGO-FONTE dele (agora com `.js` compilado dentro) PRECISA
+#     continuar na imagem final — é o único pacote interno que a imagem
+#     `runner` ainda copia. Ele também carrega o Prisma Client GERADO
+#     (binário de engine para Linux), gerado no stage `build`, dentro do
+#     container (nunca copiado do host).
 #
 # REVISÃO (Vulcano, item 5.5 — auditoria pedida pelo Órion):
 # - CORREÇÃO DE BUG REAL (não só otimização): a versão anterior deste
@@ -99,6 +119,13 @@ if(faltando.length){\
 console.log('[Dockerfile] Todos os pacotes @inno/* de apps/worker estao presentes.');"
 
 RUN pnpm --filter @inno/db run generate
+# Compila src/index.ts/src/client.ts de @inno/db (tsc, em lugar — ver
+# packages/db/tsconfig.build.json). PRECISA rodar antes do stage `runner`
+# copiar packages/db: sem isso, o node_modules/@inno/db (symlink pro
+# código-fonte) resolveria pro .ts de novo, reproduzindo o incidente de
+# 2026-09-22. Não precisa rodar ANTES do `tsup` abaixo — @inno/db fica
+# external no bundle do worker, o tsup não lê o conteúdo dele.
+RUN pnpm --filter @inno/db run build
 RUN pnpm --filter worker run build
 
 # ---------- Stage 4: prod-deps (install SÓ produção — vai pra imagem final) ----------
@@ -138,12 +165,17 @@ RUN if ! getent group pwuser >/dev/null 2>&1; then groupadd --system pwuser; fi 
   && mkdir -p /home/pwuser \
   && chown -R pwuser:pwuser /app /home/pwuser "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}"
 
+# packages/core, packages/contracts e packages/scraper NÃO entram aqui —
+# desde 2026-09-22 seu código-fonte vai embutido dentro de dist/index.js
+# (tsup noExternal, ver apps/worker/tsup.config.ts). Só o stage `build`
+# precisa do .ts deles (pra empacotar); a imagem final não. node_modules/@inno/{core,contracts,scraper}
+# (via --shamefully-hoist, stage prod-deps abaixo) fica como symlink pendurado
+# sem destino nesta imagem — inofensivo, porque dist/index.js não importa
+# mais esses três pelo nome de pacote (confirmado: `grep '@inno/' dist/index.js`
+# só mostra @inno/db).
 COPY --from=build --chown=pwuser:pwuser /app/apps/worker/dist ./dist
 COPY --from=build --chown=pwuser:pwuser /app/apps/worker/package.json ./package.json
 COPY --from=build --chown=pwuser:pwuser /app/packages/db ./packages/db
-COPY --from=build --chown=pwuser:pwuser /app/packages/core ./packages/core
-COPY --from=build --chown=pwuser:pwuser /app/packages/contracts ./packages/contracts
-COPY --from=build --chown=pwuser:pwuser /app/packages/scraper ./packages/scraper
 COPY --from=prod-deps --chown=pwuser:pwuser /app/node_modules ./node_modules
 
 # Best-effort: só o Chromium é usado (packages/scraper/src/engine/browser.ts).

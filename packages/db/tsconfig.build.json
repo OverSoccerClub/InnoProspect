@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // Build de PRODUÇÃO só dos dois arquivos que @inno/db escreve à mão
+  // (index.ts, client.ts) — o resto do pacote (schema/migrações, prisma/seed.ts,
+  // src/generated/**) não entra aqui. Ver comentário em package.json#exports
+  // e o registro em .claude/agent-memory/vulcano/ (worker morrendo com
+  // ERR_UNKNOWN_FILE_EXTENSION ao importar @inno/db em produção).
+  //
+  // rootDir E outDir são o MESMO diretório (src) de propósito: o .js
+  // compilado precisa cair ao LADO do .ts, não em packages/db/dist/, porque
+  // client.ts importa `./generated/client/index.js` por caminho relativo — se
+  // o output saísse em outro diretório, esse import relativo apontaria para
+  // um `generated/` que não existe lá (o Prisma Client é gerado só dentro de
+  // src/generated, sempre, pelo `prisma generate`). Compilar em-lugar
+  // preserva o caminho relativo sem precisar reescrevê-lo.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "src",
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["src/index.ts", "src/client.ts"]
+}
