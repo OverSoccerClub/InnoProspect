@@ -32,7 +32,7 @@ Padrões fixados ao implementar a Fase 1 das rotas de API (ARQUITETURA §4) — 
    `engine/playwright-engine.ts`), duplicar a função pura localmente com comentário apontando a fonte —
    é o que fiz em `lib/services/searches.ts`.
 5. **`apps/web` não importa `apps/worker`** (regra de dependência do monorepo — só `packages/*` são
-   compartilhados entre apps). Nome de fila BullMQ (`'scrape:search'`) e a fórmula de prioridade
+   compartilhados entre apps). Nome de fila BullMQ (`'scrape-search'`) e a fórmula de prioridade
    (`priorityFromPopulation`) estão duplicados, de propósito, em `apps/web/src/lib/queue.ts` (produtor)
    e `apps/worker/src/queues.ts` (consumidor) — é contrato de protocolo (nome de canal Redis), não
    código compartilhável. Se mudar a fórmula/nome num lado, mudar no outro.

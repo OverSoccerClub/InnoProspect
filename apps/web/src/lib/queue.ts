@@ -1,20 +1,26 @@
 /**
  * lib/queue.ts — produtor BullMQ usado pelas rotas de API para enfileirar
- * `SearchTask`s na fila `scrape:search` consumida por `apps/worker`
+ * `SearchTask`s na fila `scrape-search` consumida por `apps/worker`
  * (ARQUITETURA §1.2/§5.3: "web e worker não se chamam por HTTP, comunicam-se
  * por Postgres (estado) + Redis (fila)").
  *
- * ⚠️ O nome literal da fila (`'scrape:search'`) e o nome do job
+ * ⚠️ O nome literal da fila (`'scrape-search'`) e o nome do job
  * (`'scrape-search-task'`) precisam bater byte a byte com
  * `apps/worker/src/queues.ts` (fonte única "de fato" — ver comentário lá).
  * `apps/web` não pode importar de `apps/worker` (regra de dependência do
  * monorepo, ARQUITETURA §2: só `packages/*` são compartilhados entre apps),
  * então os dois lados duplicam essa constante de propósito — é um contrato
  * de protocolo (nome de canal Redis), não código.
+ *
+ * ⚠️ E não pode conter `:` — o BullMQ rejeita no construtor
+ * (`Error: Queue name cannot contain :`), o que aqui derrubaria a rota que
+ * enfileira e lá derrubaria o worker no boot. Ver o comentário longo em
+ * `apps/worker/src/queues.ts`; `queue.test.ts` guarda os dois lados.
  */
 import { Queue } from 'bullmq';
 
-const SCRAPE_SEARCH_QUEUE_NAME = 'scrape:search';
+/** Exportado para o teste de regressão poder comparar com o lado do worker. */
+export const SCRAPE_SEARCH_QUEUE_NAME = 'scrape-search';
 export const SCRAPE_SEARCH_JOB_NAME = 'scrape-search-task';
 
 export type ScrapeSearchJobData = { searchTaskId: string };

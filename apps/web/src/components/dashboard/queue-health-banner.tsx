@@ -26,7 +26,7 @@ type QueueHealthBannerProps = {
 };
 
 /**
- * Banner de saúde da fila `scrape:search` — hoje o único jeito de descobrir
+ * Banner de saúde da fila `scrape-search` — hoje o único jeito de descobrir
  * que a coleta parou é abrir `/health` manualmente (lacuna real, não
  * cosmética). Consome `GET /api/v1/scraper/queue` (poll a cada 20s) e expõe
  * `POST /api/v1/scraper/queue/resume` atrás de uma confirmação explícita: a

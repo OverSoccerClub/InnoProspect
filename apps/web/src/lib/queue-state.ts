@@ -1,6 +1,6 @@
 /**
  * lib/queue-state.ts — leitura (e, no resume manual, limpeza) do estado
- * operacional da fila `scrape:search` gravado pelo worker em Redis. Ver
+ * operacional da fila `scrape-search` gravado pelo worker em Redis. Ver
  * `apps/worker/src/lib/queue-state.ts` — chaves e formato têm que bater byte
  * a byte (mesmo motivo do nome de fila duplicado em `lib/queue.ts`: `apps/web`
  * não pode importar de `apps/worker`, ARQUITETURA §2).

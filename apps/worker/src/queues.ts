@@ -6,17 +6,26 @@
  * `SearchTask`) precisa enfileirar nesta MESMA fila sem poder importar deste
  * app (regras de dependência do monorepo — só `packages/*` são
  * compartilhados entre apps, ver ARQUITETURA §2). Por isso o nome literal
- * `'scrape:search'` está duplicado em `apps/web/src/lib/queue.ts`, com
+ * `'scrape-search'` está duplicado em `apps/web/src/lib/queue.ts`, com
  * comentário cruzado para os dois lados não divergirem — é um contrato de
  * protocolo (nome de fila Redis), não código compartilhável.
+ *
+ * ⚠️ NOME DE FILA NÃO PODE CONTER `:`. O BullMQ usa `:` como separador dos
+ * seus próprios prefixos de chave no Redis (`bull:<fila>:<id>`) e valida isso
+ * no construtor: `new Queue('scrape:search')` lança
+ * `Error: Queue name cannot contain :` — o processo morre no boot, antes de
+ * consumir qualquer job. Foi assim que o worker entrou em crash-loop em
+ * produção (EasyPanel, bullmq 5.81.3) em 2026-09-22: o nome antigo era
+ * `scrape:search`. Separe com `-`. `queues.test.ts` falha se alguém
+ * reintroduzir `:` — inclusive nas filas da Fase 4, ainda não usadas.
  */
 import type { ConnectionOptions } from 'bullmq';
 
 export const QUEUES = {
   /** 1 job = 1 SearchTask (1 nicho × 1 município), ARQUITETURA §5.2/§5.3. */
-  scrapeSearch: 'scrape:search',
+  scrapeSearch: 'scrape-search',
   /** Fase 4 — tick de campanha de disparo. Não usado na Fase 1. */
-  dispatchTick: 'dispatch:tick',
+  dispatchTick: 'dispatch-tick',
   /** Fase 2+ — health-check, retenção, warmup. Não usado na Fase 1. */
   maintenance: 'maintenance',
 } as const;

@@ -78,7 +78,7 @@ export async function pauseQueueFor(
 
   logger[severity === 'critical' ? 'fatal' : 'error'](
     { code, resumeAt: resumeAt?.toISOString() ?? 'indefinido (exige POST /api/v1/scraper/queue/resume)' },
-    'scrape:search queue paused — intervenção automática de anti-detecção/anti-quebra',
+    'scrape-search queue paused — intervenção automática de anti-detecção/anti-quebra',
   );
 
   if (!wasAlreadyPaused) {

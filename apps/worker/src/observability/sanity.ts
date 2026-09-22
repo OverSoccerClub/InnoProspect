@@ -2,7 +2,7 @@
  * observability/sanity.ts — liga as assertions A1-A4 (`@inno/scraper/sanity`,
  * escritas e testadas, mas com zero chamadores até esta rodada — REVISAO-
  * ARQUITETURA §5.7/Onda 1 item 1.1: "o modo de falha mais perigoso do projeto
- * é o sucesso silencioso") ao banco real e à fila `scrape:search`.
+ * é o sucesso silencioso") ao banco real e à fila `scrape-search`.
  *
  * Chamado ao fim de CADA `SearchTask` bem-sucedida (`jobs/scrape-search.job.ts`)
  * — as janelas das assertions são GLOBAIS (últimas N tasks/leads do sistema
@@ -197,6 +197,6 @@ export async function evaluateAndRecordSanity(scrapeQueue: Queue): Promise<void>
 
   logger[newPausingResult.severity === 'critical' ? 'fatal' : 'error'](
     { code: newPausingResult.code, metric: newPausingResult.metric, threshold: newPausingResult.threshold },
-    'scrape:search queue pausada — assertion de sanidade disparou (intervenção humana necessária)',
+    'scrape-search queue pausada — assertion de sanidade disparou (intervenção humana necessária)',
   );
 }

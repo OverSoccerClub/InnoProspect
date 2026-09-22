@@ -246,7 +246,7 @@ sequenceDiagram
 
     U->>W: POST /api/v1/searches {niche, uf, cities?}
     W->>P: cria SearchJob (status=queued) + SearchTask por município
-    W->>Q: enqueue "scrape:search" (1 job = 1 SearchTask)
+    W->>Q: enqueue "scrape-search" (1 job = 1 SearchTask)
     W-->>U: 202 {searchJob}
     loop cada SearchTask (com rate limit + jitter)
         Q->>S: entrega job
@@ -274,7 +274,7 @@ sequenceDiagram
     W->>P: cria Campaign(draft) + CampaignTarget[] (snapshot dos leads)
     U->>W: POST /api/v1/campaigns/:id/start
     W->>P: Campaign.status=running
-    W->>Q: enqueue "dispatch:tick" (repeatable)
+    W->>Q: enqueue "dispatch-tick" (repeatable)
     loop a cada tick, respeitando janela + quota
         Q->>D: entrega tick
         D->>P: SELECT próximo CampaignTarget pending (FOR UPDATE SKIP LOCKED)
@@ -1701,7 +1701,7 @@ confirmação do §4.9.6. Desvio autorizado é aceitável; desvio invisível nã
 
 ### 4.10 Fila de disparo — pausa global (🔒 CONTRATO — 🆕 v1.2)
 
-Espelho exato de `/api/v1/scraper/queue`, aplicado à fila `dispatch:tick`. Existe porque o operador
+Espelho exato de `/api/v1/scraper/queue`, aplicado à fila `dispatch-tick`. Existe porque o operador
 precisa de **um** botão que para todo o disparo num incidente, e não há terminal confiável (§0). O
 motivo e a diferença entre esta pausa, `paused` e `halted` estão no §6.8.9.
 
@@ -1821,8 +1821,8 @@ vê leads das capitais nos primeiros minutos em vez de esperar 645 municípios p
 ```ts
 // apps/worker/src/queues.ts (referência)
 export const QUEUES = {
-  scrapeSearch: 'scrape:search',     // 1 job = 1 SearchTask (1 município)
-  dispatchTick: 'dispatch:tick',
+  scrapeSearch: 'scrape-search',     // 1 job = 1 SearchTask (1 município)
+  dispatchTick: 'dispatch-tick',
   maintenance:  'maintenance',
 } as const;
 
@@ -1952,7 +1952,7 @@ e grava zero leads durante 3 dias sem ninguém perceber. Contra isso, quatro ass
 
 | # | Assertion | Condição de alarme | Severidade | Ação automática |
 |---|---|---|---|---|
-| **A1** | **Zero-streak** | As últimas **5** tasks concluídas retornaram `resultCount === 0` | `critical` | **Pausa a fila `scrape:search`**, cria `ScraperHealthEvent`, alerta |
+| **A1** | **Zero-streak** | As últimas **5** tasks concluídas retornaram `resultCount === 0` | `critical` | **Pausa a fila `scrape-search`**, cria `ScraperHealthEvent`, alerta |
 | **A2** | **Fill-rate de nome** | Em janela de 50 leads capturados, `< 95%` têm `name` não vazio | `critical` | Pausa a fila + alerta (seletor de nome quebrou) |
 | **A3** | **Fill-rate de telefone** | `phone` presente cai abaixo de **50% da média móvel de 7 dias** | `high` | **Não pausa**, alerta (pode ser característica do nicho) |
 | **A4** | **Forma dos dados** | `>10%` dos ratings fora de 0–5, ou `>10%` dos telefones falhando na normalização E.164 | `high` | Alerta (seletores trocaram de posição — pegando o campo errado) |
@@ -1982,7 +1982,7 @@ Detalhes que fazem a diferença:
 
 ```mermaid
 flowchart TD
-    T["⏱️ dispatch:tick<br/>(job repetível, ~a cada 30s)"] --> A{"Campanha<br/>running?"}
+    T["⏱️ dispatch-tick<br/>(job repetível, ~a cada 30s)"] --> A{"Campanha<br/>running?"}
     A -->|não| Z["encerra tick"]
     A -->|sim| B{"Dentro da janela<br/>horária e dia útil?"}
     B -->|não| Z2["reagenda p/ próxima abertura"]
@@ -2224,7 +2224,7 @@ no claim seguinte.
 
 #### 6.8.3 O tick, passo a passo
 
-Job repetível BullMQ na fila `dispatch:tick` (já reservada em `apps/worker/src/queues.ts`), a cada
+Job repetível BullMQ na fila `dispatch-tick` (já reservada em `apps/worker/src/queues.ts`), a cada
 `DISPATCH_TICK_INTERVAL_S` (default 15s), **concorrência 1**. Um tick:
 
 ```
@@ -2385,7 +2385,7 @@ pela UI: não há terminal confiável neste ambiente (§0, correção v1.1), e u
 justamente o que ele não consegue fazer rápido sob estresse.
 
 **Decisão: reusar o mecanismo de pausa persistida que o scraper já tem** (`apps/worker/src/lib/
-queue-state.ts`), aplicado à fila `dispatch:tick`, com o par de rotas
+queue-state.ts`), aplicado à fila `dispatch-tick`, com o par de rotas
 `GET/POST /api/v1/dispatch/queue` e `POST /api/v1/dispatch/queue/resume` — espelho exato do que já
 existe em `/api/v1/scraper/queue`. Nada novo para aprender, e a lição já paga vale igual aqui: a
 pausa **não pode** ser um `setTimeout` em memória, senão o restart do worker a desfaz sem avisar.
@@ -2610,7 +2610,7 @@ sofisticada.
 | 1.1 | Monorepo, Docker Compose (postgres+redis), tsconfig, lint, `.env.example` | Vulcano |
 | 1.2 | Schema Prisma: `User`, `Uf`, `City`, `SearchJob`, `SearchTask`, `Lead`, `LeadActivity` + índices + seed IBGE | **Cronos** |
 | 1.3 | `packages/scraper` completo: engine Playwright, `selectors.ts`, extractor, normalize, fixtures | **Vega** |
-| 1.4 | `apps/worker` com fila `scrape:search`, retry/backoff, dedupe de Lead | **Vega** |
+| 1.4 | `apps/worker` com fila `scrape-search`, retry/backoff, dedupe de Lead | **Vega** |
 | 1.5 | API: `POST/GET /searches`, `GET /searches/:id`, `GET /leads`, `GET /locations/*` | **Vega** |
 | 1.6 | Login + tela "Nova busca" + progresso ao vivo + tabela de leads com filtros | **Lyra** |
 | 1.7 | Testes: unit do extractor com fixtures; e2e "criar busca → ver leads" | **Íris** |
@@ -2916,7 +2916,7 @@ COLD_FOLLOWUP_COOLDOWN_H=24         # 🆕 v1.2 (§4.9.10, G9b) — 2º contato 
                                     # respondeu. Vale para o manual E para a campanha
 
 # Motor de disparo (§6.8) — 🆕 v1.2
-DISPATCH_TICK_INTERVAL_S=15         # período do job repetível dispatch:tick
+DISPATCH_TICK_INTERVAL_S=15         # período do job repetível dispatch-tick
 DISPATCH_LEASE_S=120                # lease do alvo reservado; expirado, ele volta sozinho
 DISPATCH_MAX_ATTEMPTS=3             # acima disso o alvo vira failed/max_attempts
 DISPATCH_MICRO_PAUSE_EVERY_MIN=18   # micro-pausa a cada 18..25 envios (§6.3)

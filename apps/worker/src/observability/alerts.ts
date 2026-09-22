@@ -1,6 +1,6 @@
 /**
  * observability/alerts.ts — avisa um humano FORA do painel quando a fila
- * `scrape:search` muda de estado. Onda 2: hoje o sistema já SABE que algo
+ * `scrape-search` muda de estado. Onda 2: hoje o sistema já SABE que algo
  * parou (incidente de sanidade A1-A4, pausa por `SCRAPE_ERROR_POLICY`,
  * `ScraperHealthEvent`, `pause-meta` no Redis — ver [[convention-worker-
  * redis-state]] na memória), mas ninguém é avisado sem abrir o painel ou o
@@ -105,7 +105,7 @@ function buildPayload(event: AlertEvent, occurredAt: string): Record<string, unk
       };
     case 'queue_paused':
       return {
-        text: `⏸️ InnoProspect — fila scrape:search PAUSADA (${event.severity}, ${event.code}): ${event.message}`,
+        text: `⏸️ InnoProspect — fila scrape-search PAUSADA (${event.severity}, ${event.code}): ${event.message}`,
         type: 'queue_paused',
         severity: event.severity,
         code: event.code,
@@ -115,7 +115,7 @@ function buildPayload(event: AlertEvent, occurredAt: string): Record<string, unk
       };
     case 'queue_resumed':
       return {
-        text: `▶️ InnoProspect — fila scrape:search RETOMADA${event.code ? ` (motivo original: ${event.code})` : ''}: ${event.message}`,
+        text: `▶️ InnoProspect — fila scrape-search RETOMADA${event.code ? ` (motivo original: ${event.code})` : ''}: ${event.message}`,
         type: 'queue_resumed',
         code: event.code,
         message: event.message,

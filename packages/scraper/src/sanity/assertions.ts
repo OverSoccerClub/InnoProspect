@@ -19,7 +19,7 @@ export type SanityCheckResult =
       message: string;
       metric: number;
       threshold: number;
-      /** `true` quando a ação automática é pausar a fila `scrape:search` (ARQUITETURA §5.7). */
+      /** `true` quando a ação automática é pausar a fila `scrape-search` (ARQUITETURA §5.7). */
       pauseQueue: boolean;
     };
 

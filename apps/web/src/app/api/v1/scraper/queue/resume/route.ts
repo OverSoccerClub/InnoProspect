@@ -1,5 +1,5 @@
 /**
- * POST /api/v1/scraper/queue/resume — retomada manual da fila `scrape:search`
+ * POST /api/v1/scraper/queue/resume — retomada manual da fila `scrape-search`
  * (Onda 1, item 1.2/1.3). Exige `{ acknowledge: true }` no corpo — confirmação
  * explícita de que um humano investigou o incidente, no mesmo espírito do
  * `acknowledgeHalt` que a ARQUITETURA §6.5/§6.6 já previa para campanhas.

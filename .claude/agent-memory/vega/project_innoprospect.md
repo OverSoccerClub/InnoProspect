@@ -11,7 +11,7 @@ Evolution API, fases futuras). Arquitetura fechada em `ARQUITETURA.md` — §2 e
 (CONTRATO), §4 contratos de API (CONTRATO), §5.3/§5.6 fila/retry/backoff (CONTRATO). Fases em §8.
 
 **Meu escopo entregue (itens 1.4, 1.5 e auth real da Fase 1, 2026-07-31):**
-- `apps/worker`: fila `scrape:search` real (BullMQ) — `queues.ts`, `scheduler.ts`,
+- `apps/worker`: fila `scrape-search` real (BullMQ) — `queues.ts`, `scheduler.ts`,
   `jobs/scrape-search.job.ts`, `observability/logger.ts` (pino).
 - `apps/web/src/app/api/v1/**`: todas as rotas da Fase 1 (locations, searches, leads, health).
 - `apps/web/src/lib/api-handler.ts`, `lib/auth.ts` + `lib/auth.config.ts`, `middleware.ts`: auth real

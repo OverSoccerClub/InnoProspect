@@ -1,5 +1,5 @@
 /**
- * GET /api/v1/scraper/queue — estado operacional da fila `scrape:search`:
+ * GET /api/v1/scraper/queue — estado operacional da fila `scrape-search`:
  * pausada ou rodando, motivo/desde quando, e os `ScraperHealthEvent` ainda
  * abertos. Onda 1 (REVISAO-ARQUITETURA §5, item 1.2/1.3 — "não existe
  * caminho de recuperação sem shell").

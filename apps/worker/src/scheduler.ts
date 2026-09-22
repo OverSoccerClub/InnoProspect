@@ -1,6 +1,6 @@
 /**
  * scheduler.ts — sobe os `Worker`/`Queue` BullMQ do processo. Fase 1 só tem
- * a fila `scrape:search` (ARQUITETURA §8, item 1.4). `dispatch:tick` (Fase
+ * a fila `scrape-search` (ARQUITETURA §8, item 1.4). `dispatch-tick` (Fase
  * 4) e `maintenance` (health-check/retenção/warmup, Fase 2-5) entram aqui
  * nas próximas rodadas — a estrutura já reserva o lugar.
  */
@@ -49,16 +49,16 @@ export function startWorkers(): WorkerHandles {
     // de retry/backoff por código de erro é feito à mão dentro do job (ver
     // jobs/scrape-search.job.ts) e NUNCA relança, para não disparar o retry
     // nativo do BullMQ em cima do nosso.
-    logger.error({ jobId: job?.id, searchTaskId: job?.data.searchTaskId, err }, 'job scrape:search falhou sem tratamento interno');
+    logger.error({ jobId: job?.id, searchTaskId: job?.data.searchTaskId, err }, 'job scrape-search falhou sem tratamento interno');
   });
 
   scrapeSearchWorker.on('error', (err) => {
-    logger.error({ err }, 'erro no Worker scrape:search (nível de conexão/infra)');
+    logger.error({ err }, 'erro no Worker scrape-search (nível de conexão/infra)');
   });
 
   logger.info(
     { queue: QUEUES.scrapeSearch, concurrency: SCRAPE_CONCURRENCY, rateLimiter: SCRAPE_RATE_LIMITER },
-    'worker scrape:search no ar',
+    'worker scrape-search no ar',
   );
 
   // Heartbeat (Onda 1 item 1.4 — "hoje não há como saber se o worker está
@@ -119,7 +119,7 @@ export async function sweepQueuePause(scrapeQueue: Queue<ScrapeSearchJobData>): 
 
   await scrapeQueue.resume();
   await clearQueuePauseMeta(scrapeQueue);
-  logger.info({ code: meta.code }, 'scrape:search queue retomada automaticamente — pausa temporizada expirou');
+  logger.info({ code: meta.code }, 'scrape-search queue retomada automaticamente — pausa temporizada expirou');
 
   // Fecha o ciclo do alerta: só dispara aqui porque a linha acima de fato
   // mudou o estado (`isPaused` era `true` no início desta função, ver early

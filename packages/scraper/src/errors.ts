@@ -16,7 +16,7 @@ export type ScrapeErrorPolicy = {
   maxAttempts: number;
   /** Backoff (ms) por tentativa (índice 0 = após a 1ª falha), antes do jitter. */
   backoffMs: number[];
-  /** Se definido, a fila `scrape:search` inteira deve pausar por este tempo. */
+  /** Se definido, a fila `scrape-search` inteira deve pausar por este tempo. */
   pauseQueueMs?: number;
   alarmSeverity?: 'high' | 'critical';
 };

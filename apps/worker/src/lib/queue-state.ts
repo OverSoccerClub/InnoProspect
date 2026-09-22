@@ -1,5 +1,5 @@
 /**
- * lib/queue-state.ts — estado operacional da fila `scrape:search` que
+ * lib/queue-state.ts — estado operacional da fila `scrape-search` que
  * PRECISA sobreviver a um restart do processo worker: motivo/desde quando a
  * fila está pausada (por `SCRAPE_ERROR_POLICY.pauseQueueMs` OU por uma
  * assertion de sanidade A1/A2, `observability/sanity.ts`) e o heartbeat de

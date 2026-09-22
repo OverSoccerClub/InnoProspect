@@ -235,7 +235,7 @@ Mesmas de `DATABASE_URL`, `REDIS_URL`, `LOG_LEVEL`, `EVOLUTION_API_URL`, `EVOLUT
    redeploy. Depois **remova `ADMIN_RESET_PASSWORD`**.
    (roda `seed.ts` diretamente via `tsx`, em vez de `prisma db seed` — evita a ambiguidade de qual `package.json` o CLI do Prisma vai procurar o campo `prisma.seed` num monorepo com o working dir em `/app`, não em `packages/db`. `node_modules/.bin/tsx` existe na raiz porque o `apps/web/Dockerfile` instala com `--shamefully-hoist` — se o binário não estiver lá, rode `find / -name tsx -type f 2>/dev/null` dentro do container para localizar.)
 6. Faça login em `/login` com o `ADMIN_EMAIL`/`ADMIN_PASSWORD` do seed.
-7. Suba o **worker**. Acompanhe o log — ele deve conectar no Redis e ficar ouvindo a fila `scrape:search` sem erro.
+7. Suba o **worker**. Acompanhe o log — ele deve conectar no Redis e ficar ouvindo a fila `scrape-search` sem erro.
 8. Teste o critério de aceite da Fase 1 (`ARQUITETURA.md §8`): buscar "clínica odontológica" em Campinas-SP deve devolver ≥ 30 leads em < 3 minutos, sem duplicatas.
 
 ---
