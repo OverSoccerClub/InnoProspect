@@ -70,6 +70,12 @@ Detalhe completo, gaps de contrato preenchidos e por quê, em [[convention-envio
 versionar por cima. Detalhe completo, motivos e o que não validei em
 [[convention-leads-export-bulk]].
 
+**Meu escopo entregue (incidente LAYOUT_CHANGED em produção, 2026-09-22 — fila `scrape-search` estava
+auto-pausada):** causa raiz comprovada ao vivo contra o Google Maps real (não suposição) — bug de
+timing em `packages/scraper/src/engine/navigate.ts`, não seletor quebrado nem bloqueio do Google.
+Detalhe completo em [[bug-navigate-isvisible-no-real-wait]]. Fila continua pausada até Atlas/Vulcano
+decidirem retomar (`POST /api/v1/scraper/queue/resume`) — não é chamada minha.
+
 **Como aplicar:** antes de tocar em `apps/web/src/app/api/**`, `lib/api-handler.ts`, `lib/auth*.ts`,
 `middleware.ts` ou `apps/worker/**`, ler este arquivo + [[convention-api-routes-fase1]] +
 [[bug-nextauth-edge-prisma-split]] + [[bug-nextjs-workspace-ts-source-imports]] antes de reabrir

@@ -12,3 +12,4 @@
 - [Bug: importar lib/auth.ts crua quebra em teste Vitest (next-auth → next/server)](bug_nextauth_vitest_server_import.md) — extrair authorize + mockar next-auth no teste.
 - [Convenção: envio unitário §4.9 (evaluateSendGuard, send-window, sendLeadMessage)](convention_envio_unitario_send_guard.md) — split G1-G3 (serviço) vs G4-G11 (core), gaps de contrato preenchidos e por quê.
 - [Convenção: leads/export (CSV streaming) e leads/bulk (ações em massa)](convention_leads_export_bulk.md) — separador `;`, escape de fórmula, expectedCount, chunking, contrato-rascunho revisado.
+- [Bug: navigate.ts LAYOUT_CHANGED falso-positivo — isVisible({timeout}) não espera de verdade](bug_navigate_isvisible_no_real_wait.md) — causa raiz comprovada ao vivo, fix é polling explícito + evidência no erro + /sorry vira CAPTCHA/RATE_LIMITED.

@@ -41,7 +41,21 @@ export const SELECTORS = {
     website: ['a[data-value="Website"]', 'a[aria-label*="Visitar site"]'],
     link: ['a.hfpxzc'],
   },
-  consentButton: ['button[aria-label*="Aceitar tudo"]', 'form[action*="consent"] button'],
+  /**
+   * Botão de ACEITAR do interstitial de consentimento (nunca "Rejeitar
+   * tudo" — isso mudaria o comportamento, não só destravaria a navegação).
+   * Variantes pt-BR observadas + fallback em inglês (região/conta podem
+   * negociar idioma diferente do esperado).
+   */
+  consentButton: [
+    'button[aria-label*="Aceitar tudo"]',
+    'button[aria-label*="Concordo"]',
+    'button[aria-label*="Aceito"]',
+    'button[aria-label*="Accept all"]',
+    'button[aria-label*="I agree"]',
+    'form[action*="consent"] button[aria-label*="Aceitar"]',
+    'form[action*="consent"] button',
+  ],
   endOfList: ['span.HlvSq', 'p.fontBodyMedium:has-text("chegou ao fim")'],
 
   /**
@@ -51,4 +65,13 @@ export const SELECTORS = {
    */
   captchaIndicators: ['iframe[src*="recaptcha"]', 'form#captcha-form', 'div#captcha'],
   blockedIndicatorText: [/unusual traffic/i, /tr[aá]fego incomum/i, /automated queries/i],
+
+  /**
+   * Caminhos de URL da página de bloqueio/captcha do Google (ex.:
+   * `/sorry/index`). Checar a URL além do DOM importa porque o redirect
+   * para `/sorry` às vezes chega ANTES do corpo da página terminar de
+   * renderizar — o sinal na URL é mais rápido e mais confiável que esperar
+   * o texto/iframe aparecer.
+   */
+  blockedUrlPaths: ['/sorry/index', '/sorry'],
 } as const;

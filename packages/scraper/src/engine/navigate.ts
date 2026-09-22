@@ -10,7 +10,7 @@
 import type { Page } from 'playwright';
 import { SELECTORS } from '../extraction/selectors.js';
 import { humanMouseJiggle, humanScrollStep, maybeHoverCard } from '../antidetect/humanize.js';
-import { ScrapeError } from '../errors.js';
+import { ScrapeError, sleep } from '../errors.js';
 
 export type NavigateOptions = {
   queryString: string;
@@ -21,6 +21,16 @@ export type NavigateOptions = {
   maxStagnantScrolls?: number;
   /** Teto de segurança de passos de scroll, independente de progresso. */
   maxScrollSteps?: number;
+  /**
+   * Orçamento REAL de espera (ms) para o feed de resultados aparecer (ou
+   * para consentimento/captcha/bloqueio serem detectados) depois do
+   * `domcontentloaded`. Ver nota grande em `classifyOnce` — o Maps é uma
+   * SPA pesada, o feed pode legitimamente não existir no DOM ainda nos
+   * primeiros ~1-2s.
+   */
+  feedTimeoutMs?: number;
+  /** Intervalo (ms) entre tentativas de classificação dentro de `feedTimeoutMs`. */
+  feedPollIntervalMs?: number;
 };
 
 export type NavigateResult = {
@@ -35,35 +45,52 @@ export type NavigateResult = {
 const GOOGLE_MAPS_SEARCH_URL = (query: string) =>
   `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
 
-async function tryClickConsent(page: Page): Promise<void> {
-  for (const selector of SELECTORS.consentButton) {
-    const locator = page.locator(selector).first();
-    const visible = await locator.isVisible({ timeout: 1500 }).catch(() => false);
-    if (visible) {
-      await locator.click({ timeout: 3000 }).catch(() => {});
-      return;
-    }
-  }
-}
-
+/**
+ * ⚠️ `Locator.isVisible({ timeout })` NÃO espera — a própria doc do
+ * Playwright marca esse `timeout` como "deprecated, ignored": a chamada
+ * responde com o estado ATUAL do DOM, na hora, e nunca fica tentando de
+ * novo. Por isso este helper (e quem o chama) nunca deve receber `timeout`
+ * como se fosse "espere até X ms" — quem precisa de espera real usa
+ * `classifyOnce`/`waitForClassification` abaixo, que fazem polling de
+ * verdade com `sleep` entre tentativas.
+ *
+ * Causa raiz do incidente LAYOUT_CHANGED de 2026-09: os checks de
+ * consent/captcha/feed rodavam todos a poucos ms do `domcontentloaded`,
+ * antes da SPA do Maps pintar qualquer coisa (confirmado ao vivo: body
+ * praticamente vazio nesse instante, feed aparecendo ~2s depois, sem
+ * nenhum consent/captcha na página). Não era layout novo — era falta de
+ * espera real.
+ */
 async function findFirstVisible(page: Page, selectors: readonly string[]): Promise<string | null> {
   for (const selector of selectors) {
-    const locator = page.locator(selector).first();
-    const visible = await locator.isVisible({ timeout: 500 }).catch(() => false);
+    const visible = await page.locator(selector).first().isVisible().catch(() => false);
     if (visible) return selector;
   }
   return null;
 }
 
-async function detectBlocked(page: Page): Promise<'captcha' | 'rate_limited' | null> {
-  for (const selector of SELECTORS.captchaIndicators) {
-    const visible = await page
-      .locator(selector)
-      .first()
-      .isVisible({ timeout: 500 })
-      .catch(() => false);
-    if (visible) return 'captcha';
+/** Clica o botão de ACEITAR do consent, se algum estiver visível AGORA. Nunca lança. */
+async function tryClickConsent(page: Page): Promise<void> {
+  const selector = await findFirstVisible(page, SELECTORS.consentButton);
+  if (!selector) return;
+  // `.click()` (diferente de `.isVisible()`) TEM auto-wait/actionability
+  // real — o timeout aqui é honrado de verdade pelo Playwright.
+  await page.locator(selector).first().click({ timeout: 3000 }).catch(() => {});
+}
+
+function isBlockedUrl(url: string): boolean {
+  try {
+    const { pathname } = new URL(url);
+    return SELECTORS.blockedUrlPaths.some((path) => pathname.startsWith(path));
+  } catch {
+    return false;
   }
+}
+
+/** Só olha o DOM/texto atual (sem esperar) — usado dentro do polling de `classifyOnce`. */
+async function detectBlockedInDom(page: Page): Promise<'captcha' | 'rate_limited' | null> {
+  const captchaSelector = await findFirstVisible(page, SELECTORS.captchaIndicators);
+  if (captchaSelector) return 'captcha';
 
   const bodyText = await page.locator('body').innerText({ timeout: 1000 }).catch(() => '');
   for (const pattern of SELECTORS.blockedIndicatorText) {
@@ -71,6 +98,66 @@ async function detectBlocked(page: Page): Promise<'captcha' | 'rate_limited' | n
   }
 
   return null;
+}
+
+type Classification =
+  | { status: 'feed'; feedSelector: string }
+  | { status: 'blocked'; kind: 'captcha' | 'rate_limited' }
+  | { status: 'pending' };
+
+/**
+ * Um "tick" de classificação: olha a URL e o DOM tal como estão AGORA (sem
+ * esperar nada) e decide entre feed encontrado / bloqueio detectado / nada
+ * decisivo ainda. `waitForClassification` chama isto repetidamente com
+ * espera real entre tentativas — é essa repetição que faz o papel que
+ * `isVisible({ timeout })` fingia fazer.
+ */
+async function classifyOnce(page: Page): Promise<Classification> {
+  const url = page.url();
+
+  if (isBlockedUrl(url)) {
+    // Página de bloqueio/captcha própria do Google (`/sorry/...`) — o
+    // redirect de URL costuma chegar antes do corpo terminar de renderizar,
+    // então não faz sentido procurar consent aqui.
+    const kind = (await detectBlockedInDom(page)) ?? 'rate_limited';
+    return { status: 'blocked', kind };
+  }
+
+  await tryClickConsent(page);
+
+  const kind = await detectBlockedInDom(page);
+  if (kind) return { status: 'blocked', kind };
+
+  const feedSelector = await findFirstVisible(page, SELECTORS.resultsFeed);
+  if (feedSelector) return { status: 'feed', feedSelector };
+
+  return { status: 'pending' };
+}
+
+/**
+ * Espera de verdade (poll com `sleep` entre tentativas, até `timeoutMs`)
+ * até `classifyOnce` decidir algo. Devolve o último resultado mesmo que
+ * ainda seja `'pending'` quando o orçamento de tempo esgota — quem chama
+ * decide o que fazer com isso (hoje: `LAYOUT_CHANGED`).
+ */
+async function waitForClassification(
+  page: Page,
+  opts: { timeoutMs: number; pollIntervalMs: number },
+): Promise<Classification> {
+  const deadline = Date.now() + opts.timeoutMs;
+  for (;;) {
+    const result = await classifyOnce(page);
+    if (result.status !== 'pending') return result;
+    if (Date.now() >= deadline) return result;
+    await sleep(opts.pollIntervalMs);
+  }
+}
+
+/** Trecho curto e diagnosticável do body (nunca a página inteira) para anexar ao erro. */
+async function snapshotSnippet(page: Page, maxChars = 220): Promise<string> {
+  const text = await page.locator('body').innerText({ timeout: 1000 }).catch(() => '');
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  return collapsed.length > maxChars ? `${collapsed.slice(0, maxChars)}…` : collapsed;
 }
 
 /**
@@ -90,6 +177,8 @@ export async function openSearchAndCollectCards(
     navigationTimeoutMs = 45_000,
     maxStagnantScrolls = 4,
     maxScrollSteps = 60,
+    feedTimeoutMs = 12_000,
+    feedPollIntervalMs = 400,
   } = opts;
 
   const sourceUrl = GOOGLE_MAPS_SEARCH_URL(queryString);
@@ -102,25 +191,35 @@ export async function openSearchAndCollectCards(
     });
   }
 
-  await tryClickConsent(page);
+  const classification = await waitForClassification(page, {
+    timeoutMs: feedTimeoutMs,
+    pollIntervalMs: feedPollIntervalMs,
+  });
 
-  const blocked = await detectBlocked(page);
-  if (blocked === 'captcha') {
-    throw new ScrapeError('CAPTCHA_DETECTED', `Captcha detectado ao buscar "${queryString}"`);
-  }
-  if (blocked === 'rate_limited') {
+  if (classification.status === 'blocked') {
+    if (classification.kind === 'captcha') {
+      throw new ScrapeError('CAPTCHA_DETECTED', `Captcha detectado ao buscar "${queryString}"`);
+    }
     throw new ScrapeError('RATE_LIMITED', `Indício de rate limit ao buscar "${queryString}"`);
   }
 
-  const feedSelector = await findFirstVisible(page, SELECTORS.resultsFeed);
-  if (!feedSelector) {
-    // Nem o feed de resultados apareceu — ou o Maps não achou nada (raro
-    // para o formato de query usado), ou o layout mudou de verdade.
+  if (classification.status === 'pending') {
+    // Nem o feed de resultados apareceu, nem consent/captcha/bloqueio foram
+    // detectados, mesmo depois de `feedTimeoutMs` de espera real — ou o
+    // Maps não achou nada (raro para o formato de query usado), ou o
+    // layout mudou de verdade. URL final + trecho curto do body vão no
+    // erro para não obrigar quem investiga a baixar o incidente capturado
+    // só para saber "o que a página era".
+    const finalUrl = page.url();
+    const snippet = await snapshotSnippet(page);
     throw new ScrapeError(
       'LAYOUT_CHANGED',
-      `Feed de resultados não encontrado para "${queryString}" — nenhuma alternativa de SELECTORS.resultsFeed casou`,
+      `Feed de resultados não encontrado para "${queryString}" após ${feedTimeoutMs}ms de espera — ` +
+        `nenhuma alternativa de SELECTORS.resultsFeed casou. url final: ${finalUrl}; trecho: "${snippet}"`,
     );
   }
+
+  const feedSelector = classification.feedSelector;
 
   const seenCardHtmls = new Set<string>();
   const cardHtmls: string[] = [];
