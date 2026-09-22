@@ -74,7 +74,7 @@ describe('checkNameFillRate (A2)', () => {
 
 describe('checkPhoneFillRate (A3)', () => {
   it('dispara quando cai abaixo de 50% da média móvel de 7 dias, sem pausar a fila', () => {
-    const result = checkPhoneFillRate(0.2, 0.6);
+    const result = checkPhoneFillRate({ fillRate: 0.2, sampleSize: 50 }, 0.6);
     expect(result.triggered).toBe(true);
     if (result.triggered) {
       expect(result.severity).toBe('high');
@@ -82,8 +82,32 @@ describe('checkPhoneFillRate (A3)', () => {
     }
   });
 
-  it('NÃO dispara quando ainda está acima do limiar', () => {
-    expect(checkPhoneFillRate(0.4, 0.6).triggered).toBe(false);
+  it('NÃO dispara quando ainda está acima do limiar relativo', () => {
+    expect(checkPhoneFillRate({ fillRate: 0.4, sampleSize: 50 }, 0.6).triggered).toBe(false);
+  });
+
+  it('piso absoluto: dispara com 0% de telefone mesmo SEM média de 7 dias (sistema novo, incidente real de 2026-09)', () => {
+    const result = checkPhoneFillRate({ fillRate: 0, sampleSize: 20 }, 0);
+    expect(result.triggered).toBe(true);
+    if (result.triggered) {
+      expect(result.code).toBe('PHONE_FILL_RATE_LOW');
+      expect(result.pauseQueue).toBe(false);
+    }
+  });
+
+  it('piso absoluto: NÃO dispara com amostra pequena (ruído, não incidente)', () => {
+    // 0/3 com telefone seria 0% — mas amostra abaixo do mínimo não conta.
+    expect(checkPhoneFillRate({ fillRate: 0, sampleSize: 3 }, 0).triggered).toBe(false);
+  });
+
+  it('piso absoluto: NÃO dispara acima do piso, mesmo sem média de 7 dias', () => {
+    expect(checkPhoneFillRate({ fillRate: 0.5, sampleSize: 50 }, 0).triggered).toBe(false);
+  });
+
+  it('piso absoluto dispara mesmo quando a média de 7 dias TAMBÉM já está baixa (o mesmo bug contaminando os dois)', () => {
+    const result = checkPhoneFillRate({ fillRate: 0.05, sampleSize: 50 }, 0.08);
+    expect(result.triggered).toBe(true);
+    if (result.triggered) expect(result.threshold).toBeCloseTo(0.2);
   });
 });
 

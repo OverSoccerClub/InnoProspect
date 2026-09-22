@@ -104,23 +104,76 @@ export function checkNameFillRate(
 // A3 — Fill-rate de telefone
 // ─────────────────────────────────────────────────────────────────────────
 
+export type PhoneFillRateOptions = {
+  /**
+   * Amostra mínima para o piso absoluto valer. Poucos leads é ruído, não
+   * incidente — 1 empresa sem telefone entre 3 coletados não significa
+   * seletor quebrado. 20 é arbitrário mas conservador: é menor que a janela
+   * cheia de 50 leads usada pelo chamador (`apps/worker/observability/
+   * sanity.ts`), então o piso já vale bem antes da janela de 50 se completar.
+   */
+  minSampleSize: number;
+  /**
+   * Piso absoluto de fill-rate — abaixo disso é incidente mesmo SEM
+   * histórico de 7 dias (sistema novo tem média=0, que antes fazia A3 nunca
+   * disparar — exatamente o ponto cego do incidente de 2026-09: um lead sem
+   * telefone algum não acionava nada porque não havia média para comparar).
+   * 20% foi escolhido observando que, numa amostra real de 7 negócios
+   * (nicho "material de construção"), 7/7 tinham telefone — a maioria dos
+   * nichos comerciais no Maps publica telefone. 20% dá margem para nichos
+   * legitimamente menos propensos a publicar telefone (ex.: órgãos
+   * públicos, grandes redes que preferem direcionar para site/app) sem
+   * soar alarme falso, mas ainda pega o caso "quase nenhum tem telefone" —
+   * que é justamente o sintoma do incidente relatado (um lead 100% vazio).
+   * Ajustável com mais dados reais de produção — não é um número final.
+   */
+  absoluteFloor: number;
+};
+
+export const DEFAULT_PHONE_FILL_RATE_OPTIONS: PhoneFillRateOptions = {
+  minSampleSize: 20,
+  absoluteFloor: 0.2,
+};
+
 /**
- * A3 — `currentFillRate` cai abaixo de 50% da média móvel de 7 dias
- * (`sevenDayAverageFillRate`). NÃO pausa a fila (pode ser característica do
+ * A3 — duas checagens independentes (qualquer uma dispara):
+ *   1. Piso absoluto: `current.fillRate` abaixo de `absoluteFloor`, com
+ *      amostra >= `minSampleSize` — vale mesmo sem média de 7 dias (sistema
+ *      novo) e mesmo que a própria média de 7 dias já esteja contaminada
+ *      pelo mesmo bug (comparação relativa sozinha não pegaria isso).
+ *   2. Relativa (comportamento original): `current.fillRate` cai abaixo de
+ *      50% da média móvel de 7 dias — só roda se houver média (`> 0`).
+ * NÃO pausa a fila em nenhum dos dois casos (pode ser característica do
  * nicho, não bug) — só alerta.
  */
-export function checkPhoneFillRate(currentFillRate: number, sevenDayAverageFillRate: number): SanityCheckResult {
+export function checkPhoneFillRate(
+  current: { fillRate: number; sampleSize: number },
+  sevenDayAverageFillRate: number,
+  options: PhoneFillRateOptions = DEFAULT_PHONE_FILL_RATE_OPTIONS,
+): SanityCheckResult {
+  if (current.sampleSize >= options.minSampleSize && current.fillRate < options.absoluteFloor) {
+    return {
+      triggered: true,
+      code: 'PHONE_FILL_RATE_LOW',
+      severity: 'high',
+      message: `Fill-rate de telefone (${(current.fillRate * 100).toFixed(1)}%) está abaixo do piso absoluto de ${(options.absoluteFloor * 100).toFixed(0)}% (amostra: ${current.sampleSize} leads) — incidente mesmo sem histórico de 7 dias.`,
+      metric: current.fillRate,
+      threshold: options.absoluteFloor,
+      pauseQueue: false,
+    };
+  }
+
   if (sevenDayAverageFillRate <= 0) return NOT_TRIGGERED;
 
   const threshold = sevenDayAverageFillRate * 0.5;
-  if (currentFillRate >= threshold) return NOT_TRIGGERED;
+  if (current.fillRate >= threshold) return NOT_TRIGGERED;
 
   return {
     triggered: true,
     code: 'PHONE_FILL_RATE_LOW',
     severity: 'high',
-    message: `Fill-rate de telefone (${(currentFillRate * 100).toFixed(1)}%) caiu abaixo de 50% da média móvel de 7 dias (${(sevenDayAverageFillRate * 100).toFixed(1)}%).`,
-    metric: currentFillRate,
+    message: `Fill-rate de telefone (${(current.fillRate * 100).toFixed(1)}%) caiu abaixo de 50% da média móvel de 7 dias (${(sevenDayAverageFillRate * 100).toFixed(1)}%).`,
+    metric: current.fillRate,
     threshold,
     pauseQueue: false,
   };
@@ -171,13 +224,16 @@ export function checkDataShape(samples: readonly LeadShapeSample[]): SanityCheck
 export function evaluateSanity(input: {
   recentTasks: readonly TaskResultForZeroStreak[];
   recentLeadNames: readonly (string | null | undefined)[];
-  phoneFillRate: { current: number; sevenDayAverage: number };
+  phoneFillRate: { current: number; currentSampleSize: number; sevenDayAverage: number };
   dataShapeSamples: readonly LeadShapeSample[];
 }): SanityCheckResult[] {
   const results = [
     checkZeroStreak(input.recentTasks),
     checkNameFillRate(input.recentLeadNames),
-    checkPhoneFillRate(input.phoneFillRate.current, input.phoneFillRate.sevenDayAverage),
+    checkPhoneFillRate(
+      { fillRate: input.phoneFillRate.current, sampleSize: input.phoneFillRate.currentSampleSize },
+      input.phoneFillRate.sevenDayAverage,
+    ),
     checkDataShape(input.dataShapeSamples),
   ];
   return results.filter((r): r is Extract<SanityCheckResult, { triggered: true }> => r.triggered);

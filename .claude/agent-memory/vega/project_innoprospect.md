@@ -76,6 +76,18 @@ timing em `packages/scraper/src/engine/navigate.ts`, não seletor quebrado nem b
 Detalhe completo em [[bug-navigate-isvisible-no-real-wait]]. Fila continua pausada até Atlas/Vulcano
 decidirem retomar (`POST /api/v1/scraper/queue/resume`) — não é chamada minha.
 
+**Meu escopo entregue (lead sem telefone/endereço/categoria em produção, 2026-09-22, mesmo dia):**
+seletores do card da lista do Maps (`packages/scraper/src/extraction/selectors.ts`) estavam
+quebrados/errados de verdade — endereço sem nenhum seletor que casasse, categoria casando no elemento
+da NOTA por acidente — comprovado contra o Maps real (1 busca, 7 cards). Telefone sai direto da lista,
+não precisa abrir a ficha (confirmado 7/7). Reescrevi os seletores (âncoras ARIA/estrutura em vez de
+classe ofuscada onde deu), as fixtures de teste com HTML real capturado, e adicionei piso absoluto
+(20%, amostra >= 20) na assertion A3 de fill-rate de telefone (`packages/scraper/src/sanity/
+assertions.ts` + call site em `apps/worker/src/observability/sanity.ts`) — antes A3 só comparava com
+média móvel de 7 dias, que é 0 num sistema novo e nunca disparava. Detalhe completo, achados numerados
+e o que NÃO ficou provado (o caso específico do lead "Botocenter" 100% vazio não foi reproduzido ao
+vivo) em [[bug-maps-card-selectors-drift-2026-09]].
+
 **Como aplicar:** antes de tocar em `apps/web/src/app/api/**`, `lib/api-handler.ts`, `lib/auth*.ts`,
 `middleware.ts` ou `apps/worker/**`, ler este arquivo + [[convention-api-routes-fase1]] +
 [[bug-nextauth-edge-prisma-split]] + [[bug-nextjs-workspace-ts-source-imports]] antes de reabrir

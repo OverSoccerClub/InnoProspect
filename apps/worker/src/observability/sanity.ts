@@ -80,7 +80,14 @@ async function gatherSanityInput() {
     recentTasks,
     recentLeadNames,
     dataShapeSamples,
-    phoneFillRate: { current: currentFillRate, sevenDayAverage: sevenDayAverageFillRate },
+    phoneFillRate: {
+      current: currentFillRate,
+      // Tamanho da MESMA janela usada para `current` (últimos até 50 leads)
+      // — é o que faz o piso absoluto (`checkPhoneFillRate`) não disparar
+      // com amostra pequena/ruidosa logo depois do primeiro lead coletado.
+      currentSampleSize: recentLeadsDesc.length,
+      sevenDayAverage: sevenDayAverageFillRate,
+    },
   };
 }
 
@@ -91,7 +98,7 @@ function windowDescriptionFor(type: ScraperHealthEventType): string {
     case 'fill_rate_name':
       return 'últimos 50 leads capturados';
     case 'fill_rate_phone':
-      return 'últimos 50 leads capturados vs. média móvel de 7 dias';
+      return 'últimos 50 leads capturados — piso absoluto de 20% (amostra >= 20) OU vs. média móvel de 7 dias';
     case 'data_shape':
       return 'últimos 50 leads capturados';
   }
@@ -139,7 +146,10 @@ export async function evaluateAndRecordSanity(scrapeQueue: Queue): Promise<void>
   const results: Record<ScraperHealthEventType, SanityCheckResult> = {
     zero_streak: checkZeroStreak(input.recentTasks),
     fill_rate_name: checkNameFillRate(input.recentLeadNames),
-    fill_rate_phone: checkPhoneFillRate(input.phoneFillRate.current, input.phoneFillRate.sevenDayAverage),
+    fill_rate_phone: checkPhoneFillRate(
+      { fillRate: input.phoneFillRate.current, sampleSize: input.phoneFillRate.currentSampleSize },
+      input.phoneFillRate.sevenDayAverage,
+    ),
     data_shape: checkDataShape(input.dataShapeSamples),
   };
 

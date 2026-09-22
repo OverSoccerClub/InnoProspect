@@ -1,28 +1,76 @@
 <!--
-  Fixture: card de resultado do Google Maps com todos os campos presentes.
-  Estrutura sintética, mas fiel ao layout observado (classes/atributos reais
-  do Maps em 2026-07) e compatível com extraction/selectors.ts. Usada por
-  extract-card.test.ts. Ao mudar selectors.ts, atualize esta fixture junto
-  (ARQUITETURA §5.5).
+  Fixture: card de resultado do Google Maps com todos os campos que a lista
+  realmente expõe hoje. Estrutura e texto REAIS — capturado ao vivo em
+  2026-09-22 (busca "material de construção em Parnamirim, RN", card
+  "Pinheirão Casa & Construção"), só removendo ruído irrelevante à extração
+  (jslog, jsaction, atributos de imagem/estilo). Ver o comentário grande no
+  topo de extraction/selectors.ts para o que motivou reescrever este fixture
+  (endereço não tinha mais seletor que casasse; categoria casava no
+  elemento errado). Mantém o badge de acessibilidade entre categoria e
+  endereço de propósito — é o caso real que testa se `card.address` continua
+  pegando o span certo mesmo com um "· badge ·" no meio.
+
+  Campos que a lista NÃO expõe nesta amostra (avaliação em contagem, site) —
+  ver testes específicos em extract-card.test.ts para esses, com HTML
+  sintético claramente marcado como tal (não fixture "real").
 -->
-<div class="Nv2PK THOPZb" jsaction="mouseover:pane">
+<div role="article" class="Nv2PK THOPZb CpccDe">
   <a
     class="hfpxzc"
-    href="https://www.google.com/maps/place/Padaria+Nova+Esperan%C3%A7a/@-22.9068,-43.1729,17z/data=!3m1!4b1!4m6!3m5!1s0x9bde559108a05b:0x513a40d5c37d3a5c!8m2!3d-22.9068!4d-43.1729"
-    aria-label="Padaria Nova Esperança"
-  ></a>
-  <div class="qBF1Pd fontHeadlineSmall">Padaria Nova Esperança</div>
-  <span class="MW4etd" role="img" aria-label="4,5 estrelas">4,5</span>
-  <span class="UY7F9" aria-label="123 avaliações">(123)</span>
-  <div class="W4Efsd">
-    <div><span>Padaria</span></div>
-  </div>
-  <a data-value="Website" href="https://padarianovaesperanca.com.br" aria-label="Visitar site"></a>
-  <div class="W4Efsd">
-    <span class="UsdlK">(21) 98765-4321</span>
-    <div>
-      <span>Centro</span>
-      <span>Rua das Flores, 123 - Centro, Rio de Janeiro - RJ</span>
+    aria-label="Pinheirão Casa &amp; Construção"
+    href="https://www.google.com/maps/place/Pinheir%C3%A3o+Casa+%26+Constru%C3%A7%C3%A3o/data=!4m7!3m6!1s0x7b2571afd9a994b:0x5596438a67afd04!8m2!3d-5.9143406!4d-35.2726166!16s%2Fg%2F1xn_nlj7"
+  ><span class="xxVWCe">Pinheirão Casa &amp; Construção</span></a>
+  <div class="bfdHYd Ppzolf OFBs3e">
+    <div class="lI9IFe">
+      <div class="y7PRA">
+        <div class="Lui3Od T7Wufd">
+          <div class="Z8fK3b">
+            <div class="UaQhfb fontBodyMedium">
+              <div class="NrDZNb">
+                <div class="qBF1Pd fontHeadlineSmall">Pinheirão Casa &amp; Construção</div>
+              </div>
+              <div class="W4Efsd">
+                <div class="AJB7ye">
+                  <span class="e4rVHe fontBodyMedium">
+                    <span role="img" class="ZkP5Je" aria-label="4,5 estrelas">
+                      <span class="MW4etd" aria-hidden="true">4,5</span>
+                    </span>
+                  </span>
+                </div>
+              </div>
+              <div class="W4Efsd">
+                <div class="W4Efsd">
+                  <span><span>Loja de materiais de construção</span></span>
+                  <span>
+                    <span aria-hidden="true">·</span>
+                    <span
+                      class="google-symbols"
+                      aria-label="Entrada acessível para pessoas em cadeira de rodas"
+                      role="img"
+                    ></span>
+                  </span>
+                  <span>
+                    <span aria-hidden="true">·</span>
+                    <span>R. Cruzeiro do Sul, 920</span>
+                  </span>
+                </div>
+              </div>
+              <div class="W4Efsd">
+                <span>
+                  <span>
+                    <span style="color: rgba(211,47,40,1.00);">Fechado</span>
+                    <span> · Abre qua. às 07:30</span>
+                  </span>
+                </span>
+                <span>
+                  <span aria-hidden="true">·</span>
+                  <span class="UsdlK">(84) 3113-0884</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>

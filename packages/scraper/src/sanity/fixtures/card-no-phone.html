@@ -1,23 +1,42 @@
 <!--
-  Fixture: card válido mas SEM telefone publicado — caso comum e legítimo
-  (nem toda empresa publica telefone no Maps). extractCard deve devolver
-  phoneRaw: null sem tratar isso como erro.
+  Fixture: card válido mas SEM telefone publicado — caso legítimo (nem toda
+  empresa publica telefone no Maps). extractCard deve devolver phoneRaw:
+  null sem tratar isso como erro.
+
+  Base estrutural REAL (mesma capturada em 2026-09-22, ver card-full.html),
+  com o bloco de telefone removido manualmente para simular a ausência — a
+  amostra ao vivo teve telefone em 7/7 cards, então este caso específico não
+  foi observado ao vivo, mas a estrutura ao redor (nome/categoria/endereço)
+  é a real, não inventada.
 -->
-<div class="Nv2PK THOPZb" jsaction="mouseover:pane">
+<div role="article" class="Nv2PK THOPZb CpccDe">
   <a
     class="hfpxzc"
-    href="https://www.google.com/maps/place/Consultoria+Alfa/data=!4m6!3m5!1s0x9bde111111111a:0x513a40d5c3711111!8m2"
     aria-label="Consultoria Alfa"
-  ></a>
-  <div class="qBF1Pd fontHeadlineSmall">Consultoria Alfa</div>
-  <span class="UY7F9" aria-label="8 avaliações">(8)</span>
-  <div class="W4Efsd">
-    <div><span>Consultoria empresarial</span></div>
-  </div>
-  <div class="W4Efsd">
-    <div>
-      <span>Centro</span>
-      <span>Av. Paulista, 1000 - Bela Vista, São Paulo - SP</span>
+    href="https://www.google.com/maps/place/Consultoria+Alfa/data=!4m6!3m5!1s0x9bde111111111a:0x513a40d5c3711111!8m2"
+  ><span class="xxVWCe">Consultoria Alfa</span></a>
+  <div class="bfdHYd Ppzolf OFBs3e">
+    <div class="lI9IFe">
+      <div class="y7PRA">
+        <div class="Lui3Od T7Wufd">
+          <div class="Z8fK3b">
+            <div class="UaQhfb fontBodyMedium">
+              <div class="NrDZNb">
+                <div class="qBF1Pd fontHeadlineSmall">Consultoria Alfa</div>
+              </div>
+              <div class="W4Efsd">
+                <div class="W4Efsd">
+                  <span><span>Consultoria empresarial</span></span>
+                  <span>
+                    <span aria-hidden="true">·</span>
+                    <span>Av. Paulista, 1000</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
