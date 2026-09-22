@@ -121,9 +121,22 @@ FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-jammy AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-RUN groupadd --system pwuser \
-  && useradd --system --gid pwuser --create-home --home-dir /home/pwuser pwuser \
-  && chown -R pwuser:pwuser /app "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}"
+# ⚠️ A imagem oficial do Playwright JÁ TRAZ o usuário e o grupo `pwuser`.
+# A versão anterior criava os dois direto, e o build real no EasyPanel
+# (2026-09-22) morreu aqui com `groupadd: group 'pwuser' already exists`,
+# código 9 — era o ponto que o Órion tinha marcado como "assumido, não
+# validado" desde agosto, e que só um build de verdade provaria.
+#
+# Criar apenas quando faltar mantém a imagem funcionando se a base um dia
+# deixar de trazer o usuário, sem quebrar enquanto ela traz. `chown` continua
+# fora do `if`: precisa rodar sempre, porque `/app` é criado por este
+# Dockerfile e pertence ao root.
+RUN if ! getent group pwuser >/dev/null 2>&1; then groupadd --system pwuser; fi \
+  && if ! id -u pwuser >/dev/null 2>&1; then \
+       useradd --system --gid pwuser --create-home --home-dir /home/pwuser pwuser; \
+     fi \
+  && mkdir -p /home/pwuser \
+  && chown -R pwuser:pwuser /app /home/pwuser "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}"
 
 COPY --from=build --chown=pwuser:pwuser /app/apps/worker/dist ./dist
 COPY --from=build --chown=pwuser:pwuser /app/apps/worker/package.json ./package.json
