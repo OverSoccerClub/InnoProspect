@@ -1,9 +1,9 @@
 'use client';
 
 import type { LucideIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 
-import { Sparkline } from '@/components/dashboard/charts/sparkline';
 import { Card, CardContent } from '@/components/ui/card';
 import { useCountUp } from '@/hooks/useCountUp';
 import { cn } from '@/lib/utils';
@@ -18,8 +18,14 @@ type IndicatorCardProps = {
   /** `null`/`undefined` = sem comparação disponível (esconde o badge, não mostra "0%" enganoso). */
   deltaPercent?: number | null;
   deltaLabel?: string;
-  sparklineData?: number[];
-  /** Texto de apoio pra indicadores sem série histórica (ex.: "1 na fila · 2 rodando"). */
+  /**
+   * Visual da métrica (sparkline, anel de proporção, mini-barras de
+   * comparação — ver `components/dashboard/charts/*`). Cada indicador usa o
+   * visual que combina com o TIPO do dado, não sparkline em tudo: os 4
+   * cards precisam do mesmo peso visual, mas não do mesmo gráfico.
+   */
+  visual?: ReactNode;
+  /** Texto de apoio (ex.: "1 na fila · 2 rodando"). */
   secondaryText?: string;
 };
 
@@ -28,7 +34,7 @@ type IndicatorCardProps = {
  * (`useCountUp`, desliga em `prefers-reduced-motion`), variação vs. período
  * anterior (seta colorida + texto NEUTRO — nunca o número da variação em
  * verde/vermelho direto, mesma regra de "cor só no ícone/borda" do Alert e
- * do banner de fila, DESIGN-SYSTEM.md §1.4/§4) e sparkline opcional.
+ * do banner de fila, DESIGN-SYSTEM.md §1.4/§4) e um slot de visual (`visual`).
  */
 export function IndicatorCard({
   icon: Icon,
@@ -38,7 +44,7 @@ export function IndicatorCard({
   format,
   deltaPercent,
   deltaLabel = 'vs. semana passada',
-  sparklineData,
+  visual,
   secondaryText,
 }: IndicatorCardProps) {
   const animated = useCountUp(value);
@@ -68,7 +74,7 @@ export function IndicatorCard({
           <p className="font-display text-2xl font-semibold tabular-nums text-foreground">{displayValue}</p>
           <p className="text-xs text-muted-foreground">{label}</p>
         </div>
-        {sparklineData && sparklineData.length > 1 && <Sparkline data={sparklineData} />}
+        {visual}
         {secondaryText && <p className="text-xs text-muted-foreground">{secondaryText}</p>}
         {hasDelta && <p className="sr-only">{deltaLabel}</p>}
       </CardContent>

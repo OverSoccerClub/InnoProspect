@@ -1,6 +1,9 @@
 import { mulberry32 } from '@/lib/utils';
 import type { DashboardSummary } from '@/types/dashboard';
+import type { HealthReport } from '@/types/health';
 import type { LeadStatus } from '@/types/lead';
+import type { ScraperQueueStatusResponse } from '@/types/scraper-queue';
+import type { InstanceListItem } from '@/types/whatsapp';
 import { mockGetQueueStatus } from './scraper';
 
 const STATUS_WEIGHTS: Record<LeadStatus, number> = {
@@ -135,4 +138,47 @@ export function mockGetEmptyDashboardSummary(): DashboardSummary {
     },
     searches: { queued: 0, running: 0, completedLast30d: 0, tasksFailedLast30d: 0 },
   };
+}
+
+/**
+ * Fila/saúde/WhatsApp coerentes com uma conta recém-criada (zero leads) —
+ * deliberadamente SEPARADO do mock global de `mocks/scraper.ts`
+ * (`mockGetQueueStatus`), que começa PAUSADO com um incidente crítico de
+ * propósito, só para exercitar o banner de alerta em outras telas. Misturar
+ * os dois no estado de primeiro acesso contaria uma história incoerente:
+ * conta sem nenhum lead ainda, mas já com um incidente de segurança grave e
+ * "2 de 3 WhatsApp conectadas". Usado só por `FirstAccessChecklist`, via
+ * `lib/api/dashboard.ts#getFirstAccessSystemContext` (nunca importado direto
+ * por um componente, mesma regra do resto de `mocks/*`).
+ */
+export function mockGetEmptyScenarioQueueStatus(): ScraperQueueStatusResponse {
+  return {
+    status: 'running',
+    reason: null,
+    code: null,
+    severity: null,
+    source: null,
+    pausedAt: null,
+    resumeAt: null,
+    openIncidents: [],
+  };
+}
+
+export function mockGetEmptyScenarioHealth(): HealthReport {
+  const queue = mockGetEmptyScenarioQueueStatus();
+  return {
+    status: 'ok',
+    time: new Date().toISOString(),
+    checks: {
+      database: { status: 'ok', latencyMs: 3 },
+      redis: { status: 'ok', latencyMs: 1, target: 'redis:6379' },
+      worker: { status: 'ok', lastHeartbeatAt: new Date(Date.now() - 5_000).toISOString(), ageSeconds: 5 },
+      queue: { status: queue.status, reason: queue.reason },
+      openIncidents: 0,
+    },
+  };
+}
+
+export function mockGetEmptyScenarioInstances(): InstanceListItem[] {
+  return [];
 }

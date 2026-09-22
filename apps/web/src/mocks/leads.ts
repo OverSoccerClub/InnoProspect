@@ -13,8 +13,71 @@ const CATEGORIES = [
   'Oficina mecânica',
 ];
 
-const NAME_PREFIXES = ['Clínica', 'Espaço', 'Studio', 'Centro', 'Grupo', 'Casa'];
-const NAME_SUFFIXES = ['Sorriso', 'Vida', 'Bem-Estar', 'Premium', 'Popular', 'Central', 'Norte', 'Sul'];
+// Nomes de empresa por categoria (fictícios, mas plausíveis) — a versão
+// anterior combinava um prefixo + sufixo genérico com o nome da cidade
+// ("Studio Premium Monte Fundo 36"), o que ficava repetitivo e artificial em
+// qualquer lista visível (Leads recentes, ficha do lead). Cada categoria tem
+// seu próprio banco de nomes "de negócio de verdade"; o nome da cidade é
+// anexado só em parte dos casos, como aconteceria na vida real.
+const CATEGORY_NAME_POOL: Record<string, string[]> = {
+  'Clínica odontológica': [
+    'Sorriso Feliz Odontologia',
+    'OdontoVida',
+    'Clínica Dental Bem-Estar',
+    'Espaço Sorriso',
+    'Odonto Excellence',
+    'Clínica Dentária Nova Geração',
+    'Centro Odontológico Vitalle',
+    'Sorriso & Saúde',
+  ],
+  Restaurante: [
+    'Sabor da Serra',
+    'Cantina Bella Itália',
+    'Point do Sabor',
+    'Restaurante Raízes',
+    'Sabor Caseiro',
+    'Empório Gourmet',
+    'Recanto do Sabor',
+    'Fogo de Chão Grill',
+  ],
+  'Escritório de advocacia': [
+    'Silva & Associados Advocacia',
+    'Escritório Jurídico Horizonte',
+    'Martins Advogados',
+    'Bittencourt & Costa Advocacia',
+    'Advocacia Central',
+    'Andrade Advogados Associados',
+    'Prime Advocacia Empresarial',
+  ],
+  'Pet shop': ['Pet Amigo', 'Mundo Animal', 'Vida Animal Pet Shop', 'Cão & Gato', 'Pet Center', 'Focinho Feliz', 'Pet House'],
+  'Salão de beleza': [
+    'Salão Elegance',
+    'Studio Beleza Pura',
+    'Espaço Glamour',
+    'Salão Charme',
+    'Beleza Natural',
+    'Studio Hair Design',
+    'Salão Reflexo',
+  ],
+  Academia: [
+    'Academia Fit Life',
+    'PowerGym',
+    'Academia Corpo em Forma',
+    'Studio Fitness',
+    'Academia Vitalidade',
+    'Box Cross Training',
+    'Academia Evolução',
+  ],
+  'Loja de roupas': ['Moda Bella', 'Loja Estilo Próprio', 'Boutique Elegance', 'Fashion Store', 'Loja Trend', 'Espaço Moda'],
+  'Oficina mecânica': [
+    'Oficina Motor Show',
+    'Auto Center Confiança',
+    'Mecânica do Zé',
+    'Oficina Rápida',
+    'Total Car Serviços',
+    'Auto Peças e Serviços',
+  ],
+};
 
 const STATUSES: LeadStatus[] = ['new', 'validated', 'contacted', 'responded', 'negotiating', 'won', 'discarded'];
 const PHONE_TYPES: PhoneType[] = ['mobile', 'mobile', 'mobile', 'landline', 'unknown'];
@@ -80,9 +143,15 @@ function buildLeads(): MockLead[] {
               ]
             : [];
 
+        const namePool = CATEGORY_NAME_POOL[category] ?? [category];
+        const baseName = pick(namePool, random);
+        // Só cerca de metade dos nomes leva o nome da cidade junto — negócio
+        // de verdade nem sempre inclui a cidade no nome.
+        const businessName = random() > 0.55 ? `${baseName} ${city.nome}` : baseName;
+
         result.push({
           id,
-          name: `${pick(NAME_PREFIXES, random)} ${pick(NAME_SUFFIXES, random)} ${city.nome}`,
+          name: businessName,
           phoneE164,
           phoneType,
           address: `Rua ${counter}, ${100 + Math.floor(random() * 900)} — ${city.nome}`,

@@ -24,14 +24,18 @@ export function TopListCard({
         {items.length === 0 ? (
           <p className="text-sm text-muted-foreground">{emptyMessage}</p>
         ) : (
-          <ul className="flex flex-col gap-2.5">
+          <ul className="flex flex-col gap-3">
             {items.map((item) => (
-              <li key={item.label} className="flex items-center gap-2.5">
-                <span className="w-28 shrink-0 truncate text-xs text-muted-foreground">{item.label}</span>
-                <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+              <li key={item.label} className="flex flex-col gap-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="line-clamp-2 text-xs text-muted-foreground" title={item.label}>
+                    {item.label}
+                  </span>
+                  <span className="shrink-0 text-xs font-medium tabular-nums text-foreground">{item.count}</span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                   <div className="h-full rounded-full bg-primary/70" style={{ width: `${Math.max(4, (item.count / max) * 100)}%` }} />
                 </div>
-                <span className="w-8 shrink-0 text-right text-xs font-medium tabular-nums text-foreground">{item.count}</span>
               </li>
             ))}
           </ul>

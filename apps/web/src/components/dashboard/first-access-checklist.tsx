@@ -1,16 +1,21 @@
+'use client';
+
 import Link from 'next/link';
 import { ArrowRight, MessageCircle, MessageSquareText, Search, Sparkles } from 'lucide-react';
 
+import { DashboardPreviewCard } from '@/components/dashboard/dashboard-preview-card';
 import { QueueHealthBanner } from '@/components/dashboard/queue-health-banner';
 import { SystemHealthCard } from '@/components/dashboard/system-health-card';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { useFirstAccessSystemContext } from '@/hooks/useFirstAccessSystemContext';
 
 const STEPS = [
   {
     icon: Search,
     title: 'Faça sua primeira busca',
-    description: 'Escolha um nicho e uma UF — o InnoProspect varre o Google Maps e traz os resultados como leads organizados.',
+    description: 'Escolha um nicho e uma UF. O InnoProspect varre o Google Maps e traz os resultados como leads organizados.',
     href: '/buscas/nova',
     cta: 'Nova busca',
   },
@@ -24,7 +29,7 @@ const STEPS = [
   {
     icon: MessageSquareText,
     title: 'Crie um template de mensagem',
-    description: 'Monte a primeira abordagem com variáveis (nome, cidade) e variações — pronta pra quando o disparo chegar.',
+    description: 'Monte a primeira abordagem com variáveis (nome, cidade) e variações, pronta para quando o disparo chegar.',
     href: '/templates',
     cta: 'Criar template',
   },
@@ -35,8 +40,17 @@ const STEPS = [
  * "lindo com mock, triste com zero" é reprovado (nota do dono). Em vez de
  * mostrar gráficos mortos, troca a seção inteira por um checklist de
  * primeiros passos com ação de verdade em cada item.
+ *
+ * `QueueHealthBanner`/`SystemHealthCard` recebem um cenário coerente de
+ * conta nova (fila rodando, sistema saudável, zero WhatsApp conectado) via
+ * `useFirstAccessSystemContext` — sem isso, os dois buscariam o mock GLOBAL
+ * de fila (`mocks/scraper.ts`, que começa pausado com incidente crítico só
+ * para exercitar o banner em outras telas) e contariam uma história
+ * incoerente com "conta sem nenhum lead ainda".
  */
 export function FirstAccessChecklist({ greeting, firstName }: { greeting: string; firstName?: string }) {
+  const { data: systemContext, isLoading: isContextLoading } = useFirstAccessSystemContext();
+
   return (
     <div className="flex flex-col gap-6">
       <section className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-primary/[0.07] via-card to-card p-6 shadow-sm sm:p-8">
@@ -83,15 +97,24 @@ export function FirstAccessChecklist({ greeting, firstName }: { greeting: string
         })}
       </div>
 
-      <p className="text-center text-sm text-muted-foreground">
-        Assim que os primeiros leads chegarem, esta página ganha gráfico de evolução, funil por status e os
-        destaques por UF e categoria automaticamente.
-      </p>
-
-      <QueueHealthBanner />
+      {isContextLoading ? <Skeleton className="h-16 w-full rounded-lg" /> : <QueueHealthBanner status={systemContext?.queue} />}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <SystemHealthCard className="lg:col-span-1" />
+        <DashboardPreviewCard className="lg:col-span-2" />
+        {isContextLoading ? (
+          <Card className="lg:col-span-1">
+            <CardContent className="flex flex-col gap-2.5 p-5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-6 w-full" />
+              ))}
+            </CardContent>
+          </Card>
+        ) : (
+          <SystemHealthCard
+            className="lg:col-span-1"
+            overrideData={systemContext ? { health: systemContext.health, instances: systemContext.instances } : undefined}
+          />
+        )}
       </div>
     </div>
   );

@@ -44,7 +44,7 @@ export function LeadsAreaChart({ data, className }: AreaChartProps) {
 
   return (
     <div className={cn('flex flex-col gap-2', className)}>
-      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="h-48 w-full overflow-visible" role="img" aria-label={`Leads coletados por dia, últimos ${data.length} dias — de ${first?.count ?? 0} em ${first ? formatShortDate(first.date) : ''} para ${last?.count ?? 0} em ${last ? formatShortDate(last.date) : ''}`}>
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="h-48 w-full overflow-visible" role="img" aria-label={`Leads coletados por dia, últimos ${data.length} dias: de ${first?.count ?? 0} em ${first ? formatShortDate(first.date) : ''} para ${last?.count ?? 0} em ${last ? formatShortDate(last.date) : ''}`}>
         <defs>
           <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="currentColor" stopOpacity="0.28" className="text-primary" />

@@ -1,64 +1,353 @@
 import type { City, Uf } from '@/types/location';
-import { mulberry32, pick } from './utils';
+import { mulberry32 } from './utils';
 
-const UF_SEED: Array<{ sigla: string; nome: string; capital: string; sizeTier: number }> = [
-  { sigla: 'AC', nome: 'Acre', capital: 'Rio Branco', sizeTier: 22 },
-  { sigla: 'AL', nome: 'Alagoas', capital: 'Maceió', sizeTier: 102 },
-  { sigla: 'AP', nome: 'Amapá', capital: 'Macapá', sizeTier: 16 },
-  { sigla: 'AM', nome: 'Amazonas', capital: 'Manaus', sizeTier: 62 },
-  { sigla: 'BA', nome: 'Bahia', capital: 'Salvador', sizeTier: 417 },
-  { sigla: 'CE', nome: 'Ceará', capital: 'Fortaleza', sizeTier: 184 },
-  { sigla: 'DF', nome: 'Distrito Federal', capital: 'Brasília', sizeTier: 1 },
-  { sigla: 'ES', nome: 'Espírito Santo', capital: 'Vitória', sizeTier: 78 },
-  { sigla: 'GO', nome: 'Goiás', capital: 'Goiânia', sizeTier: 246 },
-  { sigla: 'MA', nome: 'Maranhão', capital: 'São Luís', sizeTier: 217 },
-  { sigla: 'MT', nome: 'Mato Grosso', capital: 'Cuiabá', sizeTier: 141 },
-  { sigla: 'MS', nome: 'Mato Grosso do Sul', capital: 'Campo Grande', sizeTier: 79 },
-  { sigla: 'MG', nome: 'Minas Gerais', capital: 'Belo Horizonte', sizeTier: 853 },
-  { sigla: 'PA', nome: 'Pará', capital: 'Belém', sizeTier: 144 },
-  { sigla: 'PB', nome: 'Paraíba', capital: 'João Pessoa', sizeTier: 223 },
-  { sigla: 'PR', nome: 'Paraná', capital: 'Curitiba', sizeTier: 399 },
-  { sigla: 'PE', nome: 'Pernambuco', capital: 'Recife', sizeTier: 184 },
-  { sigla: 'PI', nome: 'Piauí', capital: 'Teresina', sizeTier: 224 },
-  { sigla: 'RJ', nome: 'Rio de Janeiro', capital: 'Rio de Janeiro', sizeTier: 92 },
-  { sigla: 'RN', nome: 'Rio Grande do Norte', capital: 'Natal', sizeTier: 167 },
-  { sigla: 'RS', nome: 'Rio Grande do Sul', capital: 'Porto Alegre', sizeTier: 497 },
-  { sigla: 'RO', nome: 'Rondônia', capital: 'Porto Velho', sizeTier: 52 },
-  { sigla: 'RR', nome: 'Roraima', capital: 'Boa Vista', sizeTier: 15 },
-  { sigla: 'SC', nome: 'Santa Catarina', capital: 'Florianópolis', sizeTier: 295 },
-  { sigla: 'SP', nome: 'São Paulo', capital: 'São Paulo', sizeTier: 645 },
-  { sigla: 'SE', nome: 'Sergipe', capital: 'Aracaju', sizeTier: 75 },
-  { sigla: 'TO', nome: 'Tocantins', capital: 'Palmas', sizeTier: 139 },
+const UF_SEED: Array<{ sigla: string; nome: string; sizeTier: number }> = [
+  { sigla: 'AC', nome: 'Acre', sizeTier: 22 },
+  { sigla: 'AL', nome: 'Alagoas', sizeTier: 102 },
+  { sigla: 'AP', nome: 'Amapá', sizeTier: 16 },
+  { sigla: 'AM', nome: 'Amazonas', sizeTier: 62 },
+  { sigla: 'BA', nome: 'Bahia', sizeTier: 417 },
+  { sigla: 'CE', nome: 'Ceará', sizeTier: 184 },
+  { sigla: 'DF', nome: 'Distrito Federal', sizeTier: 1 },
+  { sigla: 'ES', nome: 'Espírito Santo', sizeTier: 78 },
+  { sigla: 'GO', nome: 'Goiás', sizeTier: 246 },
+  { sigla: 'MA', nome: 'Maranhão', sizeTier: 217 },
+  { sigla: 'MT', nome: 'Mato Grosso', sizeTier: 141 },
+  { sigla: 'MS', nome: 'Mato Grosso do Sul', sizeTier: 79 },
+  { sigla: 'MG', nome: 'Minas Gerais', sizeTier: 853 },
+  { sigla: 'PA', nome: 'Pará', sizeTier: 144 },
+  { sigla: 'PB', nome: 'Paraíba', sizeTier: 223 },
+  { sigla: 'PR', nome: 'Paraná', sizeTier: 399 },
+  { sigla: 'PE', nome: 'Pernambuco', sizeTier: 184 },
+  { sigla: 'PI', nome: 'Piauí', sizeTier: 224 },
+  { sigla: 'RJ', nome: 'Rio de Janeiro', sizeTier: 92 },
+  { sigla: 'RN', nome: 'Rio Grande do Norte', sizeTier: 167 },
+  { sigla: 'RS', nome: 'Rio Grande do Sul', sizeTier: 497 },
+  { sigla: 'RO', nome: 'Rondônia', sizeTier: 52 },
+  { sigla: 'RR', nome: 'Roraima', sizeTier: 15 },
+  { sigla: 'SC', nome: 'Santa Catarina', sizeTier: 295 },
+  { sigla: 'SP', nome: 'São Paulo', sizeTier: 645 },
+  { sigla: 'SE', nome: 'Sergipe', sizeTier: 75 },
+  { sigla: 'TO', nome: 'Tocantins', sizeTier: 139 },
 ];
 
-const NAME_PARTS_A = [
-  'Santa',
-  'São',
-  'Bom',
-  'Novo',
-  'Alto',
-  'Boa',
-  'Porto',
-  'Vila',
-  'Serra',
-  'Rio',
-  'Campo',
-  'Monte',
-];
-const NAME_PARTS_B = [
-  'Vista',
-  'Esperança',
-  'Alegre',
-  'Verde',
-  'Grande',
-  'Formoso',
-  'do Sul',
-  'Bonito',
-  'das Flores',
-  'Novo',
-  'Fundo',
-  'Alto',
-];
+/**
+ * Municípios brasileiros REAIS por UF (capital primeiro, depois os mais
+ * relevantes por porte) — a versão anterior gerava nomes combinando
+ * partículas aleatórias ("Monte Fundo 36", "Campo Bonito") e isso ficava
+ * óbvio como defeito em qualquer captura de tela real. Lista curada, não
+ * exaustiva (a `cityCount` de cada UF em `UF_SEED`, usada na landing/stat-band,
+ * continua sendo o total real de municípios — não o tamanho desta lista).
+ */
+const REAL_CITIES_BY_UF: Record<string, string[]> = {
+  AC: ['Rio Branco', 'Cruzeiro do Sul', 'Sena Madureira', 'Tarauacá', 'Feijó', 'Brasileia', 'Xapuri', 'Senador Guiomard'],
+  AL: [
+    'Maceió',
+    'Arapiraca',
+    'Palmeira dos Índios',
+    'Rio Largo',
+    'Penedo',
+    'União dos Palmares',
+    'São Miguel dos Campos',
+    'Coruripe',
+    'Delmiro Gouveia',
+    'Marechal Deodoro',
+    'Maragogi',
+  ],
+  AP: ['Macapá', 'Santana', 'Laranjal do Jari', 'Oiapoque', 'Mazagão', 'Porto Grande', 'Tartarugalzinho', 'Vitória do Jari'],
+  AM: ['Manaus', 'Parintins', 'Itacoatiara', 'Manacapuru', 'Coari', 'Tefé', 'Tabatinga', 'Maués', 'Humaitá', 'Iranduba'],
+  BA: [
+    'Salvador',
+    'Feira de Santana',
+    'Vitória da Conquista',
+    'Camaçari',
+    'Itabuna',
+    'Juazeiro',
+    'Lauro de Freitas',
+    'Ilhéus',
+    'Jequié',
+    'Teixeira de Freitas',
+    'Alagoinhas',
+    'Barreiras',
+    'Porto Seguro',
+    'Simões Filho',
+    'Paulo Afonso',
+    'Eunápolis',
+  ],
+  CE: [
+    'Fortaleza',
+    'Caucaia',
+    'Juazeiro do Norte',
+    'Maracanaú',
+    'Sobral',
+    'Crato',
+    'Itapipoca',
+    'Maranguape',
+    'Iguatu',
+    'Quixadá',
+    'Canindé',
+    'Aquiraz',
+  ],
+  DF: ['Brasília', 'Taguatinga', 'Ceilândia', 'Samambaia', 'Planaltina', 'Gama', 'Sobradinho', 'Águas Claras', 'Santa Maria'],
+  ES: [
+    'Vitória',
+    'Vila Velha',
+    'Serra',
+    'Cariacica',
+    'Linhares',
+    'Cachoeiro de Itapemirim',
+    'Colatina',
+    'Guarapari',
+    'Aracruz',
+    'Viana',
+    'Nova Venécia',
+    'São Mateus',
+    'Domingos Martins',
+    'Alegre',
+    'Santa Teresa',
+    'Marataízes',
+    'Guaçuí',
+    'Itapemirim',
+    'Anchieta',
+    'Ecoporanga',
+    'Barra de São Francisco',
+  ],
+  GO: [
+    'Goiânia',
+    'Aparecida de Goiânia',
+    'Anápolis',
+    'Rio Verde',
+    'Luziânia',
+    'Águas Lindas de Goiás',
+    'Valparaíso de Goiás',
+    'Trindade',
+    'Formosa',
+    'Itumbiara',
+    'Jataí',
+    'Catalão',
+    'Caldas Novas',
+  ],
+  MA: [
+    'São Luís',
+    'Imperatriz',
+    'São José de Ribamar',
+    'Timon',
+    'Caxias',
+    'Codó',
+    'Paço do Lumiar',
+    'Açailândia',
+    'Bacabal',
+    'Balsas',
+    'Santa Inês',
+  ],
+  MT: [
+    'Cuiabá',
+    'Várzea Grande',
+    'Rondonópolis',
+    'Sinop',
+    'Tangará da Serra',
+    'Cáceres',
+    'Sorriso',
+    'Lucas do Rio Verde',
+    'Primavera do Leste',
+    'Barra do Garças',
+  ],
+  MS: [
+    'Campo Grande',
+    'Dourados',
+    'Três Lagoas',
+    'Corumbá',
+    'Ponta Porã',
+    'Naviraí',
+    'Nova Andradina',
+    'Aquidauana',
+    'Sidrolândia',
+    'Maracaju',
+  ],
+  MG: [
+    'Belo Horizonte',
+    'Uberlândia',
+    'Contagem',
+    'Juiz de Fora',
+    'Betim',
+    'Montes Claros',
+    'Ribeirão das Neves',
+    'Uberaba',
+    'Governador Valadares',
+    'Ipatinga',
+    'Sete Lagoas',
+    'Divinópolis',
+    'Santa Luzia',
+    'Poços de Caldas',
+    'Patos de Minas',
+    'Pouso Alegre',
+    'Teófilo Otoni',
+    'Barbacena',
+    'Sabará',
+    'Varginha',
+  ],
+  PA: [
+    'Belém',
+    'Ananindeua',
+    'Santarém',
+    'Marabá',
+    'Parauapebas',
+    'Castanhal',
+    'Abaetetuba',
+    'Cametá',
+    'Bragança',
+    'Altamira',
+    'Tucuruí',
+    'Itaituba',
+  ],
+  PB: ['João Pessoa', 'Campina Grande', 'Santa Rita', 'Patos', 'Bayeux', 'Sousa', 'Cabedelo', 'Cajazeiras', 'Guarabira', 'Sapé'],
+  PR: [
+    'Curitiba',
+    'Londrina',
+    'Maringá',
+    'Ponta Grossa',
+    'Cascavel',
+    'São José dos Pinhais',
+    'Foz do Iguaçu',
+    'Colombo',
+    'Guarapuava',
+    'Paranaguá',
+    'Toledo',
+    'Apucarana',
+    'Pinhais',
+    'Campo Largo',
+    'Araucária',
+    'Umuarama',
+  ],
+  PE: [
+    'Recife',
+    'Jaboatão dos Guararapes',
+    'Olinda',
+    'Caruaru',
+    'Petrolina',
+    'Paulista',
+    'Cabo de Santo Agostinho',
+    'Camaragibe',
+    'Garanhuns',
+    'Vitória de Santo Antão',
+    'Igarassu',
+  ],
+  PI: ['Teresina', 'Parnaíba', 'Picos', 'Piripiri', 'Floriano', 'Campo Maior', 'Barras', 'União', 'Altos'],
+  RJ: [
+    'Rio de Janeiro',
+    'São Gonçalo',
+    'Duque de Caxias',
+    'Nova Iguaçu',
+    'Niterói',
+    'Belford Roxo',
+    'Campos dos Goytacazes',
+    'São João de Meriti',
+    'Petrópolis',
+    'Volta Redonda',
+    'Magé',
+    'Macaé',
+    'Itaboraí',
+    'Cabo Frio',
+    'Angra dos Reis',
+    'Nova Friburgo',
+    'Teresópolis',
+    'Barra Mansa',
+    'Resende',
+    'Queimados',
+  ],
+  RN: ['Natal', 'Mossoró', 'Parnamirim', 'São Gonçalo do Amarante', 'Macaíba', 'Ceará-Mirim', 'Caicó', 'Açu', 'Currais Novos'],
+  RS: [
+    'Porto Alegre',
+    'Caxias do Sul',
+    'Pelotas',
+    'Canoas',
+    'Santa Maria',
+    'Gravataí',
+    'Viamão',
+    'Novo Hamburgo',
+    'São Leopoldo',
+    'Rio Grande',
+    'Alvorada',
+    'Passo Fundo',
+    'Sapucaia do Sul',
+    'Uruguaiana',
+    'Santa Cruz do Sul',
+    'Cachoeirinha',
+    'Bagé',
+    'Bento Gonçalves',
+    'Erechim',
+    'Gramado',
+  ],
+  RO: ['Porto Velho', 'Ji-Paraná', 'Ariquemes', 'Vilhena', 'Cacoal', 'Rolim de Moura', 'Jaru', 'Guajará-Mirim', 'Pimenta Bueno'],
+  RR: ['Boa Vista', 'Rorainópolis', 'Caracaraí', 'Alto Alegre', 'Mucajaí', 'Cantá', 'Pacaraima', 'Bonfim'],
+  SC: [
+    'Florianópolis',
+    'Joinville',
+    'Blumenau',
+    'São José',
+    'Chapecó',
+    'Itajaí',
+    'Criciúma',
+    'Jaraguá do Sul',
+    'Palhoça',
+    'Lages',
+    'Balneário Camboriú',
+    'Brusque',
+    'Tubarão',
+    'Camboriú',
+    'São Bento do Sul',
+  ],
+  SP: [
+    'São Paulo',
+    'Guarulhos',
+    'Campinas',
+    'São Bernardo do Campo',
+    'Santo André',
+    'Osasco',
+    'São José dos Campos',
+    'Ribeirão Preto',
+    'Sorocaba',
+    'Mauá',
+    'São José do Rio Preto',
+    'Mogi das Cruzes',
+    'Santos',
+    'Diadema',
+    'Jundiaí',
+    'Piracicaba',
+    'Carapicuíba',
+    'Bauru',
+    'Itaquaquecetuba',
+    'Franca',
+    'São Vicente',
+    'Praia Grande',
+    'Limeira',
+    'Suzano',
+    'Taubaté',
+    'Guarujá',
+  ],
+  SE: [
+    'Aracaju',
+    'Nossa Senhora do Socorro',
+    'Lagarto',
+    'Itabaiana',
+    'São Cristóvão',
+    'Estância',
+    'Tobias Barreto',
+    'Itabaianinha',
+    'Simão Dias',
+  ],
+  TO: [
+    'Palmas',
+    'Araguaína',
+    'Gurupi',
+    'Porto Nacional',
+    'Paraíso do Tocantins',
+    'Colinas do Tocantins',
+    'Guaraí',
+    'Tocantinópolis',
+    'Dianópolis',
+  ],
+};
 
 function slugify(value: string): string {
   return value
@@ -69,33 +358,22 @@ function slugify(value: string): string {
     .replace(/(^-|-$)/g, '');
 }
 
-function buildCitiesForUf(sigla: string, capital: string, count: number): City[] {
+function buildCitiesForUf(sigla: string): City[] {
   const random = mulberry32(sigla.charCodeAt(0) * 1000 + sigla.charCodeAt(1));
-  const cities: City[] = [
-    {
-      ibgeCode: `${sigla}0000001`,
-      nome: capital,
-      slug: slugify(capital),
-      population: Math.floor(300_000 + random() * 11_000_000),
-    },
-  ];
-  const used = new Set([capital]);
-  for (let i = 1; i < count; i++) {
-    let name = `${pick(NAME_PARTS_A, random)} ${pick(NAME_PARTS_B, random)}`;
-    let attempts = 0;
-    while (used.has(name) && attempts < 5) {
-      name = `${pick(NAME_PARTS_A, random)} ${pick(NAME_PARTS_B, random)} ${i}`;
-      attempts++;
-    }
-    used.add(name);
-    cities.push({
-      ibgeCode: `${sigla}${String(1000 + i).padStart(7, '0')}`,
-      nome: name,
-      slug: slugify(name),
-      population: Math.floor(1_500 + random() * 250_000),
-    });
-  }
-  return cities.sort((a, b) => b.population - a.population);
+  const names = REAL_CITIES_BY_UF[sigla] ?? [];
+  // Ordem já é aproximadamente capital -> porte decrescente; a população
+  // sintética segue essa mesma curva (maior nos primeiros, com ruído) para
+  // não contradizer a ordem exibida.
+  return names.map((nome, index) => {
+    const scale = names.length - index;
+    const population = Math.floor(12_000 + scale * (7_000 + random() * 35_000));
+    return {
+      ibgeCode: `${sigla}${String(index + 1).padStart(6, '0')}`,
+      nome,
+      slug: slugify(nome),
+      population,
+    };
+  });
 }
 
 export const MOCK_UFS: Uf[] = UF_SEED.map((uf) => ({
@@ -105,15 +383,11 @@ export const MOCK_UFS: Uf[] = UF_SEED.map((uf) => ({
   cityCount: uf.sizeTier,
 })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 
-// Gera no máximo 40 cidades "de verdade" por UF pro mock (a cityCount informado
-// no /ufs continua sendo o total real — o backend de verdade lista todas).
 const CITIES_CACHE = new Map<string, City[]>();
 function citiesForUf(sigla: string): City[] {
   const cached = CITIES_CACHE.get(sigla);
   if (cached) return cached;
-  const seed = UF_SEED.find((u) => u.sigla === sigla);
-  if (!seed) return [];
-  const list = buildCitiesForUf(seed.sigla, seed.capital, Math.min(40, seed.sizeTier));
+  const list = buildCitiesForUf(sigla).sort((a, b) => b.population - a.population);
   CITIES_CACHE.set(sigla, list);
   return list;
 }

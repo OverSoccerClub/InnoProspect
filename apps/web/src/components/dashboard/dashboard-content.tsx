@@ -4,6 +4,9 @@ import type { CSSProperties } from 'react';
 import { Radar, Smartphone, TrendingUp, Users } from 'lucide-react';
 
 import { LeadsAreaChart } from '@/components/dashboard/charts/area-chart';
+import { CompareBars } from '@/components/dashboard/charts/compare-bars';
+import { ProportionRing } from '@/components/dashboard/charts/proportion-ring';
+import { Sparkline } from '@/components/dashboard/charts/sparkline';
 import { DashboardSkeleton } from '@/components/dashboard/dashboard-skeleton';
 import { FirstAccessChecklist } from '@/components/dashboard/first-access-checklist';
 import { IndicatorCard } from '@/components/dashboard/indicator-card';
@@ -71,14 +74,14 @@ export function DashboardContent({ greeting, firstName }: { greeting: string; fi
           label="Leads na semana"
           value={data.leads.createdLast7d}
           deltaPercent={deltaPercent(data.leads.createdLast7d, data.leads.createdPrev7d)}
-          sparklineData={data.leads.byDay.map((d) => d.count)}
+          visual={<Sparkline data={data.leads.byDay.map((d) => d.count)} />}
         />
         <IndicatorCard
           icon={Users}
           iconClassName="bg-primary/10 text-primary"
           label="Total de leads"
           value={data.leads.total}
-          sparklineData={cumulativeByDay}
+          visual={<Sparkline data={cumulativeByDay} />}
         />
         <IndicatorCard
           icon={Smartphone}
@@ -86,20 +89,29 @@ export function DashboardContent({ greeting, firstName }: { greeting: string; fi
           label="Leads com celular"
           value={withMobilePercent}
           format={(v) => `${v.toFixed(0)}%`}
-          secondaryText={`${data.leads.withMobile.toLocaleString('pt-BR')} de ${data.leads.total.toLocaleString('pt-BR')} — o que qualifica pra WhatsApp`}
+          visual={<ProportionRing percent={withMobilePercent} valueClassName="text-success" />}
+          secondaryText={`${data.leads.withMobile.toLocaleString('pt-BR')} de ${data.leads.total.toLocaleString('pt-BR')}, o que qualifica para WhatsApp`}
         />
         <IndicatorCard
           icon={Radar}
           iconClassName="bg-accent text-accent-foreground"
           label="Buscas ativas"
           value={activeSearches}
+          visual={
+            <CompareBars
+              items={[
+                { label: 'Na fila', value: data.searches.queued, barClassName: 'bg-muted-foreground/40' },
+                { label: 'Rodando', value: data.searches.running, barClassName: 'bg-accent-foreground' },
+              ]}
+            />
+          }
           secondaryText={`${data.searches.queued} na fila · ${data.searches.running} rodando`}
         />
       </div>
 
       <div className="inno-stagger-in grid gap-4 lg:grid-cols-3" style={stagger(3)}>
         <div className="rounded-lg border border-border bg-card p-5 shadow-sm lg:col-span-2">
-          <p className="mb-1 text-sm font-medium text-muted-foreground">Leads coletados — últimos 30 dias</p>
+          <p className="mb-1 text-sm font-medium text-muted-foreground">Leads coletados nos últimos 30 dias</p>
           <LeadsAreaChart data={data.leads.byDay} />
         </div>
         <StatusFunnel byStatus={data.leads.byStatus} />

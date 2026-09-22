@@ -12,6 +12,18 @@ import { useQueueStatus } from '@/hooks/useQueueStatus';
 import { resumeQueue } from '@/lib/api/scraper';
 import { ApiRequestError } from '@/lib/fetcher';
 import { formatRelative } from '@/lib/format';
+import type { ScraperQueueStatusResponse } from '@/types/scraper-queue';
+
+type QueueHealthBannerProps = {
+  /**
+   * Estado fixo, pulando o fetch/polling interno — usado só por
+   * `FirstAccessChecklist`, que já resolveu um cenário coerente de conta
+   * nova (fila rodando) via `useFirstAccessSystemContext` e não pode deixar
+   * este componente buscar o estado global do mock (que começa pausado com
+   * incidente, ver `mocks/dashboard.ts`).
+   */
+  status?: ScraperQueueStatusResponse;
+};
 
 /**
  * Banner de saúde da fila `scrape:search` — hoje o único jeito de descobrir
@@ -22,8 +34,12 @@ import { formatRelative } from '@/lib/format';
  * resultado alta), e só um humano que investigou pode dizer que é seguro
  * seguir — texto do botão de confirmação deixa isso claro de propósito.
  */
-export function QueueHealthBanner() {
-  const { data: status, error, isLoading, refetch } = useQueueStatus();
+export function QueueHealthBanner({ status: statusOverride }: QueueHealthBannerProps = {}) {
+  const polling = useQueueStatus(!statusOverride);
+  const status = statusOverride ?? polling.data;
+  const isLoading = statusOverride ? false : polling.isLoading;
+  const error = statusOverride ? null : polling.error;
+  const refetch = polling.refetch;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
 
@@ -74,8 +90,8 @@ export function QueueHealthBanner() {
         <ShieldQuestion aria-hidden="true" />
         <AlertTitle>Não foi possível determinar o estado da fila</AlertTitle>
         <AlertDescription>
-          O Redis que sustenta a fila de coleta não respondeu. Isso não confirma que ela parou — só que não dá
-          pra saber daqui. Se persistir, avise quem cuida da infraestrutura.
+          O Redis que sustenta a fila de coleta não respondeu. Isso não confirma que ela parou, só que não dá
+          para saber daqui. Se persistir, avise quem cuida da infraestrutura.
         </AlertDescription>
       </Alert>
     );
@@ -114,7 +130,7 @@ export function QueueHealthBanner() {
           if (!open) setResumeError(null);
         }}
         title="Retomar a fila de coleta"
-        description="A pausa foi uma medida de segurança automática, não um bug de tela — retomar sem entender a causa (ex.: taxa alta de resultados vazios, possível bloqueio do Google Maps) tende a reproduzir o mesmo incidente minutos depois. Confirme só se você já investigou e sabe por que é seguro seguir."
+        description="A pausa foi uma medida de segurança automática, não um bug de tela. Retomar sem entender a causa (ex.: taxa alta de resultados vazios, possível bloqueio do Google Maps) tende a reproduzir o mesmo incidente minutos depois. Confirme só se você já investigou e sabe por que é seguro seguir."
         confirmLabel="Já investiguei, retomar a fila"
         confirmVariant="default"
         errorMessage={resumeError}

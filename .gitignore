@@ -44,3 +44,6 @@ Thumbs.db
 
 # Registro local do quadro de missoes (quadro.mjs) - estado de sessao, nunca versionar.
 .missoes-quadro.json
+
+# Configuracao local do preview do Claude Code: aponta para caminhos desta maquina.
+.claude/launch.json

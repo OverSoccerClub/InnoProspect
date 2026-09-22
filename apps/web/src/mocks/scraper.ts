@@ -9,7 +9,7 @@ import type { ResumeScraperQueueResponse, ScraperQueueStatusResponse } from '@/t
  */
 let queueState: ScraperQueueStatusResponse = {
   status: 'paused',
-  reason: 'Taxa de resultados zerados acima do limite em 3 cidades seguidas — pode ser bloqueio do Google Maps.',
+  reason: 'Taxa de resultados zerados acima do limite em 3 cidades seguidas. Pode ser bloqueio do Google Maps.',
   code: 'zero_streak',
   severity: 'critical',
   source: 'sanity',
@@ -38,7 +38,7 @@ export function mockResumeQueue(): ResumeScraperQueueResponse {
   if (queueState.status !== 'paused') {
     throw new ApiRequestError(409, {
       code: 'CONFLICT',
-      message: 'A fila de scraping não está pausada — não há o que retomar.',
+      message: 'A fila de scraping não está pausada, não há o que retomar.',
       requestId: 'mock',
     });
   }

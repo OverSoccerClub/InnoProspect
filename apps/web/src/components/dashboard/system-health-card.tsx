@@ -9,6 +9,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { getHealth } from '@/lib/api/health';
 import { formatRelative } from '@/lib/format';
 import { listInstances } from '@/lib/api/whatsapp';
+import type { HealthReport } from '@/types/health';
+import type { InstanceListItem } from '@/types/whatsapp';
 
 type RowStatus = 'ok' | 'warn' | 'error';
 
@@ -26,6 +28,49 @@ const ROW_ICON_CLASS: Record<RowStatus, string> = {
   error: 'text-destructive',
 };
 
+/** Mesma lógica usada no fetch real e na versão fixa do primeiro acesso — um lugar só de verdade. */
+function buildHealthRows(health: HealthReport, instances: InstanceListItem[]): Row[] {
+  const connected = instances.filter((i) => i.status === 'connected').length;
+  return [
+    {
+      label: 'Banco de dados',
+      status: health.checks.database.status === 'ok' ? 'ok' : 'error',
+      detail: health.checks.database.status === 'ok' ? `${health.checks.database.latencyMs ?? '—'}ms` : (health.checks.database.error ?? 'Indisponível'),
+    },
+    {
+      label: 'Redis',
+      status: health.checks.redis.status === 'ok' ? 'ok' : 'error',
+      detail: health.checks.redis.status === 'ok' ? `${health.checks.redis.latencyMs ?? '—'}ms` : (health.checks.redis.error ?? 'Indisponível'),
+    },
+    {
+      label: 'Worker',
+      status: health.checks.worker.status === 'ok' ? 'ok' : 'error',
+      detail: health.checks.worker.status === 'ok' ? `último sinal ${formatRelative(health.checks.worker.lastHeartbeatAt)}` : 'sem sinal',
+    },
+    {
+      label: 'Fila de coleta',
+      status: health.checks.queue.status === 'running' ? 'ok' : health.checks.queue.status === 'paused' ? 'error' : 'warn',
+      detail: health.checks.queue.status === 'running' ? 'operando' : health.checks.queue.status === 'paused' ? 'pausada' : 'indeterminado',
+    },
+    {
+      label: 'WhatsApp',
+      status: connected > 0 ? 'ok' : instances.length === 0 ? 'warn' : 'error',
+      detail: instances.length === 0 ? 'nenhuma instância' : `${connected} de ${instances.length} conectada${instances.length === 1 ? '' : 's'}`,
+    },
+  ];
+}
+
+type SystemHealthCardProps = {
+  className?: string;
+  /**
+   * Dados fixos, pulando o fetch interno — usado só por
+   * `FirstAccessChecklist`, que já resolveu um cenário coerente de conta
+   * nova (sistema saudável, zero instâncias de WhatsApp) via
+   * `useFirstAccessSystemContext`.
+   */
+  overrideData?: { health: HealthReport; instances: InstanceListItem[] };
+};
+
 /**
  * Card de saúde do sistema — banco, Redis, worker (heartbeat), fila e
  * WhatsApp num olhar só. É o que dá "cara de sistema profissional" (pedido
@@ -33,50 +78,22 @@ const ROW_ICON_CLASS: Record<RowStatus, string> = {
  * sem abrir `/health` manualmente (mesmo motivo do `QueueHealthBanner`,
  * DESIGN-SYSTEM.md §9.3 — este card é o complemento operacional dele).
  */
-export function SystemHealthCard({ className }: { className?: string }) {
-  const [rows, setRows] = useState<Row[] | null>(null);
+export function SystemHealthCard({ className, overrideData }: SystemHealthCardProps) {
+  const [rows, setRows] = useState<Row[] | null>(overrideData ? buildHealthRows(overrideData.health, overrideData.instances) : null);
   const [error, setError] = useState<Error | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!overrideData);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    if (overrideData) return;
+
     let cancelled = false;
     setIsLoading(true);
     setError(null);
 
     Promise.all([getHealth(), listInstances()])
       .then(([health, instances]) => {
-        if (cancelled) return;
-        const connected = instances.filter((i) => i.status === 'connected').length;
-
-        const built: Row[] = [
-          {
-            label: 'Banco de dados',
-            status: health.checks.database.status === 'ok' ? 'ok' : 'error',
-            detail: health.checks.database.status === 'ok' ? `${health.checks.database.latencyMs ?? '—'}ms` : (health.checks.database.error ?? 'Indisponível'),
-          },
-          {
-            label: 'Redis',
-            status: health.checks.redis.status === 'ok' ? 'ok' : 'error',
-            detail: health.checks.redis.status === 'ok' ? `${health.checks.redis.latencyMs ?? '—'}ms` : (health.checks.redis.error ?? 'Indisponível'),
-          },
-          {
-            label: 'Worker',
-            status: health.checks.worker.status === 'ok' ? 'ok' : 'error',
-            detail: health.checks.worker.status === 'ok' ? `último sinal ${formatRelative(health.checks.worker.lastHeartbeatAt)}` : 'sem sinal',
-          },
-          {
-            label: 'Fila de coleta',
-            status: health.checks.queue.status === 'running' ? 'ok' : health.checks.queue.status === 'paused' ? 'error' : 'warn',
-            detail: health.checks.queue.status === 'running' ? 'operando' : health.checks.queue.status === 'paused' ? 'pausada' : 'indeterminado',
-          },
-          {
-            label: 'WhatsApp',
-            status: connected > 0 ? 'ok' : instances.length === 0 ? 'warn' : 'error',
-            detail: instances.length === 0 ? 'nenhuma instância' : `${connected} de ${instances.length} conectada${instances.length === 1 ? '' : 's'}`,
-          },
-        ];
-        setRows(built);
+        if (!cancelled) setRows(buildHealthRows(health, instances));
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err : new Error('Não foi possível carregar a saúde do sistema.'));
@@ -88,7 +105,7 @@ export function SystemHealthCard({ className }: { className?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, overrideData]);
 
   return (
     <Card className={className}>

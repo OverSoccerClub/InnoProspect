@@ -96,7 +96,16 @@ const nextConfig: NextConfig = {
       // (ver nota acima sobre middleware). Sem isto, a APLICAÇÃO INTEIRA
       // fica em tela branca (é o jeito mais comum de "CSP quebra o app na
       // hora" — testado mentalmente contra o próprio aviso desta tarefa).
-      "script-src 'self' 'unsafe-inline'",
+      // 'unsafe-eval' SÓ em `next dev`: o devtool de webpack do modo dev
+      // avalia os módulos com `eval()`, e sem isto a CSP barra a hidratação
+      // inteira — todo Client Component fica congelado e o app parece
+      // quebrado ao rodar localmente (achado da Lyra, 2026-09). `next build`
+      // roda sempre com NODE_ENV=production, então esta liberação nunca
+      // chega à imagem de produção. Não troque a condição por uma env
+      // configurável: seria uma porta para ligar eval em produção por engano.
+      process.env.NODE_ENV === 'development'
+        ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+        : "script-src 'self' 'unsafe-inline'",
       // 'unsafe-inline' necessário: Radix UI (base dos componentes em
       // `components/ui/*`, ex. `dialog.tsx`) define posição/animação via
       // atributo `style` inline no elemento, não por classe CSS — isso é
