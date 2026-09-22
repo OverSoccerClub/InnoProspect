@@ -24,7 +24,7 @@ export function LoginForm() {
     try {
       const result = await login({ email, password });
       if (result.ok) {
-        router.push('/');
+        router.push('/painel');
         router.refresh();
       } else {
         setError(result.message);

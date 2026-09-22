@@ -8,7 +8,9 @@ import type { NavItem } from './nav-items';
 
 export function NavLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
   const pathname = usePathname();
-  const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
+  // Todo item de NAV_ITEMS aponta pra uma raiz de seção própria (/painel,
+  // /leads, /buscas...) sem colisão de prefixo entre elas — startsWith basta.
+  const isActive = pathname.startsWith(item.href);
   const Icon = item.icon;
 
   return (

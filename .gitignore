@@ -34,3 +34,13 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# Missão aberta no momento, nesta máquina/sessão (Painel de Tarefas da
+# InnovareCode, equipe.innovarecode.com.br). Estado transitório escrito por
+# scripts/missao.mjs do repositório innovarecode-missoes — nunca versionar:
+# cada pessoa/sessão tem o seu, e commitar faria um sobrescrever a tarefa em
+# aberto do outro a cada pull.
+.missao-atual
+
+# Registro local do quadro de missoes (quadro.mjs) - estado de sessao, nunca versionar.
+.missoes-quadro.json

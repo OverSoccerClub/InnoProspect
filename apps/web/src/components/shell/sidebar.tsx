@@ -11,7 +11,7 @@ export function Sidebar() {
     <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card md:flex">
       <div className="flex h-14 items-center gap-2.5 border-b border-border px-4">
         <Link
-          href="/"
+          href="/painel"
           className="flex items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">

@@ -10,7 +10,7 @@ export type NavItem = {
 };
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: '/', label: 'Visão geral', icon: LayoutDashboard },
+  { href: '/painel', label: 'Visão geral', icon: LayoutDashboard },
   { href: '/buscas', label: 'Buscas', icon: Search },
   { href: '/leads', label: 'Leads', icon: Users },
   { href: '/templates', label: 'Templates', icon: MessageSquareText },

@@ -45,8 +45,17 @@ export default auth((req) => {
   const isAuthed = Boolean(req.auth?.user);
   const isPublic = PUBLIC_PATH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 
+  // Landing page pública (marketing, Fase "layout premium"). Checagem EXATA,
+  // não um prefixo em PUBLIC_PATH_PREFIXES: a lista acima usa
+  // `pathname.startsWith(prefix + '/')`, e '/' como prefixo bateria em
+  // QUALQUER rota do sistema — bastaria alguém "simplificar" essa lista pra
+  // tornar o painel inteiro público. `pathname === '/'` só libera a raiz.
+  if (pathname === '/') {
+    return NextResponse.next();
+  }
+
   if (pathname === '/login') {
-    if (isAuthed) return NextResponse.redirect(new URL('/', req.url));
+    if (isAuthed) return NextResponse.redirect(new URL('/painel', req.url));
     return NextResponse.next();
   }
 

@@ -60,6 +60,27 @@ hoje, precisa diferenciar). Ver [[feedback-dual-role-color-tokens]] para o achad
 tempo, sobretudo em vermelho) — isso também corrigiu um bug de contraste real e pré-existente no
 componente `Alert` (`success` com texto branco sobre fundo quase-branco, 1.02:1 de contraste).
 
+**Identidade visual / sistema de design — 3ª rodada, "layout premium"
+(2026-09-22):** landing pública em `/` (`app/page.tsx` +
+`components/marketing/*` — header, hero com mockup do produto 100% em
+código, como-funciona, recursos, conformidade/LGPD, CTA final, rodapé) e o
+painel saiu de `/` para `/painel` (`app/(dashboard)/painel/page.tsx`, novo
+hero de boas-vindas com saudação via `auth()` + `components/dashboard/
+overview-kpis.tsx` + `components/dashboard/queue-health-banner.tsx` — este
+último é a primeira UI pra `GET/POST /api/v1/scraper/queue`, endpoint que já
+existia sem tela nenhuma consumindo). Rotas que mudaram: nav "Visão geral",
+logo da sidebar, redirect pós-login (`lib/auth-client.ts`) e redirect de
+`/login` autenticado (`middleware.ts`) — todos passaram a apontar pra
+`/painel`. Único ponto sensível: liberar `/` no middleware por checagem
+EXATA (`pathname === '/'`), nunca acrescentando `'/'` a
+`PUBLIC_PATH_PREFIXES` (que usa `startsWith`, e bateria em toda rota do
+sistema). Ver DESIGN-SYSTEM.md §9 para os padrões novos (hero/mockup,
+ritmo de seção de marketing, semântica do banner de saúde), e
+[[bug-layered-card-absolute-overlap]] +
+[[bug-dev-csp-blocks-hydration]] + [[convention-test-session-cookie]] para
+os três achados técnicos da rodada — o último documenta como testei o
+painel (atrás de login real) sem Postgres rodando nesta máquina.
+
 **Fase 3 (entregue em 2026-08-01):** Templates (lista + editor `[id]/page.tsx`, tratando `id==='novo'`
 como criação, com preview local de spintax — ver `lib/spintax.ts`), Instâncias de WhatsApp
 (`app/(dashboard)/whatsapp`, cards com QR polling de 2s via `usePolling`), Opt-outs

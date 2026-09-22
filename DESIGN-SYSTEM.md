@@ -437,3 +437,90 @@ cobriram. Não sobrou nenhuma tela do produto sem passar por pelo menos os
 tokens base; Buscas (`app/(dashboard)/buscas/*`) é a única área que só
 recebeu a herança automática, sem polimento de layout dedicado — fica como
 candidata natural de uma 3ª rodada, se o dono quiser.
+
+**3ª rodada (2026-09-22) — "layout premium": landing pública + abertura do
+painel.** Antes desta rodada o produto não tinha nenhuma página pública — `/`
+caía direto no shell logado. Duas mudanças de rota acompanham este trabalho:
+o painel saiu de `/` para `/painel` (nav "Visão geral", logo da sidebar,
+redirecionamento pós-login em `lib/auth-client.ts` e o redirect de `/login`
+para usuário já autenticado no `middleware.ts` foram todos atualizados juntos
+— procurar por `/painel` se algo continuar apontando pra raiz) e `/` virou a
+landing pública, liberada no middleware por checagem **exata** (`pathname ===
+'/'`), nunca por prefixo (ver comentário no próprio arquivo sobre por que
+`'/'` nunca pode entrar em `PUBLIC_PATH_PREFIXES`).
+
+### 9.1 Hero e mockup de produto em código
+
+`components/marketing/*` é a pasta nova desta rodada. O hero
+(`hero.tsx` + `product-mockup.tsx`) não usa nenhuma imagem externa — a CSP do
+Vulcano bloqueia recurso de fora, e um mockup em código fica nítido em
+qualquer tela/tema e não pesa no LCP (é HTML+CSS puro, nenhum Client
+Component no caminho crítico). O mockup reaproveita componentes reais do
+produto (`LeadStatusBadge`, mesma densidade de tabela do §3) com dados
+fictícios fixos — nunca inventar métrica real ali (ver regra de honestidade
+da copy abaixo).
+
+**Armadilha real encontrada e corrigida:** a 1ª versão do card flutuante
+"Busca em andamento" usava posicionamento absoluto puro (`-top-5`) por cima
+da janela do mockup — só depois de tirar screenshot de verdade (skill
+`medir-antes-de-afirmar`) ficou claro que o card cobria inteiramente o
+cabeçalho "Empresa/Status" da tabela por baixo, tornando os dois ilegíveis.
+A correção não foi ajustar o valor de offset no escuro — foi trocar a
+estratégia: o wrapper reserva o espaço no **fluxo normal** (`pt-28`) e o
+card fica posicionado dentro dessa folga, com no máximo uma sobreposição
+mínima e deliberada na borda/canto arredondado da janela abaixo, nunca no
+conteúdo. **Regra pra próxima composição em camadas:** nunca usar só
+`position: absolute` com offset negativo para empilhar cards — isso não
+reserva espaço em lugar nenhum e o resultado só se revela numa screenshot
+real, nunca lendo o JSX. Preferir padding/margin no fluxo normal para a
+folga, e absolute só para o deslocamento fino por cima dela.
+
+### 9.2 Seções de marketing — ritmo e regras de honestidade
+
+`how-it-works.tsx` (3 passos), `features.tsx` (grid de recursos) e
+`compliance-section.tsx` (LGPD) seguem o mesmo ritmo: `section` com
+`border-t border-border`, alternando `bg-muted/30` a cada seção pra criar
+separação sem precisar de sombra, título `font-display text-2xl sm:text-3xl`
+centralizado + subtítulo `text-muted-foreground`, grid de cards
+`rounded-xl border border-border bg-card p-6 shadow-xs` com ícone em caixa
+`bg-primary/10 text-primary` — é o mesmo tratamento "ícone em caixa" que o
+dashboard já usava nos KPIs (§8, "cards do hub de configurações").
+
+**Regra de honestidade que é decisão de produto, não só de copy:** nenhuma
+seção de marketing pode alegar como pronto algo que só existe como schema
+(`sendWindow` em `campaign.contract.ts`) ou como tela `ComingSoon` (Campanhas,
+disparo de WhatsApp). O card "WhatsApp com anti-ban" em `features.tsx` leva
+um badge `em construção` — o mesmo padrão visual de `comingSoon` em
+`NAV_ITEMS` (`components/shell/nav-items.ts`) — em vez de fingir que a
+feature já dispara mensagem. Antes de escrever qualquer frase de recurso
+"pronto", grep pelo campo/rota no código; se só existir no contrato ou numa
+tela placeholder, é "projetado", não "pronto" (ver também §5.3 sobre
+`halted`, que segue a mesma lógica: designed ≠ shipped).
+
+### 9.3 Banner de saúde da fila — `components/dashboard/queue-health-banner.tsx`
+
+Consome `GET /api/v1/scraper/queue` (poll 20s via `hooks/useQueueStatus.ts`,
+mais lento que o polling de progresso de busca de 3s — isto é um banner de
+estado, não uma barra de progresso ao vivo) e `POST
+/api/v1/scraper/queue/resume`. Mapa de variante por `status`:
+
+| `status` | Variante do Alert | Ação |
+|---|---|---|
+| `running` | `success`, compacto (`py-3`, sem `AlertDescription`) | nenhuma — só confirma que está tudo bem, sem competir visualmente com o resto da tela |
+| `unknown` (Redis fora do ar) | `warning` | nenhuma — não afirma que a fila parou, só que não dá pra confirmar daqui |
+| `paused`, `severity: 'high'` | `warning` | botão "Revisar e retomar" |
+| `paused`, `severity: 'critical'` | `destructive` | botão "Revisar e retomar" |
+
+A ação de retomar nunca é um clique único: abre `ConfirmDialog`
+(`components/common/confirm-dialog.tsx`) com o texto explicando **o que a
+pessoa está confirmando** ("já investiguei e sei por que é seguro seguir"),
+não só "tem certeza?" genérico — a pausa é uma decisão de segurança
+automática (ARQUITETURA §5.7), e o botão precisa deixar claro que retomar
+sem investigar tende a reproduzir o mesmo incidente. Mesma lógica de
+`acknowledgeHalt` em campanhas (§5.3): builder de confirmação carrega o
+"porquê", não só o "o quê".
+
+Tipos ainda locais em `types/scraper-queue.ts` (com o TODO de sempre) — o
+próprio endpoint foi criado pelo Vega sem contrato prévio em
+`packages/contracts` (ver comentário em
+`app/api/v1/scraper/queue/route.ts`), então não havia nada pra importar.

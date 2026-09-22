@@ -3,3 +3,6 @@
 - [Bug: ícone/componente como prop Server→Client quebra o build](bug_rsc_client_icon_props.md) — marcar o pai que itera NAV_ITEMS como 'use client'; só `next build` revela isso
 - [Checar @inno/contracts antes de criar tipo local](convention_check_contracts_before_mocking.md) — o Vega pode já ter publicado o schema em paralelo; `ls packages/contracts/src` primeiro
 - [Token de cor não serve pros dois papéis (fill vs. texto sobre fundo escuro)](feedback_dual_role_color_tokens.md) — medir OKLCH→sRGB, não "no olho"; achei bug real de contraste 1.02:1 no Alert
+- [CSP de dev sem unsafe-eval quebra hidratação no `next dev`](bug_dev_csp_blocks_hydration.md) — usar `bypassCSP:true` no Playwright só pra testar, nunca no app
+- [Card flutuante sobreposto só com `absolute` esconde overlap até screenshot real](bug_layered_card_absolute_overlap.md) — reservar espaço no fluxo (padding), não só empilhar por cima
+- [Como gerar cookie de sessão Auth.js pra testar tela logada sem Postgres](convention_test_session_cookie.md) — encode() de next-auth/jwt + os DOIS cookies (real + mock) se USE_MOCKS=true
