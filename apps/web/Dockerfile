@@ -128,6 +128,19 @@ ENV NEXT_PUBLIC_USE_MOCKS=${NEXT_PUBLIC_USE_MOCKS}
 ARG NEXT_PUBLIC_API_BASE_URL=""
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
+# ⚠️ PRECISA vir antes do build do Next. Desde 2026-09-22 o `@inno/db` tem
+# build próprio (`tsc -p tsconfig.build.json`, compila `index.ts`/`client.ts`
+# ao lado do fonte) e o `exports.default` do pacote aponta para o `.js`
+# compilado — mudança feita para o WORKER, que roda `node dist/index.js` puro
+# e não transpila nada.
+#
+# Sem esta linha, o build real do frontend quebra com
+# `Module not found: Can't resolve '@inno/db'` em toda rota que toca o banco:
+# o arquivo apontado por `exports` simplesmente não existe ainda. Aconteceu em
+# produção no mesmo dia, logo depois de o worker ser corrigido — a correção de
+# um app derrubou o build do outro.
+RUN pnpm --filter @inno/db run build
+
 RUN pnpm --filter web run build
 
 # ---------- Stage 5: runner (imagem final) ----------

@@ -32,7 +32,11 @@
       "outputs": []
     },
     "typecheck": {
-      "dependsOn": ["^generate", "generate"],
+      // "^build" entrou em 2026-09-22, pelo mesmo motivo do "dev": desde que
+      // @inno/db passou a expor o .js compilado em "exports"."default", um
+      // clone limpo (CI, máquina nova) não tem esse arquivo até alguém
+      // buildar o pacote. Sem isto, o typecheck passava aqui e quebrava lá.
+      "dependsOn": ["^generate", "generate", "^build"],
       "outputs": []
     }
   }

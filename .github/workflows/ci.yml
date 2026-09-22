@@ -73,6 +73,15 @@ jobs:
       - name: Gerar Prisma Client (@inno/db)
         run: pnpm --filter @inno/db run generate
 
+      # Mesmo motivo do passo acima, e igualmente obrigatório num clone limpo:
+      # desde 2026-09-22 o `@inno/db` compila `index.ts`/`client.ts` para `.js`
+      # ao lado do fonte, e o `exports` do pacote aponta para esse `.js`. Os
+      # artefatos são gitignorados, então no CI eles não existem até este
+      # passo rodar — sem ele, `pnpm test` (que roda por fora do Turborepo)
+      # falharia ao resolver `@inno/db`.
+      - name: Compilar @inno/db (exports apontam para o .js)
+        run: pnpm --filter @inno/db run build
+
       - name: Typecheck (tsc --noEmit em cada workspace)
         run: pnpm typecheck
 
