@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AlertTriangle, Flame, Gauge, Loader2, Megaphone, Plug, Trash2, Unplug } from 'lucide-react';
+import { AlertTriangle, Flame, Gauge, Loader2, Megaphone, MoreVertical, Plug, Trash2, Unplug } from 'lucide-react';
 
 import { ConfirmDialog } from '@/components/common/confirm-dialog';
 import { InstanceHealthBadge } from '@/components/whatsapp/instance-health-badge';
@@ -9,6 +9,7 @@ import { InstanceStatusBadge } from '@/components/whatsapp/instance-status-badge
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Progress } from '@/components/ui/progress';
 import { deleteInstance, disconnectInstance } from '@/lib/api/whatsapp';
 import { ApiRequestError } from '@/lib/fetcher';
@@ -76,18 +77,41 @@ export function InstanceCard({ instance, onConnect, onChanged }: InstanceCardPro
   }
 
   return (
-    <Card className={cn('border-l-4', HEALTH_ACCENT[instance.health])}>
-      <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
-        <div>
-          <CardTitle className="text-base">{instance.name}</CardTitle>
+    <Card className={cn('flex h-full flex-col border-l-4', HEALTH_ACCENT[instance.health])}>
+      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0">
+        <div className="min-w-0 flex-1">
+          <CardTitle className="truncate text-base">{instance.name}</CardTitle>
           <p className="text-sm text-muted-foreground tabular-nums">{formatPhone(instance.phoneNumber)}</p>
         </div>
-        <div className="flex flex-col items-end gap-1.5">
-          <InstanceStatusBadge status={instance.status} />
-          <InstanceHealthBadge health={instance.health} />
+        <div className="flex shrink-0 items-start gap-1.5">
+          <div className="flex flex-col items-end gap-1.5">
+            <InstanceStatusBadge status={instance.status} />
+            {/* `ok` é redundante com o status "Conectado" + a borda verde do card — só entra na
+                grade quando pede atenção de verdade (regra que evita 2 selos verdes empilhados). */}
+            {instance.health !== 'ok' && <InstanceHealthBadge health={instance.health} />}
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon" variant="ghost" className="shrink-0" aria-label={`Mais ações para ${instance.name}`}>
+                <MoreVertical aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={() => {
+                  setDeleteError(null);
+                  setConfirmDelete(true);
+                }}
+              >
+                <Trash2 aria-hidden="true" />
+                Excluir instância
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+      <CardContent className="flex flex-1 flex-col gap-4">
         {actionError && (
           <Alert variant="warning">
             <AlertDescription>{actionError}</AlertDescription>
@@ -143,7 +167,7 @@ export function InstanceCard({ instance, onConnect, onChanged }: InstanceCardPro
           Conectado desde <span className="tabular-nums">{formatDateTime(instance.lastConnectionAt)}</span>
         </p>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="mt-auto flex flex-wrap gap-2 pt-2">
           {canConnect && (
             <Button size="sm" onClick={() => onConnect(instance.id, instance.name)}>
               <Plug />
@@ -156,18 +180,6 @@ export function InstanceCard({ instance, onConnect, onChanged }: InstanceCardPro
               Desconectar
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-            onClick={() => {
-              setDeleteError(null);
-              setConfirmDelete(true);
-            }}
-          >
-            <Trash2 />
-            Excluir
-          </Button>
         </div>
       </CardContent>
 

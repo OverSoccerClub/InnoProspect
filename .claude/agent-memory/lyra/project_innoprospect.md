@@ -10,6 +10,37 @@ App Router + Tailwind 4 + Prisma/Postgres + worker Node separado (scraping do Go
 WhatsApp via Evolution API). Arquitetura fechada em `ARQUITETURA.md` (autora: Nova) — §2 é contrato de
 estrutura de pastas, §4 é contrato de API. Fases do produto em §8 do mesmo arquivo.
 
+**4ª rodada — Onda 2B (2026-09-22, mesma sessão do dia, EM PARALELO com a
+Onda 2A que cobriu leads/templates):** dois bugs reais relatados pelo dono em
+produção, ambos em `/buscas/[id]`: (1) busca com os 5 municípios falhando e
+0 leads aparecia com selo verde "Concluída" — `SearchJobStatus.completed` só
+diz "terminou de rodar", não diz nada sobre resultado; (2) a barra de
+progresso usava `job.progress.percent` (fórmula não documentada no
+contrato) enquanto o rótulo ao lado usava `done`/`total` — podiam
+contradizer. Corrigido derivando um "outcome" visual (`completed_success` /
+`completed_partial` / `completed_empty`) só de `done`/`failed`/`total` (já
+existiam no contrato, nenhum campo novo pedido) — ver
+[[convention-derive-outcome-from-progress-not-status]] pro detalhe técnico e
+o porquê isso é candidato a repetir em `CampaignTarget` na Fase 4. Também
+redesenhei `/buscas` (lista: selos com ícone consistentes, nomes truncados
+em vez de quebrar linha), `/buscas/nova` (2 colunas com `SearchSummaryPanel`
+ao vivo mostrando município/tempo/teto de leads — dado real do banco,
+`Uf.cityCount`, que já existia e não era usado; `<details>` nativo com
+chevron animado em vez de cru), `/whatsapp` (badge `health===ok` escondido
+por redundante com o status + borda; ação "Excluir" saiu de link vermelho
+solto pra dentro de `DropdownMenu`, ícone só — achei e corrigi
+[[bug-card-header-kebab-overflow-mobile]] nessa mudança) e `/campanhas`
+(saiu de `ComingSoon` genérico pra `CampaignRoadmap`, 6 etapas honestas
+extraídas de ARQUITETURA.md §8 Fase 4, sem nenhuma data inventada).
+Incidente à parte: subi um `next dev` extra numa porta separada pra testar
+com Playwright e corrompi o `.next` compartilhado (porta 3000) — mesmo
+padrão que a Onda 2A já tinha documentado em
+[[bug-shared-next-dev-cache-conflict]], reincidência independente. Recuperei
+matando os dois processos e subindo de novo o compartilhado limpo com
+`NEXT_PUBLIC_USE_MOCKS=true` e um novo `NEXTAUTH_SECRET` efêmero
+(`innoprospect-shared-dev-secret`) — qualquer cookie de sessão mintado antes
+dessa hora ficou inválido, seria preciso mintar de novo.
+
 **4ª rodada — "layout premium", Onda 1 de 2 (2026-09-22):** o dono pediu uma
 segunda passada de polimento ("nada de telas simples sem vida") depois de já
 ter aprovado a 3ª rodada (painel/landing). Esta onda cobriu só **fundação +
@@ -168,3 +199,44 @@ como criação, com preview local de spintax — ver `lib/spintax.ts`), Instânc
 `AuthGuard`, sem sidebar — layout próprio em `app/descadastro/layout.tsx`). Nessa entrega descobri que o
 Vega já tinha publicado `@inno/contracts` de verdade em paralelo — ver [[convention-check-contracts-before-mocking]]
 antes de repetir o padrão de tipo local em fases futuras.
+
+**Onda 2A do redesign (2026-09-22), rodando EM PARALELO com uma "Onda 2B"
+(outra sessão, escopo `/buscas`/`/whatsapp`/`/campanhas`) no MESMO working
+directory:** meu escopo foi o bug sistêmico de tabela (primitivo
+compartilhado, só eu podia tocar `components/ui/table.tsx`) + `/leads`
+(lista+ficha) + `/templates` (lista+edição).
+
+- **Bug de tabela — causa raiz não era a tabela.** Ver
+  [[bug-table-overflow-flex-min-width]]: faltava `min-w-0` no item flex do
+  shell (`app/(dashboard)/layout.tsx`), não no `overflow-auto` da tabela
+  (que já existia). Medido antes/depois com Playwright: `PAGE_OVERFLOW`
+  (scrollWidth−clientWidth do `<html>`) foi de 192px/78px pra 0px. Também
+  adicionei sombra de rolagem 100% CSS (`.inno-table-scroll`,
+  `app/globals.css`) — a barra de rolagem fina/só-no-hover do SO não era
+  sinal forte o bastante de "tem mais coluna pra rolar". Estratégia de
+  prioridade de coluna (documentada em `LeadTable`/`TemplateTable`): colunas
+  essenciais sempre visíveis, colunas de enriquecimento saem do fluxo em
+  telas estreitas (`hidden lg:table-cell`/`hidden xl:table-cell`) em vez de
+  forçar rolagem, e texto de tamanho variável é truncado com `title`
+  (tooltip acessível) — nunca "perdido".
+- **CSV export + ações em massa** (backend já existia, sem tela —
+  `lib/services/leads.ts`, `POST/GET /api/v1/leads/{bulk,export}`) ganharam
+  interface: seleção de linha (`LeadTable`) + `LeadBulkToolbar` (set
+  status/add tag/remove tag) + botão "Exportar CSV" no `PageHeader` de
+  `/leads`. Mock do CSV duplica a FORMATAÇÃO (BOM/separador `;`/decimal com
+  vírgula) do `lib/services/leads.ts` de propósito — aquele arquivo importa
+  `@inno/db` (Prisma), que não pode entrar no bundle do client; as colunas
+  (`LEAD_EXPORT_COLUMNS`) vêm de `@inno/contracts` sem duplicação (zod puro,
+  seguro nos dois lados). Ver `mocks/leads.ts` (`mockExportLeadsCsv`,
+  `mockBulkUpdateLeads`) e `lib/download.ts` (helpers novos e reutilizáveis
+  de download de URL/Blob).
+- **Incidente operacional real, registrado em
+  [[bug-shared-next-dev-cache-conflict]]:** subir um `next dev` numa porta
+  separada (só pra mintar um cookie de sessão de teste) E depois rodar
+  `pnpm build`, ambos no MESMO diretório `apps/web` de um `next dev`
+  compartilhado (usado pela Onda 2B/pelo dono), corrompeu o `.next` de
+  todo mundo — `/` chegou a devolver 500. Recuperado com
+  `rm -rf apps/web/.next` + ~15-20s de espera (o `next dev` vivo recompila
+  sozinho). Lição prática: NUNCA rodar `next dev`/`next build` extra num
+  diretório com um dev server compartilhado vivo — usar só `pnpm
+  typecheck`/`lint`/`test` (não tocam `.next`) como portão nesses casos.

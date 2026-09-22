@@ -4,8 +4,9 @@ import { Badge } from '@/components/ui/badge';
 import type { CampaignStatus } from '@inno/contracts';
 
 /**
- * Ainda sem tela (Campanhas é `ComingSoon` até a Fase 4) — componente
- * deixado pronto para não improvisar a semântica no meio da implementação.
+ * Ainda sem tela de verdade (`/campanhas` hoje é só o roadmap da Fase 4,
+ * `components/campaigns/campaign-roadmap.tsx`) — componente deixado pronto
+ * para não improvisar a semântica no meio da implementação.
  * Mapa definido em DESIGN-SYSTEM.md §5.3: `halted` e `paused` são os dois
  * que mais importa não confundir — `paused` é ação humana e esperada,
  * `halted` é parada automática de segurança que exige reconhecimento

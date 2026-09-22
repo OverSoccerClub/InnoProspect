@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 
 import { NewSearchForm } from '@/components/searches/new-search-form';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 export const metadata: Metadata = {
   title: 'Nova busca — InnoProspect',
@@ -17,15 +16,7 @@ export default function NewSearchPage() {
           resultado em leads.
         </p>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Detalhes da busca</CardTitle>
-          <CardDescription>Campos com * são obrigatórios.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <NewSearchForm />
-        </CardContent>
-      </Card>
+      <NewSearchForm />
     </div>
   );
 }

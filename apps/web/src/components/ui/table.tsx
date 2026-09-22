@@ -4,7 +4,20 @@ import { cn } from '@/lib/utils';
 
 const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
   ({ className, ...props }, ref) => (
-    <div className="relative w-full overflow-auto rounded-lg border border-border bg-card shadow-xs">
+    // `overflow-auto` é o ÚLTIMO recurso, não a estratégia — cada tabela
+    // consumidora (ver LeadTable/TemplateTable) já reduz a chance de precisar
+    // dele: colunas de prioridade baixa saem do fluxo em telas estreitas
+    // (`hidden md:table-cell` no par TableHead/TableCell) e texto de tamanho
+    // variável é truncado com `title` (tooltip acessível) em vez de forçar a
+    // tabela a crescer. Quando mesmo assim sobra conteúdo (viewport muito
+    // estreita, tabela com muitas colunas), a rolagem some no wrapper —
+    // nunca no `<body>` — e ganha uma sombra nas bordas (`.inno-table-scroll`,
+    // globals.css) para avisar que há mais coluna pra rolar; sem essa sombra,
+    // uma barra de rolagem fina/só-no-hover é fácil de não notar, e a coluna
+    // parece "sumida" (bug real da Onda 2A). Pré-requisito para essa rolagem
+    // funcionar sem estourar a página inteira: `min-w-0` na coluna do shell,
+    // `app/(dashboard)/layout.tsx`.
+    <div className="inno-table-scroll relative w-full overflow-auto rounded-lg border border-border shadow-xs">
       <table ref={ref} className={cn('w-full caption-bottom text-sm', className)} {...props} />
     </div>
   ),

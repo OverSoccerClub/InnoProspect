@@ -17,7 +17,22 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <AuthGuard>
       <div className="flex min-h-screen">
         <Sidebar />
-        <div className="flex min-h-screen flex-1 flex-col">
+        {/*
+          `min-w-0` é a correção real do bug sistêmico de tabela (Onda 2A):
+          um item flex sem `min-width` explícito usa `min-width: auto` por
+          padrão, que é o min-content da subárvore inteira — inclusive uma
+          <table> com células `whitespace-nowrap` bem lá embaixo. Isso força
+          esta coluna (e com ela a página inteira, via `<body>`) a crescer
+          além da viewport, mesmo com `overflow-x-hidden` no `<main>` (esse
+          overflow só contém o PRÓPRIO conteúdo do main depois que a caixa já
+          foi dimensionada — não impede a propagação do min-content para
+          cima). Sem isto, a "cortina de rolagem" interna de `components/ui/
+          table.tsx` nunca chega a atuar: a página inteira estoura primeiro.
+          Medido com Playwright antes/depois (ver handoff) — sem `min-w-0`,
+          `/leads` a 1280px tinha `document.documentElement.scrollWidth`
+          192px maior que `innerWidth`; com `min-w-0`, os dois batem.
+        */}
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col">
           <Topbar user={session?.user} />
           <main className="flex-1 overflow-x-hidden p-4 md:p-8">
             <div className="mx-auto w-full max-w-6xl">{children}</div>

@@ -48,6 +48,15 @@ export function formatPhone(phoneE164: string | null | undefined): string {
   return `(${match[1]}) ${match[2]}-${match[3]}`;
 }
 
+/** `137` -> "2h17min"; `8` -> "8min". Usado nas estimativas de duração de busca. */
+export function formatDurationMinutes(totalMinutes: number): string {
+  const minutes = Math.max(1, Math.round(totalMinutes));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} h` : `${hours}h${rest}min`;
+}
+
 /**
  * Valida formato E.164 — mesma regex de `e164Schema` em `@inno/contracts`
  * (ARQUITETURA.md §4.0). Não valida DDD/operadora, só a forma.

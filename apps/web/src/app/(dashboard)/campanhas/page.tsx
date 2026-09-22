@@ -1,14 +1,14 @@
-import { Megaphone } from 'lucide-react';
-
-import { ComingSoon } from '@/components/common/coming-soon';
+import { CampaignRoadmap } from '@/components/campaigns/campaign-roadmap';
+import { PageHeader } from '@/components/common/page-header';
 
 export default function CampanhasPage() {
   return (
-    <ComingSoon
-      icon={Megaphone}
-      title="Campanhas"
-      phase="Chega na Fase 4"
-      description="Montagem de campanha, cadência anti-ban e acompanhamento ao vivo do disparo entram depois que o envio manual (Fase 3) estiver validado."
-    />
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Campanhas"
+        description="Disparo em massa de WhatsApp com cadência anti-ban — o que falta construir, em ordem."
+      />
+      <CampaignRoadmap />
+    </div>
   );
 }

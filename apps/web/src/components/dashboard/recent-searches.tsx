@@ -5,10 +5,10 @@ import { useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
 
 import { SearchJobStatusBadge } from '@/components/searches/search-job-status-badge';
+import { SearchProgressBar } from '@/components/searches/search-progress-bar';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorState } from '@/components/common/error-state';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { listSearchJobs } from '@/lib/api/searches';
 import { formatRelative } from '@/lib/format';
@@ -82,9 +82,9 @@ export function RecentSearches() {
                 <p className="text-xs text-muted-foreground">{formatRelative(job.createdAt)}</p>
               </div>
               {(job.status === 'running' || job.status === 'queued') && (
-                <Progress value={job.progress.percent} className="hidden w-16 sm:block" label={`${job.progress.percent}% concluído`} />
+                <SearchProgressBar progress={job.progress} className="hidden w-16 sm:flex" />
               )}
-              <SearchJobStatusBadge status={job.status} />
+              <SearchJobStatusBadge job={job} />
             </Link>
           ))}
       </CardContent>

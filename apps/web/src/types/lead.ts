@@ -5,8 +5,29 @@
 // `import type` (não só `export type ... from`) porque `LeadMessageItem` é
 // usado abaixo, dentro deste arquivo — um `export...from` puro não cria
 // vínculo local (ES modules), só reexporta.
-import type { LeadMessageItem, MessageItem, MessageStatus, MessageDirection } from '@inno/contracts';
-export type { LeadMessageItem, MessageItem, MessageStatus, MessageDirection };
+import type {
+  BulkLeadsBody,
+  BulkLeadsResponse,
+  BulkLeadsSkippedItem,
+  LeadBulkAction,
+  LeadExportColumn,
+  LeadMessageItem,
+  MessageItem,
+  MessageStatus,
+  MessageDirection,
+} from '@inno/contracts';
+export { LEAD_EXPORT_COLUMNS } from '@inno/contracts';
+export type {
+  BulkLeadsBody,
+  BulkLeadsResponse,
+  BulkLeadsSkippedItem,
+  LeadBulkAction,
+  LeadExportColumn,
+  LeadMessageItem,
+  MessageItem,
+  MessageStatus,
+  MessageDirection,
+};
 
 export type LeadStatus =
   | 'new'

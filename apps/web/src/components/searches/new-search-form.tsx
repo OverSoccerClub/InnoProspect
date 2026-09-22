@@ -2,11 +2,13 @@
 
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { ChevronRight, Loader2 } from 'lucide-react';
 
 import { CitySelector } from '@/components/searches/city-selector';
+import { SearchSummaryPanel } from '@/components/searches/search-summary-panel';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
@@ -15,6 +17,8 @@ import { useUfs } from '@/hooks/useUfs';
 import { createSearchJob } from '@/lib/api/searches';
 import { ApiRequestError } from '@/lib/fetcher';
 import type { City } from '@/types/location';
+
+const DEFAULT_MAX_RESULTS_PER_CITY = 120;
 
 const NICHE_MIN = 3;
 const NICHE_MAX = 120;
@@ -32,6 +36,8 @@ export function NewSearchForm() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const selectedUf = ufs.find((item) => item.sigla === uf) ?? null;
 
   function validate(): boolean {
     const errors: Record<string, string> = {};
@@ -85,102 +91,123 @@ export function NewSearchForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-6">
-      {formError && (
-        <Alert variant="destructive">
-          <AlertDescription>{formError}</AlertDescription>
-        </Alert>
-      )}
-
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="niche">Nicho *</Label>
-        <Input
-          id="niche"
-          placeholder="Ex.: clínica odontológica"
-          value={niche}
-          onChange={(e) => setNiche(e.target.value)}
-          aria-invalid={Boolean(fieldErrors.niche)}
-          aria-describedby={fieldErrors.niche ? 'niche-error' : undefined}
-        />
-        {fieldErrors.niche && (
-          <p id="niche-error" className="text-sm text-destructive">
-            {fieldErrors.niche}
-          </p>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="uf">UF *</Label>
-        {isLoadingUfs ? (
-          <Skeleton className="h-9 w-full" />
-        ) : ufsError ? (
-          <p className="text-sm text-destructive">Não foi possível carregar os estados. Recarregue a página.</p>
-        ) : (
-          <Select
-            id="uf"
-            value={uf}
-            onChange={(e) => {
-              setUf(e.target.value);
-              setCities([]);
-            }}
-            aria-invalid={Boolean(fieldErrors.uf)}
-            aria-describedby={fieldErrors.uf ? 'uf-error' : undefined}
-          >
-            <option value="">Selecione…</option>
-            {ufs.map((item) => (
-              <option key={item.id} value={item.sigla}>
-                {item.nome} ({item.sigla})
-              </option>
-            ))}
-          </Select>
-        )}
-        {fieldErrors.uf && (
-          <p id="uf-error" className="text-sm text-destructive">
-            {fieldErrors.uf}
-          </p>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <Label>Municípios (opcional)</Label>
-        <CitySelector uf={uf} selected={cities} onChange={setCities} />
-      </div>
-
-      <details className="rounded-md border border-border p-3">
-        <summary className="cursor-pointer text-sm font-medium">Opções avançadas</summary>
-        <div className="mt-3 flex flex-col gap-4 sm:flex-row">
-          <div className="flex flex-1 flex-col gap-1.5">
-            <Label htmlFor="name">Nome da busca</Label>
-            <Input
-              id="name"
-              placeholder={niche && uf ? `${niche} — ${uf}` : 'Rótulo amigável'}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-1 flex-col gap-1.5">
-            <Label htmlFor="maxResultsPerCity">Máx. de resultados por cidade</Label>
-            <Input
-              id="maxResultsPerCity"
-              type="number"
-              min={1}
-              max={300}
-              placeholder="120"
-              value={maxResultsPerCity}
-              onChange={(e) => setMaxResultsPerCity(e.target.value)}
-              aria-invalid={Boolean(fieldErrors.maxResultsPerCity)}
-            />
-            {fieldErrors.maxResultsPerCity && (
-              <p className="text-sm text-destructive">{fieldErrors.maxResultsPerCity}</p>
+    <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
+      <Card className="lg:col-span-2">
+        <CardHeader>
+          <CardTitle className="text-base">Detalhes da busca</CardTitle>
+          <CardDescription>Campos com * são obrigatórios.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-6">
+            {formError && (
+              <Alert variant="destructive">
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
             )}
-          </div>
-        </div>
-      </details>
 
-      <Button type="submit" disabled={isSubmitting} className="w-fit">
-        {isSubmitting && <Loader2 className="animate-spin" aria-hidden="true" />}
-        {isSubmitting ? 'Criando busca…' : 'Iniciar busca'}
-      </Button>
-    </form>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="niche">Nicho *</Label>
+              <Input
+                id="niche"
+                placeholder="Ex.: clínica odontológica"
+                value={niche}
+                onChange={(e) => setNiche(e.target.value)}
+                aria-invalid={Boolean(fieldErrors.niche)}
+                aria-describedby={fieldErrors.niche ? 'niche-error' : undefined}
+              />
+              {fieldErrors.niche && (
+                <p id="niche-error" className="text-sm text-destructive">
+                  {fieldErrors.niche}
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="uf">UF *</Label>
+              {isLoadingUfs ? (
+                <Skeleton className="h-9 w-full" />
+              ) : ufsError ? (
+                <p className="text-sm text-destructive">Não foi possível carregar os estados. Recarregue a página.</p>
+              ) : (
+                <Select
+                  id="uf"
+                  value={uf}
+                  onChange={(e) => {
+                    setUf(e.target.value);
+                    setCities([]);
+                  }}
+                  aria-invalid={Boolean(fieldErrors.uf)}
+                  aria-describedby={fieldErrors.uf ? 'uf-error' : undefined}
+                >
+                  <option value="">Selecione…</option>
+                  {ufs.map((item) => (
+                    <option key={item.id} value={item.sigla}>
+                      {item.nome} ({item.sigla}) · {item.cityCount} municípios
+                    </option>
+                  ))}
+                </Select>
+              )}
+              {fieldErrors.uf && (
+                <p id="uf-error" className="text-sm text-destructive">
+                  {fieldErrors.uf}
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label>Municípios (opcional)</Label>
+              <CitySelector uf={uf} selected={cities} onChange={setCities} />
+            </div>
+
+            <details className="group rounded-md border border-border p-3 open:pb-4">
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden="true" />
+                Opções avançadas
+              </summary>
+              <div className="mt-3 flex flex-col gap-4 pl-6 sm:flex-row">
+                <div className="flex flex-1 flex-col gap-1.5">
+                  <Label htmlFor="name">Nome da busca</Label>
+                  <Input
+                    id="name"
+                    placeholder={niche && uf ? `${niche} — ${uf}` : 'Rótulo amigável'}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-1 flex-col gap-1.5">
+                  <Label htmlFor="maxResultsPerCity">Máx. de resultados por cidade</Label>
+                  <Input
+                    id="maxResultsPerCity"
+                    type="number"
+                    min={1}
+                    max={300}
+                    placeholder="120"
+                    value={maxResultsPerCity}
+                    onChange={(e) => setMaxResultsPerCity(e.target.value)}
+                    aria-invalid={Boolean(fieldErrors.maxResultsPerCity)}
+                  />
+                  {fieldErrors.maxResultsPerCity && (
+                    <p className="text-sm text-destructive">{fieldErrors.maxResultsPerCity}</p>
+                  )}
+                </div>
+              </div>
+            </details>
+
+            <Button type="submit" disabled={isSubmitting} className="w-fit">
+              {isSubmitting && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {isSubmitting ? 'Criando busca…' : 'Iniciar busca'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <SearchSummaryPanel
+        niche={niche}
+        ufLabel={selectedUf ? `${selectedUf.nome} (${selectedUf.sigla})` : null}
+        selectedCityCount={cities.length}
+        ufCityCount={selectedUf?.cityCount ?? null}
+        maxResultsPerCity={maxResultsPerCity ? Number(maxResultsPerCity) : DEFAULT_MAX_RESULTS_PER_CITY}
+      />
+    </div>
   );
 }

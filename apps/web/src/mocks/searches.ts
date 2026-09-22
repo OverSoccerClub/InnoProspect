@@ -22,6 +22,14 @@ type MockJob = {
   secondsPerTask: number;
   /** para o job "failed" fixo, quantas tasks falham antes de parar */
   failAt?: number;
+  /**
+   * Reproduz o bug real relatado em produção: job `completed` em que TODOS
+   * os municípios falharam (0 concluídos, 0 leads) — distinto do cenário
+   * `failAt` acima, que é o job travando no meio (status `failed`).
+   */
+  failAll?: boolean;
+  /** Job `completed` com falha PARCIAL — os últimos N municípios falham, o resto conclui normalmente. */
+  failCount?: number;
 };
 
 let seq = 100;
@@ -30,7 +38,10 @@ const jobs: MockJob[] = [];
 function makeTaskList(job: MockJob): SearchTaskItem[] {
   const random = mulberry32(job.id.length * 7919 + job.cities.length);
   return job.cities.map((city, index) => {
-    const willFail = job.failAt !== undefined && index === job.failAt;
+    const willFail =
+      job.failAll ||
+      (job.failAt !== undefined && index === job.failAt) ||
+      (job.failCount !== undefined && index >= job.cities.length - job.failCount);
     return {
       id: `${job.id}_task_${index}`,
       cityName: city.nome,
@@ -53,7 +64,9 @@ function computeSummary(job: MockJob): SearchJobSummary {
     let done = total;
     if (status === 'failed') done = job.failAt ?? Math.floor(total * 0.4);
     if (status === 'cancelled') done = Math.floor(total * 0.55);
-    const failed = status === 'failed' ? 1 : 0;
+    if (job.failAll) done = 0;
+    if (job.failCount) done = Math.max(0, total - job.failCount);
+    const failed = job.failAll ? total : job.failCount ?? (status === 'failed' ? 1 : 0);
     const leadsFound = tasks.slice(0, done).reduce((sum, t) => sum + t.resultCount, 0);
     return {
       id: job.id,
@@ -95,6 +108,9 @@ function computeDetail(job: MockJob): SearchJobDetail {
   const tasks = makeTaskList(job);
 
   const filled = tasks.map((task, index) => {
+    if (job.failAll) {
+      return { ...task, status: 'failed' as const, errorCode: task.errorCode ?? 'SCRAPE_TIMEOUT', finishedAt: job.createdAt };
+    }
     if (index < summary.progress.done) {
       const isFailingOne = job.failAt === index && !job.live;
       return {
@@ -105,6 +121,9 @@ function computeDetail(job: MockJob): SearchJobDetail {
     }
     if (index === summary.progress.done && summary.status === 'running') {
       return { ...task, status: 'running' as const };
+    }
+    if (job.failCount && index >= summary.progress.done) {
+      return { ...task, status: 'failed' as const, errorCode: task.errorCode ?? 'SCRAPE_TIMEOUT', finishedAt: job.createdAt };
     }
     if (!job.live && job.fixedStatus === 'cancelled' && index >= summary.progress.done) {
       return { ...task, status: 'skipped' as const };
@@ -123,6 +142,8 @@ function seedIfNeeded() {
   const esCities = mockListCities('ES').slice(0, 18).map((c) => ({ ibgeCode: c.ibgeCode, nome: c.nome }));
   const mgCities = mockListCities('MG').slice(0, 9).map((c) => ({ ibgeCode: c.ibgeCode, nome: c.nome }));
   const rjCities = mockListCities('RJ').slice(0, 6).map((c) => ({ ibgeCode: c.ibgeCode, nome: c.nome }));
+  const prCities = mockListCities('PR').slice(0, 5).map((c) => ({ ibgeCode: c.ibgeCode, nome: c.nome }));
+  const pbCities = mockListCities('PB').slice(0, 8).map((c) => ({ ibgeCode: c.ibgeCode, nome: c.nome }));
 
   jobs.push(
     {
@@ -172,6 +193,34 @@ function seedIfNeeded() {
       fixedStatus: 'cancelled',
       cities: rjCities,
       secondsPerTask: 4,
+    },
+    {
+      // Reproduz o bug real relatado pelo dono: 5 municípios, todos falharam,
+      // 0 leads — e a API ainda assim devolve status `completed`.
+      id: 'search_completed_empty_demo',
+      name: 'barbearia — PR',
+      niche: 'barbearia',
+      uf: 'PR',
+      createdAtMs: now - 5_400_000,
+      createdAt: new Date(now - 5_400_000).toISOString(),
+      live: false,
+      fixedStatus: 'completed',
+      cities: prCities,
+      secondsPerTask: 4,
+      failAll: true,
+    },
+    {
+      id: 'search_completed_partial_demo',
+      name: 'imobiliária — PB',
+      niche: 'imobiliária',
+      uf: 'PB',
+      createdAtMs: now - 10_800_000,
+      createdAt: new Date(now - 10_800_000).toISOString(),
+      live: false,
+      fixedStatus: 'completed',
+      cities: pbCities,
+      secondsPerTask: 4,
+      failCount: 3,
     },
   );
 }

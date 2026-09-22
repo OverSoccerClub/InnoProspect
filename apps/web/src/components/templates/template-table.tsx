@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { deleteTemplate } from '@/lib/api/templates';
 import { ApiRequestError } from '@/lib/fetcher';
+import { renderSamples } from '@/lib/spintax';
 import type { TemplateItem } from '@/types/template';
 
 export function TemplateTable({ templates, onDeleted }: { templates: TemplateItem[]; onDeleted: () => void }) {
@@ -36,67 +37,76 @@ export function TemplateTable({ templates, onDeleted }: { templates: TemplateIte
         <TableHeader>
           <TableRow>
             <TableHead>Nome</TableHead>
-            <TableHead>Variáveis</TableHead>
+            <TableHead className="hidden lg:table-cell">Variáveis</TableHead>
             <TableHead>Variação</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead>Usos</TableHead>
+            <TableHead className="hidden md:table-cell">Usos</TableHead>
             <TableHead className="text-right">Ações</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {templates.map((template) => (
-            <TableRow key={template.id}>
-              <TableCell>
-                <Link
-                  href={`/templates/${template.id}`}
-                  className="font-medium text-foreground hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {template.name}
-                </Link>
-                <p className="mt-0.5 max-w-md truncate text-xs text-muted-foreground">{template.body}</p>
-              </TableCell>
-              <TableCell>
-                <div className="flex flex-wrap gap-1">
-                  {template.variablesUsed.length === 0 ? (
-                    <span className="text-xs text-muted-foreground">—</span>
-                  ) : (
-                    template.variablesUsed.map((v) => (
-                      <Badge key={v} variant="outline">
-                        {`{{${v}}}`}
-                      </Badge>
-                    ))
-                  )}
-                </div>
-              </TableCell>
-              <TableCell>
-                <TemplateVariationBadge count={template.spintaxVariations} />
-              </TableCell>
-              <TableCell>
-                <TemplateStatusBadge isActive={template.isActive} />
-              </TableCell>
-              <TableCell>{template.usageCount}</TableCell>
-              <TableCell className="text-right">
-                <div className="flex justify-end gap-1">
-                  <Button asChild variant="ghost" size="icon" aria-label={`Editar ${template.name}`}>
-                    <Link href={`/templates/${template.id}`}>
-                      <Pencil />
-                    </Link>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Excluir ${template.name}`}
-                    onClick={() => {
-                      setDeleteError(null);
-                      setPendingDelete(template);
-                    }}
+          {templates.map((template) => {
+            // Amostra rápida (sem substituir variáveis — mesma convenção de
+            // `TemplatePreview`) só para dar um gostinho da variação no hover
+            // do badge, sem precisar abrir o editor. O diferencial do produto
+            // (spintax) não pode viver só como um número na lista.
+            const sample = template.body.trim() ? renderSamples(template.body, 1)[0] : undefined;
+            return (
+              <TableRow key={template.id}>
+                <TableCell className="max-w-[280px]">
+                  <Link
+                    href={`/templates/${template.id}`}
+                    className="block truncate font-medium text-foreground hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    <Trash2 />
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
+                    {template.name}
+                  </Link>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground" title={template.body}>
+                    {template.body}
+                  </p>
+                </TableCell>
+                <TableCell className="hidden max-w-[220px] lg:table-cell">
+                  <div className="flex flex-wrap gap-1">
+                    {template.variablesUsed.length === 0 ? (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    ) : (
+                      template.variablesUsed.map((v) => (
+                        <Badge key={v} variant="outline">
+                          {`{{${v}}}`}
+                        </Badge>
+                      ))
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <TemplateVariationBadge count={template.spintaxVariations} title={sample ? `Exemplo: ${sample}` : undefined} />
+                </TableCell>
+                <TableCell>
+                  <TemplateStatusBadge isActive={template.isActive} />
+                </TableCell>
+                <TableCell className="hidden md:table-cell tabular-nums">{template.usageCount}</TableCell>
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-1">
+                    <Button asChild variant="ghost" size="icon" aria-label={`Editar ${template.name}`}>
+                      <Link href={`/templates/${template.id}`}>
+                        <Pencil />
+                      </Link>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Excluir ${template.name}`}
+                      onClick={() => {
+                        setDeleteError(null);
+                        setPendingDelete(template);
+                      }}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
 

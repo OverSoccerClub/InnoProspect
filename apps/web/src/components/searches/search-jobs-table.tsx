@@ -1,7 +1,7 @@
 import Link from 'next/link';
 
 import { SearchJobStatusBadge } from '@/components/searches/search-job-status-badge';
-import { Progress } from '@/components/ui/progress';
+import { SearchProgressBar } from '@/components/searches/search-progress-bar';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/format';
 import type { SearchJobSummary } from '@/types/search';
@@ -21,29 +21,27 @@ export function SearchJobsTable({ jobs }: { jobs: SearchJobSummary[] }) {
       <TableBody>
         {jobs.map((job) => (
           <TableRow key={job.id}>
-            <TableCell>
+            <TableCell className="max-w-[240px]">
               <Link
                 href={`/buscas/${job.id}`}
-                className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                title={job.name}
+                className="block truncate font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {job.name}
               </Link>
-              <p className="text-xs text-muted-foreground">
+              <p className="truncate text-xs text-muted-foreground">
                 {job.niche} · {job.uf}
               </p>
             </TableCell>
             <TableCell>
-              <SearchJobStatusBadge status={job.status} />
+              <SearchJobStatusBadge job={job} />
             </TableCell>
             <TableCell className="min-w-[140px]">
               <div className="flex items-center gap-2">
-                <Progress
-                  value={job.progress.percent}
-                  label={`${job.progress.done} de ${job.progress.total} municípios concluídos`}
-                  className="w-24"
-                />
-                <span className="text-xs text-muted-foreground">
+                <SearchProgressBar progress={job.progress} className="w-24" />
+                <span className="whitespace-nowrap text-xs text-muted-foreground">
                   {job.progress.done}/{job.progress.total}
+                  {job.progress.failed > 0 && <span className="text-destructive"> ({job.progress.failed} falha)</span>}
                 </span>
               </div>
             </TableCell>

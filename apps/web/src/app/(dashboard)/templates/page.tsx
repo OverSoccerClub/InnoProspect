@@ -6,6 +6,7 @@ import { Loader2, MessageSquareText, Plus } from 'lucide-react';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorState } from '@/components/common/error-state';
 import { LoadingRows } from '@/components/common/loading-rows';
+import { PageHeader } from '@/components/common/page-header';
 import { TEMPLATE_TABLE_COLUMNS, TemplateTable } from '@/components/templates/template-table';
 import { Button } from '@/components/ui/button';
 import { Table, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -17,20 +18,18 @@ export default function TemplatesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight">Templates</h1>
-          <p className="text-sm text-muted-foreground">
-            Mensagens reutilizáveis com variáveis e variação de texto (spintax) contra bloqueio.
-          </p>
-        </div>
-        <Button asChild size="sm">
-          <Link href="/templates/novo">
-            <Plus />
-            Novo template
-          </Link>
-        </Button>
-      </div>
+      <PageHeader
+        title="Templates"
+        description="Mensagens reutilizáveis com variáveis e variação de texto (spintax) contra bloqueio."
+        action={
+          <Button asChild size="sm">
+            <Link href="/templates/novo">
+              <Plus />
+              Novo template
+            </Link>
+          </Button>
+        }
+      />
 
       {error && <ErrorState message={error.message} onRetry={refetch} />}
 
@@ -39,15 +38,19 @@ export default function TemplatesPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Nome</TableHead>
-              <TableHead>Variáveis</TableHead>
+              <TableHead className="hidden lg:table-cell">Variáveis</TableHead>
               <TableHead>Variação</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Usos</TableHead>
+              <TableHead className="hidden md:table-cell">Usos</TableHead>
               <TableHead className="text-right">Ações</TableHead>
             </TableRow>
           </TableHeader>
           <tbody>
-            <LoadingRows rows={4} columns={TEMPLATE_TABLE_COLUMNS} />
+            <LoadingRows
+              rows={4}
+              columns={TEMPLATE_TABLE_COLUMNS}
+              columnClassNames={['', 'hidden lg:table-cell', '', '', 'hidden md:table-cell', '']}
+            />
           </tbody>
         </Table>
       )}

@@ -6,6 +6,7 @@ import { Plus, Search } from 'lucide-react';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorState } from '@/components/common/error-state';
+import { PageHeader } from '@/components/common/page-header';
 import { SearchJobsFilters, type SearchJobsFilterState } from '@/components/searches/search-jobs-filters';
 import { SearchJobsTable } from '@/components/searches/search-jobs-table';
 import { Button } from '@/components/ui/button';
@@ -24,18 +25,18 @@ export default function SearchJobsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Buscas</h1>
-          <p className="text-sm text-muted-foreground">Histórico e progresso das buscas de leads.</p>
-        </div>
-        <Button asChild>
-          <Link href="/buscas/nova">
-            <Plus />
-            Nova busca
-          </Link>
-        </Button>
-      </div>
+      <PageHeader
+        title="Buscas"
+        description="Histórico e progresso das buscas de leads."
+        action={
+          <Button asChild>
+            <Link href="/buscas/nova">
+              <Plus />
+              Nova busca
+            </Link>
+          </Button>
+        }
+      />
 
       <SearchJobsFilters value={filters} onChange={setFilters} />
 

@@ -6,6 +6,7 @@ import { ArrowLeft, Globe, Loader2, MapPin, Phone, Star } from 'lucide-react';
 
 import { ErrorState } from '@/components/common/error-state';
 import { LeadConversation } from '@/components/leads/lead-conversation';
+import { LeadStatusBadge } from '@/components/leads/lead-status-badge';
 import { LeadTimeline } from '@/components/leads/lead-timeline';
 import { MessageComposer } from '@/components/leads/message-composer';
 import { OptedOutBanner } from '@/components/leads/opted-out-banner';
@@ -139,7 +140,10 @@ export function LeadDetail({ id }: { id: string }) {
               .join('')}
           </span>
           <div>
-            <h1 className="font-display text-xl font-semibold tracking-tight sm:text-2xl">{lead.name}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="font-display text-xl font-semibold tracking-tight sm:text-2xl">{lead.name}</h1>
+              <LeadStatusBadge status={lead.status} />
+            </div>
             <p className="text-sm text-muted-foreground">
               {lead.category ?? 'Sem categoria'} {lead.city && `· ${lead.city} — ${lead.uf}`}
             </p>
@@ -149,7 +153,7 @@ export function LeadDetail({ id }: { id: string }) {
           {isSavingStatus && <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />}
           <div className="flex flex-col gap-1">
             <Label htmlFor="lead-status" className="sr-only">
-              Status do lead
+              Alterar status do lead
             </Label>
             <Select
               id="lead-status"
@@ -175,7 +179,10 @@ export function LeadDetail({ id }: { id: string }) {
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-1">
+        {/* `elevated`: esta é a única informação de identidade/contato da
+            ficha — ganha um degrau de destaque sobre a Linha do tempo/
+            Conversa (`flat`), que são histórico, não a referência primária. */}
+        <Card variant="elevated" className="lg:col-span-1">
           <CardHeader>
             <CardTitle className="text-base">Contato</CardTitle>
           </CardHeader>

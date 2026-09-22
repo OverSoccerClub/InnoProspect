@@ -283,3 +283,40 @@
     animation: inno-popover-out 100ms ease-in;
   }
 }
+
+/*
+ * Sombra de rolagem horizontal (`components/ui/table.tsx`) — Onda 2A,
+ * correção do bug sistêmico "tabela larga corta coluna". Depois de
+ * `min-w-0` na coluna do shell (`app/(dashboard)/layout.tsx`) fazer a
+ * rolagem horizontal do wrapper da tabela funcionar de verdade, sobrava
+ * ainda um problema de DESCOBERTA: a barra de rolagem do sistema é fina
+ * (às vezes só aparece no hover, dependendo do SO) e não é um sinal forte
+ * o bastante de "tem mais coluna pra esse lado" — foi assim que a coluna
+ * LOCAL/Variação pareceu simplesmente sumir. Técnica clássica de "scroll
+ * shadow", 100% CSS (sem JS, sem recalcular em cada render): duas camadas
+ * de gradiente "tampam" a sombra enquanto o scroll está no início/fim
+ * (`background-attachment: local`, anda junto com o conteúdo) e revelam a
+ * sombra (`background-attachment: scroll`, fica fixa na borda) assim que
+ * há conteúdo para aquele lado. Funciona em qualquer tabela do sistema,
+ * automaticamente — nenhuma tela precisa saber que isto existe.
+ */
+.inno-table-scroll {
+  background-color: var(--card);
+  background-image:
+    linear-gradient(to right, var(--card) 30%, transparent),
+    linear-gradient(to left, var(--card) 30%, transparent),
+    radial-gradient(farthest-side at 0 50%, oklch(0 0 0 / 18%), transparent),
+    radial-gradient(farthest-side at 100% 50%, oklch(0 0 0 / 18%), transparent);
+  background-repeat: no-repeat;
+  background-position:
+    left top,
+    right top,
+    left top,
+    right top;
+  background-size:
+    48px 100%,
+    48px 100%,
+    16px 100%,
+    16px 100%;
+  background-attachment: local, local, scroll, scroll;
+}

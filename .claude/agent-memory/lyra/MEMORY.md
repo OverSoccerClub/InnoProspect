@@ -12,3 +12,7 @@
 - [Erro de regra de negócio viaja em details[], não em meta](convention_error_envelope_details_vs_meta.md) — path=chave semântica (resetsAt/nextWindowOpensAt/optedOutAt), message=valor cru; confirmado contra o código real do Vega
 - [Bug: middleware bloqueia rotas de metadata (icon.svg/apple-icon.png)](bug_middleware_blocks_metadata_icon_routes.md) — matcher só isenta favicon.ico; 307 pro /login em qualquer asset novo em app/, testar sempre com curl -D
 - [Modo mock precisa de sessão Auth.js real pra chegar no dashboard](project_mock_mode_needs_real_session.md) — middleware exige sessão real sempre; login() em mock só seta cookie próprio, nunca basta sozinho
+- [Bug sistêmico de tabela: causa raiz era flex sem min-w-0, não a tabela](bug_table_overflow_flex_min_width.md) — item flex do shell sem min-width:0 deixa o min-content da tabela estourar a página inteira
+- [Nunca `next dev`/`next build` extra no mesmo diretório de um dev server compartilhado](bug_shared_next_dev_cache_conflict.md) — corrompe o `.next` de todo mundo; recuperação é `rm -rf .next` + esperar recompilar
+- [Derive outcome visual dos contadores de progresso, nunca de status+percent isolados](convention_derive_outcome_from_progress_not_status.md) — bug real: busca com tudo falho aparecia "Concluída" verde; achado em /buscas
+- [Bug: kebab/DropdownMenu num CardHeader com badges estoura a página em 390px sem flex-wrap+flex-1](bug_card_header_kebab_overflow_mobile.md) — medir sempre, não só ler o CSS

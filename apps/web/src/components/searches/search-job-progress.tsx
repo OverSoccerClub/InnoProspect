@@ -2,20 +2,22 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, CircleAlert, Loader2, RotateCcw, XCircle } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CircleAlert, Loader2, RotateCcw, XCircle } from 'lucide-react';
 
 import { SearchJobStatusBadge } from '@/components/searches/search-job-status-badge';
+import { SearchProgressBar } from '@/components/searches/search-progress-bar';
 import { SearchTaskList } from '@/components/searches/search-task-list';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ErrorState } from '@/components/common/error-state';
-import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSearchJob } from '@/hooks/useSearchJob';
 import { cancelSearchJob, retryFailedTasks } from '@/lib/api/searches';
 import { ApiRequestError } from '@/lib/fetcher';
 import { formatDateTime } from '@/lib/format';
+import { getSearchJobOutcome } from '@/lib/search-job-outcome';
+import { cn } from '@/lib/utils';
 
 export function SearchJobProgress({ id }: { id: string }) {
   const { data: job, error, isLoading, isPolling, refetch } = useSearchJob(id);
@@ -78,6 +80,7 @@ export function SearchJobProgress({ id }: { id: string }) {
   const failedTasks = job.tasks.filter((t) => t.status === 'failed');
   const canCancel = job.status === 'queued' || job.status === 'running';
   const canRetryFailed = failedTasks.length > 0 && (job.status === 'failed' || job.status === 'completed');
+  const outcome = getSearchJobOutcome(job);
 
   return (
     <div className="flex flex-col gap-6">
@@ -87,7 +90,7 @@ export function SearchJobProgress({ id }: { id: string }) {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-semibold tracking-tight">{job.name}</h1>
-            <SearchJobStatusBadge status={job.status} />
+            <SearchJobStatusBadge job={job} />
           </div>
           <p className="text-sm text-muted-foreground">
             {job.niche} · {job.uf} · criada em {formatDateTime(job.createdAt)}
@@ -118,6 +121,26 @@ export function SearchJobProgress({ id }: { id: string }) {
           <AlertDescription>{job.error}</AlertDescription>
         </Alert>
       )}
+      {outcome === 'completed_empty' && (
+        <Alert variant="destructive">
+          <CircleAlert />
+          <AlertTitle>Busca concluída sem nenhum resultado</AlertTitle>
+          <AlertDescription>
+            Os {job.progress.total} municípios foram processados e todos falharam — nenhum lead foi coletado.
+            Reveja o nicho e a UF, ou repita os municípios com falha abaixo.
+          </AlertDescription>
+        </Alert>
+      )}
+      {outcome === 'completed_partial' && (
+        <Alert variant="warning">
+          <AlertTriangle />
+          <AlertTitle>Busca concluída com falhas parciais</AlertTitle>
+          <AlertDescription>
+            {job.progress.failed} de {job.progress.total} municípios falharam. Os demais foram processados
+            normalmente — {job.leadsFound} lead(s) encontrado(s) até agora.
+          </AlertDescription>
+        </Alert>
+      )}
       {job.status === 'cancelled' && (
         <Alert variant="warning">
           <CircleAlert />
@@ -142,19 +165,16 @@ export function SearchJobProgress({ id }: { id: string }) {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex items-center gap-3">
-            <Progress
-              value={job.progress.percent}
-              label={`${job.progress.done} de ${job.progress.total} municípios concluídos`}
-              className="flex-1"
-            />
+            <SearchProgressBar progress={job.progress} className="flex-1" />
             <span className="whitespace-nowrap text-sm text-muted-foreground">
               {job.progress.done}/{job.progress.total} municípios
+              {job.progress.failed > 0 && <span className="text-destructive"> · {job.progress.failed} falha(s)</span>}
             </span>
           </div>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <Stat label="Leads encontrados" value={job.leadsFound} />
             <Stat label="Leads novos" value={job.leadsNew} />
-            <Stat label="Municípios com falha" value={job.progress.failed} />
+            <Stat label="Municípios com falha" value={job.progress.failed} tone={job.progress.failed > 0 ? 'destructive' : undefined} />
             <Stat label="Status" value={isPolling ? 'atualizando…' : 'parado'} isText />
           </div>
         </CardContent>
@@ -180,11 +200,28 @@ function BackLink() {
   );
 }
 
-function Stat({ label, value, isText }: { label: string; value: number | string; isText?: boolean }) {
+function Stat({
+  label,
+  value,
+  isText,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  isText?: boolean;
+  tone?: 'destructive';
+}) {
   return (
     <div>
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={isText ? 'text-sm font-medium' : 'text-lg font-semibold'}>{value}</p>
+      <p
+        className={cn(
+          isText ? 'text-sm font-medium' : 'text-lg font-semibold',
+          tone === 'destructive' && 'text-destructive',
+        )}
+      >
+        {value}
+      </p>
     </div>
   );
 }

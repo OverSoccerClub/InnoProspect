@@ -1,8 +1,24 @@
 import { USE_MOCKS } from '@/lib/config';
-import { apiGet, apiPatch, apiPost } from '@/lib/fetcher';
-import { mockGetLead, mockListLeads, mockPatchLead, mockPreviewLeadMessage, mockSendLeadMessage } from '@/mocks/leads';
+import { triggerBlobDownload, triggerUrlDownload } from '@/lib/download';
+import { apiGet, apiPatch, apiPost, toQueryString } from '@/lib/fetcher';
+import {
+  mockBulkUpdateLeads,
+  mockExportLeadsCsv,
+  mockGetLead,
+  mockListLeads,
+  mockPatchLead,
+  mockPreviewLeadMessage,
+  mockSendLeadMessage,
+} from '@/mocks/leads';
 import { mockDelay } from '@/mocks/utils';
-import type { LeadDetail, LeadFilter, LeadListResponse } from '@/types/lead';
+import {
+  LEAD_EXPORT_COLUMNS,
+  type BulkLeadsBody,
+  type BulkLeadsResponse,
+  type LeadDetail,
+  type LeadFilter,
+  type LeadListResponse,
+} from '@/types/lead';
 import type { LeadMessagePreviewResponse, SendLeadMessageRequest, SendLeadMessageResponse } from '@/types/lead-message';
 
 export async function listLeads(filter: LeadFilter = {}): Promise<LeadListResponse> {
@@ -77,4 +93,42 @@ export async function sendLeadMessage(leadId: string, input: SendLeadMessageRequ
     return mockSendLeadMessage(leadId, input);
   }
   return apiPost<SendLeadMessageResponse>(`/api/v1/leads/${leadId}/messages`, input);
+}
+
+/**
+ * `GET /api/v1/leads/export` — CSV com o filtro atual da tela (ARQUITETURA §4.3).
+ * Em modo mock, como não existe servidor gerando o arquivo, montamos o CSV no
+ * cliente (mesmo formato: BOM, separador `;`, decimal com vírgula — ver
+ * `mocks/leads.ts`) e disparamos como download de Blob; em modo real, é uma
+ * navegação para a rota autenticada (o servidor faz streaming e já manda
+ * `Content-Disposition: attachment`, então o navegador baixa sem sair da tela).
+ */
+export async function exportLeads(filter: LeadFilter): Promise<void> {
+  if (USE_MOCKS) {
+    await mockDelay(400);
+    const { filename, csv } = mockExportLeadsCsv(filter, LEAD_EXPORT_COLUMNS);
+    triggerBlobDownload(filename, csv, 'text/csv;charset=utf-8');
+    return;
+  }
+  const query = toQueryString({
+    q: filter.q,
+    status: filter.status,
+    uf: filter.uf,
+    cityIbgeCode: filter.cityIbgeCode,
+    category: filter.category,
+  });
+  triggerUrlDownload(`/api/v1/leads/export${query}`);
+}
+
+/**
+ * `POST /api/v1/leads/bulk` (ARQUITETURA §4.3) — ação em massa sobre uma
+ * seleção explícita de ids (linhas marcadas na tela). A tela nunca envia
+ * `filter`/`expectedCount` nesta rodada — ver nota em `mocks/leads.ts`.
+ */
+export async function bulkUpdateLeads(body: BulkLeadsBody): Promise<BulkLeadsResponse> {
+  if (USE_MOCKS) {
+    await mockDelay(400);
+    return mockBulkUpdateLeads(body);
+  }
+  return apiPost<BulkLeadsResponse>('/api/v1/leads/bulk', body);
 }

@@ -3,11 +3,11 @@
 import { useCallback, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 
+import { CardGridSkeleton } from '@/components/common/card-grid-skeleton';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorState } from '@/components/common/error-state';
+import { PageHeader } from '@/components/common/page-header';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Card, CardContent } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { CreateInstanceDialog } from '@/components/whatsapp/create-instance-dialog';
 import { InstanceCard } from '@/components/whatsapp/instance-card';
@@ -30,18 +30,16 @@ export default function WhatsappPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight">WhatsApp</h1>
-          <p className="text-sm text-muted-foreground">
-            Conecte números, acompanhe aquecimento e saúde da conexão antes de disparar campanhas.
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setIsCreateOpen(true)}>
-          <Plus />
-          Nova instância
-        </Button>
-      </div>
+      <PageHeader
+        title="WhatsApp"
+        description="Conecte números, acompanhe aquecimento e saúde da conexão antes de disparar campanhas."
+        action={
+          <Button size="sm" onClick={() => setIsCreateOpen(true)}>
+            <Plus />
+            Nova instância
+          </Button>
+        }
+      />
 
       {error && !instances && <ErrorState message={error.message} onRetry={refetch} />}
 
@@ -54,19 +52,7 @@ export default function WhatsappPage() {
         </Alert>
       )}
 
-      {!error && isLoading && (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}>
-              <CardContent className="flex flex-col gap-3 p-6">
-                <Skeleton className="h-5 w-32" />
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-16 w-full" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+      {!error && isLoading && <CardGridSkeleton count={3} />}
 
       {!isLoading && instances && instances.length === 0 && (
         <EmptyState

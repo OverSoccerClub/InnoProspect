@@ -8,7 +8,20 @@ import {
   type KnownVariable,
   renderWithSeed,
 } from '@/lib/spintax';
-import type { LeadActivity, LeadDetail, LeadListItem, LeadListResponse, LeadFilter, LeadStatus, MessageItem, PhoneType } from '@/types/lead';
+import type {
+  BulkLeadsBody,
+  BulkLeadsResponse,
+  BulkLeadsSkippedItem,
+  LeadActivity,
+  LeadDetail,
+  LeadExportColumn,
+  LeadListItem,
+  LeadListResponse,
+  LeadFilter,
+  LeadStatus,
+  MessageItem,
+  PhoneType,
+} from '@/types/lead';
 import type {
   LeadMessagePreviewResponse,
   SendLeadMessageRequest,
@@ -343,7 +356,15 @@ function decodeCursor(cursor?: string): number {
   }
 }
 
-export function mockListLeads(filter: LeadFilter): LeadListResponse {
+/**
+ * Filtragem compartilhada entre `mockListLeads` (paginada) e
+ * `mockExportLeadsCsv`/`mockBulkUpdateLeads` (dump/alvo completo do filtro,
+ * sem paginação) — extraída para as duas rotas nunca divergirem sobre o que
+ * "o filtro atual" significa (o mesmo risco que motivou `resolveLeadWhere`
+ * ser reaproveitado pelo Vega entre `listLeads`/`countLeadsForExport`/
+ * `iterateLeadsForExport` no backend real).
+ */
+function filterLeads(filter: LeadFilter): MockLead[] {
   let items = getLeads();
 
   if (filter.q) {
@@ -368,6 +389,12 @@ export function mockListLeads(filter: LeadFilter): LeadListResponse {
   // default do contrato: esconde opt-outs a menos que peçam explicitamente
   const optedOut = filter.optedOut ?? false;
   items = items.filter((l) => l.isOptedOut === optedOut || optedOut === true);
+
+  return items;
+}
+
+export function mockListLeads(filter: LeadFilter): LeadListResponse {
+  let items = filterLeads(filter);
 
   const facets = {
     total: items.length,
@@ -417,6 +444,165 @@ export function mockListLeads(filter: LeadFilter): LeadListResponse {
     data,
     page: { cursor: filter.cursor ?? null, nextCursor, limit, total: items.length },
     facets,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /leads/export (CSV) — mesmo formato de `lib/services/leads.ts`
+// (`buildCsvLine`/`escapeCsvField`/`CSV_BOM`/separador `;`), duplicado aqui
+// de propósito: aquele arquivo importa `@inno/db` (Prisma), que não pode
+// entrar no bundle do client. As colunas (`LEAD_EXPORT_COLUMNS`) vêm de
+// `@inno/contracts` de verdade (zero duplicação ali — é zod puro, seguro
+// para os dois lados); só a FORMATAÇÃO da linha está copiada. Se o formato
+// do CSV mudar no backend, atualizar aqui também (ver ARQUITETURA §4.3).
+// ─────────────────────────────────────────────────────────────────────────
+
+const MOCK_CSV_SEPARATOR = ';';
+const MOCK_CSV_NEWLINE = '\r\n';
+const MOCK_CSV_BOM = '﻿';
+const MOCK_CSV_FORMULA_TRIGGER = new Set(['=', '+', '-', '@']);
+
+function mockEscapeCsvField(raw: string): string {
+  let value = raw;
+  if (value.length > 0 && MOCK_CSV_FORMULA_TRIGGER.has(value[0]!)) value = `'${value}`;
+  if (/["\r\n;]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function mockBuildCsvLine(values: readonly string[]): string {
+  return values.map(mockEscapeCsvField).join(MOCK_CSV_SEPARATOR) + MOCK_CSV_NEWLINE;
+}
+
+function mockBuildExportRow(lead: MockLead): Record<LeadExportColumn, string> {
+  return {
+    nome: lead.name,
+    telefone: lead.phoneE164 ?? '',
+    tipo_telefone: lead.phoneType,
+    endereco: lead.address ?? '',
+    cidade: lead.city ?? '',
+    uf: lead.uf ?? '',
+    site: lead.website ?? '',
+    categoria: lead.category ?? '',
+    // Vírgula decimal (pt-BR) — combina com o separador `;` da linha, igual ao backend real.
+    nota: lead.rating !== null ? String(lead.rating).replace('.', ',') : '',
+    avaliacoes: lead.reviewCount !== null ? String(lead.reviewCount) : '',
+    status: lead.status,
+    tags: lead.tags.join('|'),
+    descadastrado: lead.isOptedOut ? 'sim' : 'não',
+    origem_url: lead.source.url ?? '',
+    coletado_em: lead.source.collectedAt,
+  };
+}
+
+/** `GET /leads/export` — dump completo do filtro (sem paginação), pronto para virar um `Blob` no client. */
+export function mockExportLeadsCsv(filter: LeadFilter, columns: readonly LeadExportColumn[]): { filename: string; csv: string } {
+  const items = filterLeads(filter);
+  const lines = [mockBuildCsvLine(columns)];
+  for (const lead of items) {
+    const row = mockBuildExportRow(lead);
+    lines.push(mockBuildCsvLine(columns.map((column) => row[column])));
+  }
+  const now = new Date();
+  return { filename: `leads-${now.toISOString().slice(0, 10)}.csv`, csv: MOCK_CSV_BOM + lines.join('') };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /leads/bulk — versão simplificada do `bulkUpdateLeads` real
+// (`lib/services/leads.ts`): aplica `set_status`/`add_tags`/`remove_tags`
+// por `leadIds` (a tela só usa seleção de linhas visíveis, nunca `filter` +
+// `expectedCount` — ver TODO no handoff se a Onda 3 quiser "selecionar todos
+// os N do filtro"). NÃO valida a máquina de estados de status
+// (`checkStatusTransition`) — isso é regra de negócio do Vega; o mock só
+// cobre o caminho feliz + `NO_CHANGE`, suficiente para testar a UI.
+// ─────────────────────────────────────────────────────────────────────────
+
+export function mockBulkUpdateLeads(body: BulkLeadsBody): BulkLeadsResponse {
+  const ids = body.leadIds ?? [];
+  const all = getLeads();
+  const skipped: BulkLeadsSkippedItem[] = [];
+  const updatedIds: string[] = [];
+
+  for (const id of ids) {
+    const index = all.findIndex((l) => l.id === id);
+    if (index === -1) {
+      skipped.push({ id, reason: 'NOT_FOUND', message: 'Lead não encontrado.' });
+      continue;
+    }
+    const lead = all[index]!;
+
+    if (body.action === 'set_status') {
+      const to = body.value.status!;
+      if (to === lead.status) {
+        skipped.push({ id, reason: 'NO_CHANGE', message: `o lead já está em '${to}'` });
+        continue;
+      }
+      const from = lead.status;
+      all[index] = {
+        ...lead,
+        status: to,
+        activities: [
+          ...lead.activities,
+          {
+            id: `${id}_act_bulk_${Date.now()}`,
+            leadId: id,
+            type: 'status_changed',
+            payload: { from, to },
+            actor: 'user',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      };
+      updatedIds.push(id);
+      continue;
+    }
+
+    const tagsToApply = body.value.tags ?? [];
+    const current = new Set(lead.tags);
+    let changed = false;
+    if (body.action === 'add_tags') {
+      for (const tag of tagsToApply) {
+        if (!current.has(tag)) {
+          current.add(tag);
+          changed = true;
+        }
+      }
+    } else {
+      for (const tag of tagsToApply) {
+        if (current.delete(tag)) changed = true;
+      }
+    }
+    if (!changed) {
+      skipped.push({
+        id,
+        reason: 'NO_CHANGE',
+        message:
+          body.action === 'add_tags' ? 'o lead já tinha todas as tags informadas' : 'o lead não tinha nenhuma das tags informadas',
+      });
+      continue;
+    }
+    all[index] = {
+      ...lead,
+      tags: [...current],
+      activities: [
+        ...lead.activities,
+        {
+          id: `${id}_act_bulk_${Date.now()}`,
+          leadId: id,
+          type: body.action === 'add_tags' ? 'tags_added' : 'tags_removed',
+          payload: { tags: tagsToApply },
+          actor: 'user',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    };
+    updatedIds.push(id);
+  }
+
+  return {
+    ok: true,
+    updatedIds,
+    skipped,
+    summary: { requested: ids.length, updated: updatedIds.length, skipped: skipped.length },
   };
 }
 
