@@ -45,4 +45,25 @@ export default defineConfig({
   // Confirmado empiricamente em 2026-09-22 (build falhava com "Could not
   // resolve chromium-bidi/..." antes deste `external`).
   external: ['playwright'],
+  // INCIDENTE 2 (produção, 2026-09-22, logo depois de embutir os pacotes):
+  // `Error: Dynamic require of "buffer" is not supported`, vindo de
+  // `iconv-lite`/`safer-buffer` (chegam por `@inno/scraper` → `cheerio` →
+  // `encoding-sniffer`). São pacotes em CommonJS: ao serem embutidos num
+  // bundle ESM, os `require()` deles viram um atalho do esbuild que LANÇA,
+  // porque `require` não existe em módulo ESM.
+  //
+  // O próprio atalho gerado já tem a saída: ele começa com
+  // `typeof require !== "undefined" ? require : (…lança…)`. Basta existir um
+  // `require` de verdade no escopo do arquivo. `createRequire` é a forma
+  // oficial do Node de obter um, e o `import.meta.url` ancora a resolução no
+  // próprio `dist/index.js` — então os pacotes CommonJS embutidos passam a
+  // resolver como resolveriam fora do bundle.
+  //
+  // Alternativa descartada: marcar `cheerio` e companhia como `external`.
+  // Resolveria este caso e deixaria a mesma armadilha armada para a próxima
+  // dependência CommonJS que entrasse pelo grafo — o banner cobre a classe
+  // inteira do problema, não só a ocorrência de hoje.
+  banner: {
+    js: "import { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);",
+  },
 });
