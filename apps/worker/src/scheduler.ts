@@ -14,6 +14,7 @@ import {
 } from './queues.js';
 import { createScrapeSearchProcessor, type ScrapeSearchJobData } from './jobs/scrape-search.job.js';
 import { logger } from './observability/logger.js';
+import { sendAlert } from './observability/alerts.js';
 import {
   HEARTBEAT_INTERVAL_MS,
   PAUSE_SWEEP_INTERVAL_MS,
@@ -103,7 +104,7 @@ export function startWorkers(): WorkerHandles {
   };
 }
 
-async function sweepQueuePause(scrapeQueue: Queue<ScrapeSearchJobData>): Promise<void> {
+export async function sweepQueuePause(scrapeQueue: Queue<ScrapeSearchJobData>): Promise<void> {
   const meta = await readQueuePauseMeta(scrapeQueue);
   if (!meta || !meta.resumeAt) return; // não pausada, ou pausa indefinida (exige acknowledge manual).
   if (new Date(meta.resumeAt).getTime() > Date.now()) return; // ainda não venceu.
@@ -119,4 +120,12 @@ async function sweepQueuePause(scrapeQueue: Queue<ScrapeSearchJobData>): Promise
   await scrapeQueue.resume();
   await clearQueuePauseMeta(scrapeQueue);
   logger.info({ code: meta.code }, 'scrape:search queue retomada automaticamente — pausa temporizada expirou');
+
+  // Fecha o ciclo do alerta: só dispara aqui porque a linha acima de fato
+  // mudou o estado (`isPaused` era `true` no início desta função, ver early
+  // return logo depois de lê-lo) — retomada manual via `POST
+  // /api/v1/scraper/queue/resume` (apps/web, pausa indefinida de sanidade)
+  // NÃO passa por aqui, então não gera este alerta (quem chamou aquele
+  // endpoint já sabe que acabou de retomar).
+  await sendAlert({ kind: 'queue_resumed', code: meta.code, message: `pausa temporizada expirou (motivo original: ${meta.message})` });
 }

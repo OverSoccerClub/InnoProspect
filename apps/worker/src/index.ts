@@ -1,9 +1,15 @@
 import { prisma } from '@inno/db';
 import { logger } from './observability/logger.js';
+import { logAlertingStatusOnce } from './observability/alerts.js';
 import { startWorkers } from './scheduler.js';
 import { requeueOrphanTasks } from './jobs/requeue-orphans.js';
 
 async function main(): Promise<void> {
+  // Onda 2: diz já no boot se ALERT_WEBHOOK_URL está configurada ou não —
+  // sem isto, "o alerta está desligado" só se descobre quando um incidente
+  // acontece e ninguém é avisado (o próprio motivo desta rodada existir).
+  logAlertingStatusOnce();
+
   // Falha rápido e com mensagem clara se o processo subir sem banco
   // configurado — melhor que um erro genérico de conexão minutos depois,
   // no meio do processamento de uma SearchTask.

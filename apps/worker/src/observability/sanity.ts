@@ -28,6 +28,7 @@ import {
 } from '@inno/scraper';
 import { persistQueuePause } from '../lib/queue-state.js';
 import { logger } from './logger.js';
+import { sendAlert } from './alerts.js';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -156,6 +157,24 @@ export async function evaluateAndRecordSanity(scrapeQueue: Queue): Promise<void>
       { type, code: result.code, severity: result.severity, metric: result.metric, threshold: result.threshold, newIncident: created },
       'assertion de sanidade do scraper disparou',
     );
+
+    // Alerta só quando o incidente é NOVO (`created`) — enquanto o mesmo tipo
+    // continuar disparando em ciclos seguintes, `recordHealthEventIfNew` acha
+    // o evento já aberto e devolve `false`, então não realertamos a cada
+    // task. `SanitySeverity` só tem 'high'|'critical' (ver
+    // packages/scraper/src/sanity/assertions.ts) — todo incidente de
+    // sanidade já se qualifica, não há um terceiro nível "low" para filtrar.
+    if (created) {
+      await sendAlert({
+        kind: 'sanity_incident_opened',
+        code: result.code,
+        severity: result.severity,
+        message: result.message,
+        metric: result.metric,
+        threshold: result.threshold,
+      });
+    }
+
     if (result.pauseQueue && created) {
       newPausingResult = result;
     }

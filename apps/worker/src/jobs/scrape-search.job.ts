@@ -29,6 +29,7 @@ import {
 import { SCRAPE_SEARCH_JOB_NAME, priorityFromPopulation } from '../queues.js';
 import { logger } from '../observability/logger.js';
 import { evaluateAndRecordSanity } from '../observability/sanity.js';
+import { sendAlert } from '../observability/alerts.js';
 import { persistQueuePause } from '../lib/queue-state.js';
 
 export type ScrapeSearchJobData = { searchTaskId: string };
@@ -42,13 +43,21 @@ export type ScrapeSearchJobData = { searchTaskId: string };
  * essa metadata do Redis e retoma sozinho quando `resumeAt` vence — sobrevive
  * a restart porque não depende de nenhum estado em memória.
  */
-async function pauseQueueFor(
+export async function pauseQueueFor(
   scrapeQueue: Queue,
   ms: number,
   code: string,
   message: string,
   severity: 'high' | 'critical',
 ): Promise<void> {
+  // Transição: só alerta se a fila NÃO estava pausada ainda — evita
+  // realertar a cada task que falhar com o mesmo erro enquanto a fila já
+  // está parada (ex.: 2 tasks em paralelo pegando RATE_LIMITED antes de a
+  // primeira pausa surtir efeito no scheduler). Se já estava pausada por
+  // outro motivo (ex.: sanidade), também não alerta aqui de novo — o
+  // incidente original já foi avisado no seu próprio ponto de disparo.
+  const wasAlreadyPaused = await scrapeQueue.isPaused();
+
   await scrapeQueue.pause();
 
   const pausedAt = new Date();
@@ -71,6 +80,10 @@ async function pauseQueueFor(
     { code, resumeAt: resumeAt?.toISOString() ?? 'indefinido (exige POST /api/v1/scraper/queue/resume)' },
     'scrape:search queue paused — intervenção automática de anti-detecção/anti-quebra',
   );
+
+  if (!wasAlreadyPaused) {
+    await sendAlert({ kind: 'queue_paused', code, severity, message, reason: 'scrape_error' });
+  }
 }
 
 /**

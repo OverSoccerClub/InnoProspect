@@ -166,6 +166,8 @@ variável do worker é runtime.
 | `EVOLUTION_API_KEY` | o mesmo valor usado em `AUTHENTICATION_API_KEY` da Evolution | tem que ser IGUAL nos dois lados |
 | `EVOLUTION_WEBHOOK_BASE_URL` | `https://<seu-domínio>/api/webhooks/evolution` | |
 | `LOG_LEVEL` | `info` | |
+| `OPTOUT_TOKEN_SECRET` | gerar com `openssl rand -base64 32` | ⚠️ **obrigatória antes de enviar qualquer mensagem.** Assina o link de descadastro que vai em cada mensagem. Sem ela, a página pública `/descadastro/:token` recusa **todos** os links (fail-closed): a pessoa clica para sair da lista e recebe erro, o que quebra o mecanismo de LGPD. Trocar o valor invalida os links já enviados. |
+| `APP_COMPANY_NAME` | nome da sua empresa | Preenche `{{minha_empresa}}` nos templates. A primeira mensagem precisa identificar quem está falando (ARQUITETURA §7.4) |
 
 ⚠️ **`NEXT_PUBLIC_USE_MOCKS` e `NEXT_PUBLIC_API_BASE_URL` NÃO vão nesta tabela** — são embutidas no bundle JavaScript do navegador **durante o `docker build`**, não lidas em runtime. O `apps/web/Dockerfile` já builda com `NEXT_PUBLIC_USE_MOCKS=false` por padrão (produção real, sem mock) — não precisa (e não adianta) definir isso como env do serviço no EasyPanel depois do build pronto. Ver a subseção "Build-time vs runtime" acima para a tabela completa de quem é build-arg e quem é runtime — **todas as variáveis da tabela acima são runtime**, nenhuma delas deve ir no campo de "Build" do EasyPanel.
 
@@ -192,6 +194,9 @@ Mesmas de `DATABASE_URL`, `REDIS_URL`, `LOG_LEVEL`, `EVOLUTION_API_URL`, `EVOLUT
 | `SCRAPE_CONTEXT_TTL` | `15` |
 | `SCRAPE_INCIDENT_DIR` | `/data/incidents` (monte um volume persistente aqui se quiser preservar evidência de incidente entre deploys) |
 | `PROXY_PROVIDER` | `noop` |
+| `ALERT_WEBHOOK_URL` | opcional: URL de webhook de entrada do Slack ou do Google Chat |
+
+**Alertas (`ALERT_WEBHOOK_URL`, no serviço `worker`, não no `web`).** O worker envia um aviso quando abre um incidente de sanidade do scraper, quando a fila pausa por erro de coleta e quando uma pausa temporizada é retomada. Só na mudança de estado, nunca a cada ciclo. Para Slack: crie um *Incoming Webhook* no canal e cole a URL. Para Google Chat: *Webhooks de entrada* no espaço. Sem a variável, o worker funciona normalmente e registra no log de boot que os alertas estão desligados. Retomadas manuais pelo painel não geram aviso, porque quem clicou já sabe.
 
 `worker` **não** roda `prisma migrate deploy` (só o `web` faz isso, uma vez) — mas gera seu próprio Prisma Client no build (mesmo schema).
 
@@ -255,7 +260,7 @@ uso está listado no topo de cada script e no checklist final do README.
 
 - **Rotação de segredos.** `NEXTAUTH_SECRET` e `EVOLUTION_API_KEY` não têm processo de rotação definido. Trocar hoje invalida todas as sessões ativas (aceitável) e quebra a conexão da Evolution API até você atualizar o valor nos dois lados (web/worker E Evolution) ao mesmo tempo. Território do Órion (revisão de 2026-08-03, P10) — cito e sigo.
 - **`requeue-orphans` no boot do worker** (mencionado em `ARQUITETURA.md §9.1` R10) — se o Redis cair e perder a fila, nada reenfileira automaticamente as `SearchTask`/`CampaignTarget` presas em `pending`/`running`. Território do Vega, não meu.
-- **Monitoramento pós-deploy real** (métricas de erro/latência, alertas). Hoje só existe o health check de boot — não há dashboard nem alerta contínuo. `ALERT_WEBHOOK_URL` está documentada no `.env.example` mas **não é lida pelo código da aplicação ainda** (Fase 5.6) — `infra/backup/pg-dump.sh` já dispara nela em caso de falha de backup, mas isso cobre só o backup, não o sistema como um todo.
+- **Monitoramento pós-deploy real** (métricas de erro/latência, alertas). Hoje só existe o health check de boot — não há dashboard nem alerta contínuo. Desde 2026-09-22 o worker envia alertas de fila e scraper por `ALERT_WEBHOOK_URL` (ver §6), e `infra/backup/pg-dump.sh` dispara nela quando o backup falha. Ainda não há alerta para o `web` fora do ar nem métricas de erro e latência.
 - **Monitoramento do próprio backup** (§7.5) — se o job agendado do EasyPanel parar de rodar silenciosamente, hoje ninguém é avisado automaticamente; é preciso abrir o Backups Log na mão. Ver `infra/backup/README.md §5`.
 - **Nenhum dos Dockerfiles/compose foi validado com `docker build`/`docker compose up` de verdade** — sem Docker nesta máquina de desenvolvimento. O primeiro build no EasyPanel é o primeiro teste real (ver aviso no topo deste documento).
 - **Headers de segurança (`next.config.ts`) validados só até onde esta máquina permite.** `pnpm --filter web run build` passou pela geração de todas as páginas com o novo `headers()` sem erro de compilação — mas o build falha depois disso por um limite conhecido do Windows sem modo desenvolvedor (`EPERM` ao criar symlink do `.next/standalone`, o mesmo problema já registrado na entrega anterior, não relacionado ao CSP). Isso prova que o CSP não quebra o *build*; **não prova que nada quebra no navegador** — no primeiro deploy real, abra o Console do navegador em cada tela (login, dashboard, `/descadastro/:token`, modal de QR do WhatsApp) e procure por erros `Refused to ... because it violates the following Content Security Policy directive`. Se aparecer, é a CSP bloqueando algo legítimo que esta revisão não previu — ajuste a diretiva específica em `next.config.ts` e documente o porquê ali, não remova a CSP inteira.

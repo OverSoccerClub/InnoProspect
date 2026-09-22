@@ -67,6 +67,36 @@ export function checkRateLimit(key: string, windowMs: number, max: number): Rate
 }
 
 /**
+ * Só LÊ o estado atual — nunca cria/incrementa bucket. Existe para o caso de
+ * `lib/auth.ts` (limite de tentativas de LOGIN, achado do Órion): ali o
+ * limite precisa contar só FALHAS (senão 20 pessoas de um mesmo escritório
+ * logando corretamente de manhã trocariam de lugar com um atacante e
+ * travariam a si mesmas por 15 minutos) — então o fluxo é "consultar sem
+ * gastar cota, decidir se segue, e só `checkRateLimit` (que gasta cota) se a
+ * tentativa de fato falhar". Sem `windowMs`: um bucket ausente/expirado
+ * sempre resulta em `allowed: true` aqui, não há o que criar.
+ */
+export function peekRateLimit(key: string, max: number): RateLimitResult {
+  const now = Date.now();
+  const existing = buckets.get(key);
+
+  if (!existing || existing.resetAt <= now) return { allowed: true };
+  if (existing.count >= max) return { allowed: false, retryAfterMs: existing.resetAt - now };
+  return { allowed: true };
+}
+
+/**
+ * Zera a cota de uma chave — usado quando uma tentativa que antes contava
+ * como "possível abuso" se confirma legítima (ex.: login bem-sucedido zera o
+ * contador daquele E-MAIL em `lib/auth.ts`, mas deliberadamente NÃO o do IP:
+ * um atacante que acerta uma conta não pode usar esse acerto para "resetar"
+ * a varredura de outras contas a partir do mesmo IP).
+ */
+export function resetRateLimit(key: string): void {
+  buckets.delete(key);
+}
+
+/**
  * IP do cliente a partir de `X-Forwarded-For`/`X-Real-Ip` (EasyPanel roda
  * atrás de proxy reverso que preenche esses headers — `NextRequest` não tem
  * mais `.ip` em deploy self-hosted). ⚠️ Não validado nesta máquina contra o
@@ -77,6 +107,32 @@ export function checkRateLimit(key: string, windowMs: number, max: number): Rate
  * a configuração do proxy antes do deploy contar com isto como defesa forte.
  */
 export function clientIp(req: NextRequest): string {
+  const forwarded = req.headers.get('x-forwarded-for');
+  if (forwarded) {
+    const first = forwarded.split(',')[0]?.trim();
+    if (first) return first;
+  }
+  const realIp = req.headers.get('x-real-ip');
+  if (realIp) return realIp.trim();
+  return 'unknown';
+}
+
+/**
+ * Mesma lógica de `clientIp` acima, mas para o `Request` (Fetch API) padrão
+ * — não um `NextRequest` (sem `.nextUrl`/`.cookies`/etc.). É o que o
+ * `authorize` do Auth.js v5 recebe como segundo argumento (`lib/auth.ts`),
+ * então não dá para reusar a assinatura de `clientIp` ali sem alargar o tipo
+ * do parâmetro. Duplicado de propósito — a MESMA regra de "contrato
+ * duplicado, sem inventar de novo" que já vale para `queue-state.ts`
+ * (worker/web) — em vez de mudar a assinatura de `clientIp`, que outro
+ * código já importa como está.
+ *
+ * Mesma ressalva do comentário de `clientIp`: confia no primeiro valor de
+ * `X-Forwarded-For`, assumindo que o proxy do EasyPanel sobrescreve esse
+ * header com o IP real do cliente antes de repassar para o container (não
+ * confirmado nesta máquina — Órion deve validar antes do deploy).
+ */
+export function clientIpFromRequest(req: Request): string {
   const forwarded = req.headers.get('x-forwarded-for');
   if (forwarded) {
     const first = forwarded.split(',')[0]?.trim();
