@@ -65,6 +65,21 @@ function buildInstances(): MockInstance[] {
       qrIssuedAtMs: null,
       qrPollCount: 0,
     },
+    {
+      id: 'wa_4',
+      name: 'Comercial — linha 3 (cota do dia esgotada)',
+      phoneNumber: '+5511987650004',
+      status: 'connected',
+      health: 'ok',
+      warmup: { day: 30, dailyLimit: 300, isWarm: true },
+      today: { sent: 300, failed: 1, responded: 14, remaining: 0 },
+      lastConnectionAt: new Date(now - 1_800_000).toISOString(),
+      lastErrorAt: null,
+      lastError: null,
+      activeCampaigns: 0,
+      qrIssuedAtMs: null,
+      qrPollCount: 0,
+    },
   ];
 }
 
@@ -171,6 +186,41 @@ export function mockDisconnectInstance(id: string): DisconnectInstanceResponse {
   instance.status = 'disconnected';
   instance.activeCampaigns = 0;
   return { ok: true, status: 'disconnected', pausedCampaigns };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Usado só pelo mock de envio unitário (`mocks/leads.ts`, ARQUITETURA §4.9) —
+// precisa ler e mutar o MESMO array em memória (cota, consecutiveFailures),
+// não uma cópia como `mockListInstances` devolve.
+// ─────────────────────────────────────────────────────────────────────────
+
+export function mockFindInstanceRaw(id: string): MockInstance | undefined {
+  return getInstances().find((i) => i.id === id);
+}
+
+export function mockListInstancesRaw(): MockInstance[] {
+  return getInstances();
+}
+
+/**
+ * Debita a cota do dia na reserva (write-ahead, §4.9.5). Em caso de falha,
+ * quem chamou deve compensar com `mockRefundInstanceQuota`.
+ */
+export function mockReserveInstanceQuota(id: string): void {
+  const instance = getInstances().find((i) => i.id === id);
+  if (!instance) return;
+  instance.today = { ...instance.today, sent: instance.today.sent + 1, remaining: Math.max(0, instance.today.remaining - 1) };
+}
+
+export function mockRefundInstanceQuota(id: string): void {
+  const instance = getInstances().find((i) => i.id === id);
+  if (!instance) return;
+  instance.today = {
+    ...instance.today,
+    sent: Math.max(0, instance.today.sent - 1),
+    failed: instance.today.failed + 1,
+    remaining: instance.today.remaining + 1,
+  };
 }
 
 export function mockDeleteInstance(id: string): void {

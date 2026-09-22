@@ -143,6 +143,15 @@ export const leadMessageItemSchema = z.object({
   sentAt: isoDateTimeSchema.nullable(),
   deliveredAt: isoDateTimeSchema.nullable(),
   readAt: isoDateTimeSchema.nullable(),
+  /**
+   * Motivo técnico da falha, quando `status === 'failed'`. Existe porque
+   * `failed` sozinho junta dois casos opostos: `EVOLUTION_SEND_UNCERTAIN`
+   * (o WhatsApp não respondeu a tempo e a mensagem PODE ter sido entregue) e
+   * falhas em que nada saiu. Mostrar os dois como "Falhou" convida o operador
+   * a reenviar, e no caso incerto isso faz o lead receber duas vezes.
+   * Opcional para não quebrar quem já consome o formato anterior.
+   */
+  errorCode: z.string().nullable().optional(),
 });
 export type LeadMessageItem = z.infer<typeof leadMessageItemSchema>;
 

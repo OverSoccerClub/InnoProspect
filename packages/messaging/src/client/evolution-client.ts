@@ -170,6 +170,15 @@ export class EvolutionClient {
    * `POST /message/sendText/:name` — envia texto. Valida `to` (E.164) e
    * `text` (não vazio) ANTES de chamar a rede — número mal formado nunca
    * gasta uma chamada HTTP nem entra na política de retry.
+   *
+   * `retryable: false` (achado do Órion, revisão de 2026-09-22): esta é a
+   * ÚNICA chamada do cliente sem retry automático de transporte. Um envio
+   * não é idempotente do ponto de vista do lead — se a Evolution recebeu a
+   * chamada e só a RESPOSTA se perdeu (timeout) ou veio um 5xx depois de já
+   * ter processado, reenviar automaticamente duplica a mensagem. Quem chama
+   * `sendText` (`apps/web/src/lib/services/messages.ts`) trata
+   * `TIMEOUT`/`TRANSIENT_ERROR` como resultado INCERTO — não repete, não
+   * confirma, registra e deixa o operador decidir.
    */
   async sendText(instanceName: string, input: SendTextInput): Promise<SendTextResult> {
     assertInstanceName(instanceName);
@@ -185,7 +194,7 @@ export class EvolutionClient {
       ...(input.delayMs !== undefined ? { delay: input.delayMs } : {}),
       ...(input.linkPreview !== undefined ? { linkPreview: input.linkPreview } : {}),
     };
-    const raw = await evolutionRequest(this.config, { method: 'POST', path: EVOLUTION_PATHS.sendText(instanceName), body });
+    const raw = await evolutionRequest(this.config, { method: 'POST', path: EVOLUTION_PATHS.sendText(instanceName), body, retryable: false });
     const parsed = parseSendTextResponse(raw);
     if (!parsed.providerMessageId) {
       throw new MessagingError('UNKNOWN', 'Evolution API não devolveu key.id no envio', { cause: raw });

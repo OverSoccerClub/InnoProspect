@@ -201,9 +201,22 @@ export const apiErrorDetailSchema = z.object({
 });
 export type ApiErrorDetail = z.infer<typeof apiErrorDetailSchema>;
 
+/**
+ * `reason` — 🆕 v1.1 (ARQUITETURA §4.0, "CONTRATO ALTERADO"): sub-código
+ * `SCREAMING_SNAKE`, legível por máquina, opcional. `code` continua fechado
+ * (8 valores) e continua governando o status HTTP; `reason` é o ÚNICO campo
+ * em que a UI pode ramificar lógica (nunca por `message`, que é texto pt-BR
+ * para humano e pode mudar). Mudança aditiva — nenhum consumidor existente
+ * quebra por `reason` estar ausente. Todo sub-código citado em `ARQUITETURA
+ * §4` (ex.: `OPTED_OUT`, `DAILY_LIMIT_REACHED`, `SEARCH_ALREADY_RUNNING`) é um
+ * valor de `reason`; o conjunto por rota fica documentado na tabela de erros
+ * de cada endpoint (não é um enum fechado aqui — cresce por rota sem migração
+ * de schema, como `LeadActivity.type`).
+ */
 export const apiErrorSchema = z.object({
   error: z.object({
     code: apiErrorCodeSchema,
+    reason: z.string().optional(),
     message: z.string(),
     details: z.array(apiErrorDetailSchema).optional(),
     requestId: z.string(),
@@ -236,11 +249,12 @@ export const API_ERROR_HTTP_STATUS: Record<ApiErrorCode, number> = {
 export function apiError(
   code: ApiErrorCode,
   message: string,
-  opts?: { details?: ApiErrorDetail[]; requestId?: string },
+  opts?: { details?: ApiErrorDetail[]; requestId?: string; reason?: string },
 ): ApiError {
   return {
     error: {
       code,
+      ...(opts?.reason ? { reason: opts.reason } : {}),
       message,
       ...(opts?.details && opts.details.length > 0 ? { details: opts.details } : {}),
       requestId: opts?.requestId ?? crypto.randomUUID(),

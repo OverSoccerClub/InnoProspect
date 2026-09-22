@@ -1,8 +1,9 @@
 import { USE_MOCKS } from '@/lib/config';
-import { apiGet, apiPatch } from '@/lib/fetcher';
-import { mockGetLead, mockListLeads, mockPatchLead } from '@/mocks/leads';
+import { apiGet, apiPatch, apiPost } from '@/lib/fetcher';
+import { mockGetLead, mockListLeads, mockPatchLead, mockPreviewLeadMessage, mockSendLeadMessage } from '@/mocks/leads';
 import { mockDelay } from '@/mocks/utils';
 import type { LeadDetail, LeadFilter, LeadListResponse } from '@/types/lead';
+import type { LeadMessagePreviewResponse, SendLeadMessageRequest, SendLeadMessageResponse } from '@/types/lead-message';
 
 export async function listLeads(filter: LeadFilter = {}): Promise<LeadListResponse> {
   if (USE_MOCKS) {
@@ -48,4 +49,32 @@ export async function patchLead(
     return mockPatchLead(id, patch);
   }
   return apiPatch<LeadDetail>(`/api/v1/leads/${id}`, patch);
+}
+
+/**
+ * `POST /templates/:id/preview` com `leadId` — variáveis reais do lead +
+ * variações de spintax seedadas (ARQUITETURA.md §4.9.4). Fica aqui (não em
+ * `lib/api/templates.ts`) porque só existe no contexto do compositor da
+ * ficha do lead — `TemplatePreviewResponse` (de `@inno/contracts`) ainda não
+ * tem `spintaxSeed`; ver TODO em `types/lead-message.ts`.
+ */
+export async function previewLeadMessage(
+  leadId: string,
+  templateId: string,
+  sampleCount = 3,
+): Promise<LeadMessagePreviewResponse> {
+  if (USE_MOCKS) {
+    await mockDelay(200);
+    return mockPreviewLeadMessage(leadId, templateId, sampleCount);
+  }
+  return apiPost<LeadMessagePreviewResponse>(`/api/v1/templates/${templateId}/preview`, { leadId, sampleCount });
+}
+
+/** `POST /api/v1/leads/:id/messages` (ARQUITETURA.md §4.9.2) — envio unitário. */
+export async function sendLeadMessage(leadId: string, input: SendLeadMessageRequest): Promise<SendLeadMessageResponse> {
+  if (USE_MOCKS) {
+    await mockDelay(500);
+    return mockSendLeadMessage(leadId, input);
+  }
+  return apiPost<SendLeadMessageResponse>(`/api/v1/leads/${leadId}/messages`, input);
 }

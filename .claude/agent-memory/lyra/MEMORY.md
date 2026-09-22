@@ -8,3 +8,5 @@
 - [Como gerar cookie de sessão Auth.js pra testar tela logada sem Postgres](convention_test_session_cookie.md) — encode() de next-auth/jwt + os DOIS cookies (real + mock) se USE_MOCKS=true
 - [CSS `capitalize` erra em frases pt-BR](bug_css_capitalize_pt_br.md) — maiusculiza CADA palavra; fazer só a 1ª letra em JS
 - [O que "premium" significa pra este dono](feedback_dono_quer_premium_de_verdade.md) — densidade de dado real + gráfico + cor com intenção + estado vazio desenhado, não número solto e cinza
+- [Bug: mock GET que devolve referência viva duplica dado no React](bug_mock_get_returns_live_reference.md) — GET tem que devolver cópia; quem precisa mutar usa um getter interno separado
+- [Erro de regra de negócio viaja em details[], não em meta](convention_error_envelope_details_vs_meta.md) — path=chave semântica (resetsAt/nextWindowOpensAt/optedOutAt), message=valor cru; confirmado contra o código real do Vega

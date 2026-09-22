@@ -1076,7 +1076,17 @@ depois, quebra em execução — não passa despercebido numa revisão de códig
 regra escrita que eu tinha especificado. **Não substituir por um comentário `// não cachear`.**
 
 Invariantes que o Órion verifica (§4.9.9): `evaluateSendGuard` é chamado **na mesma função** que
-chama `sendText`, sem nenhum `await` de I/O entre os dois além da renderização do texto (que é pura).
+chama `sendText`. Entre a consulta de opt-out e o guard não há nenhum `await`. Entre o guard e o
+`sendText` **não há nenhuma LEITURA adicional** (em particular, nenhuma segunda consulta de opt-out);
+a única escrita permitida no intervalo é a transação de write-ahead do §4.9.5, que precisa ser rápida,
+tem teto de tempo e não pode reabrir a decisão.
+
+> Correção de 2026-09-22. A redação anterior dizia "sem nenhum `await` de I/O entre os dois", o que
+> contradizia a §4.9.5: o write-ahead **obriga** uma escrita nesse intervalo, para a cota não se perder
+> se o processo cair entre a reserva e o envio. O Órion julgou que o invariante protege a decisão de
+> opt-out ser fresca, e isso a escrita não afeta, porque ela reserva cota e não relê a blacklist.
+> Zero I/O entre decisão e rede é impossível para qualquer implementação real, porque o próprio
+> `sendText` já é I/O.
 
 #### 4.9.4 Decisões de detalhe (fechadas aqui para não virar dúvida na implementação)
 

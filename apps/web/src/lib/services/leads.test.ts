@@ -92,6 +92,9 @@ const prismaMock = vi.hoisted(() => ({
   optOut: {
     findMany: vi.fn(),
   },
+  message: {
+    findMany: vi.fn(),
+  },
 }));
 
 vi.mock('@inno/db', () => ({ prisma: prismaMock }));
@@ -135,6 +138,7 @@ beforeEach(() => {
     }
     return optOutsFixture;
   });
+  prismaMock.message.findMany.mockResolvedValue([]);
 });
 
 describe('listLeads — isOptedOut / filtro optedOut (regressão do bug corrigido em addc7d4)', () => {
@@ -186,5 +190,100 @@ describe('getLeadDetail — isOptedOut', () => {
     const detail = await getLeadDetail('lead-c');
 
     expect(detail.isOptedOut).toBe(false);
+  });
+});
+
+describe('getLeadDetail — messages/lastContactedAt (antes: sempre [] / null fixos, comentário desatualizado dizia "sem Message na Fase 1")', () => {
+  function leadRow(id: string) {
+    return {
+      ...rawLead({ id, phoneE164: '+5511900000000' }),
+      activities: [],
+      notes: null,
+      latitude: null,
+      longitude: null,
+      sourceType: 'google_maps_scrape',
+      sourceUrl: null,
+      collectedAt: new Date(),
+      searchJobId: null,
+      firstSeenAt: new Date(),
+      lastSeenAt: new Date(),
+    };
+  }
+
+  it('devolve as mensagens reais, na ordem em que a consulta trouxe (mais antiga primeiro)', async () => {
+    prismaMock.lead.findUnique.mockResolvedValueOnce(leadRow('lead-x'));
+    prismaMock.message.findMany.mockResolvedValueOnce([
+      { id: 'msg-1', direction: 'inbound', body: 'Oi, quero saber mais', status: 'delivered', sentAt: null, deliveredAt: new Date('2026-09-01T10:00:00Z'), readAt: null, createdAt: new Date('2026-09-01T10:00:00Z') },
+      { id: 'msg-2', direction: 'outbound', body: 'Olá! Aqui é da Innova.', status: 'sent', sentAt: new Date('2026-09-01T10:05:00Z'), deliveredAt: null, readAt: null, createdAt: new Date('2026-09-01T10:05:00Z') },
+    ]);
+
+    const detail = await getLeadDetail('lead-x');
+
+    expect(detail.messages).toHaveLength(2);
+    expect(detail.messages[0]!.id).toBe('msg-1');
+    expect(detail.messages[1]!.id).toBe('msg-2');
+    expect(detail.messages[1]!.direction).toBe('outbound');
+  });
+
+  it('entrega o errorCode da falha, para a tela separar "pode ter saído" de "não saiu"', async () => {
+    // Sem isto, EVOLUTION_SEND_UNCERTAIN aparecia como "Falhou" na conversa e
+    // convidava o operador a reenviar, duplicando a mensagem no WhatsApp do lead.
+    prismaMock.lead.findUnique.mockResolvedValueOnce(leadRow('lead-u'));
+    prismaMock.message.findMany.mockResolvedValueOnce([
+      { id: 'msg-u', direction: 'outbound', body: 'Olá!', status: 'failed', errorCode: 'EVOLUTION_SEND_UNCERTAIN', sentAt: null, deliveredAt: null, readAt: null, createdAt: new Date('2026-09-01T10:00:00Z') },
+      { id: 'msg-ok', direction: 'outbound', body: 'Oi de novo', status: 'sent', errorCode: 'CODIGO_ANTIGO_IRRELEVANTE', sentAt: new Date('2026-09-01T11:00:00Z'), deliveredAt: null, readAt: null, createdAt: new Date('2026-09-01T11:00:00Z') },
+    ]);
+
+    const detail = await getLeadDetail('lead-u');
+
+    expect(detail.messages[0]!.errorCode).toBe('EVOLUTION_SEND_UNCERTAIN');
+    // Fora de `failed`, o código não vaza: um errorCode residual numa
+    // mensagem que acabou enviada não pode pintar o selo de erro.
+    expect(detail.messages[1]!.errorCode).toBeNull();
+  });
+
+  it('lastContactedAt vem da mensagem de SAÍDA mais recente (sentAt), ignorando inbound mais novo', async () => {
+    prismaMock.lead.findUnique.mockResolvedValueOnce(leadRow('lead-x'));
+    prismaMock.message.findMany.mockResolvedValueOnce([
+      { id: 'msg-1', direction: 'outbound', body: 'Olá!', status: 'sent', sentAt: new Date('2026-09-01T10:00:00Z'), deliveredAt: null, readAt: null, createdAt: new Date('2026-09-01T10:00:00Z') },
+      { id: 'msg-2', direction: 'inbound', body: 'Recebido, obrigado', status: 'delivered', sentAt: null, deliveredAt: new Date('2026-09-02T09:00:00Z'), readAt: null, createdAt: new Date('2026-09-02T09:00:00Z') },
+    ]);
+
+    const detail = await getLeadDetail('lead-x');
+
+    expect(detail.lastContactedAt).toBe('2026-09-01T10:00:00.000Z');
+  });
+
+  it('mensagem outbound "queued" (sem sentAt, ex.: falhou antes de enviar) usa createdAt como lastContactedAt', async () => {
+    prismaMock.lead.findUnique.mockResolvedValueOnce(leadRow('lead-x'));
+    prismaMock.message.findMany.mockResolvedValueOnce([
+      { id: 'msg-1', direction: 'outbound', body: 'Olá!', status: 'failed', sentAt: null, deliveredAt: null, readAt: null, createdAt: new Date('2026-09-01T10:00:00Z') },
+    ]);
+
+    const detail = await getLeadDetail('lead-x');
+
+    expect(detail.lastContactedAt).toBe('2026-09-01T10:00:00.000Z');
+  });
+
+  it('sem nenhuma mensagem de saída, lastContactedAt continua null', async () => {
+    prismaMock.lead.findUnique.mockResolvedValueOnce(leadRow('lead-x'));
+    prismaMock.message.findMany.mockResolvedValueOnce([
+      { id: 'msg-1', direction: 'inbound', body: 'Oi', status: 'delivered', sentAt: null, deliveredAt: new Date(), readAt: null, createdAt: new Date() },
+    ]);
+
+    const detail = await getLeadDetail('lead-x');
+
+    expect(detail.lastContactedAt).toBeNull();
+    expect(detail.messages).toHaveLength(1);
+  });
+
+  it('sem mensagem nenhuma, devolve messages=[] e lastContactedAt=null (comportamento antigo, sem Message no banco)', async () => {
+    prismaMock.lead.findUnique.mockResolvedValueOnce(leadRow('lead-x'));
+    prismaMock.message.findMany.mockResolvedValueOnce([]);
+
+    const detail = await getLeadDetail('lead-x');
+
+    expect(detail.messages).toEqual([]);
+    expect(detail.lastContactedAt).toBeNull();
   });
 });

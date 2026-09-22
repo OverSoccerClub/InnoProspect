@@ -18,7 +18,7 @@ import type {
   UpdateTemplateRequest,
 } from '@/types/template';
 
-export type ListTemplatesParams = { cursor?: string; limit?: number };
+export type ListTemplatesParams = { cursor?: string; limit?: number; isActive?: boolean };
 
 export async function listTemplates(params: ListTemplatesParams = {}): Promise<Paginated<TemplateItem>> {
   if (USE_MOCKS) {

@@ -24,6 +24,23 @@ export type HttpRequestInput = {
   method: HttpMethod;
   path: string;
   body?: unknown;
+  /**
+   * `false` para requisições cujo EFEITO não é seguro repetir só porque a
+   * RESPOSTA se perdeu — hoje só `sendText` (achado do Órion, revisão de
+   * 2026-09-22, ARQUITETURA §4.9): num timeout, ou num 5xx que só chega
+   * DEPOIS de a Evolution ter recebido a chamada, não há garantia de que a
+   * mensagem NÃO foi enviada. Reenviar automaticamente arrisca duplicar a
+   * mensagem pro lead — no primeiro contato frio, duplicar é o próprio risco
+   * de banimento que o produto existe para evitar. Default `true`: o resto
+   * do cliente (criar/conectar/status/deletar instância, definir webhook,
+   * checar número) é seguro de repetir — ou é idempotente por natureza (GET,
+   * "criar se não existir"), ou o pior caso de duplicar é inofensivo.
+   * Quando `false`, `evolutionRequest` NUNCA retenta, seja qual for o
+   * `MessagingErrorCode` — a decisão de tentar de novo passa a ser do
+   * CHAMADOR, que tem contexto de negócio (ver `sendLeadMessage`, que trata
+   * timeout/erro transitório de envio como resultado INCERTO, não repete).
+   */
+  retryable?: boolean;
 };
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -102,19 +119,21 @@ async function doRequest(config: EvolutionHttpConfig, input: HttpRequestInput): 
 
 /**
  * Executa uma chamada à Evolution API com timeout + retry automático de
- * TRANSPORTE — só para `TRANSIENT_ERROR`/`TIMEOUT` (rede, timeout, 5xx).
- * Qualquer 4xx (incluindo `RATE_LIMITED`) propaga na primeira tentativa; ver
- * `MESSAGING_ERROR_POLICY` para o porquê. Backoff sempre com jitter — retry
- * sincronizado é assinatura de bot (mesmo racional do scraper, ARQUITETURA
- * §5.6).
+ * TRANSPORTE — só para `TRANSIENT_ERROR`/`TIMEOUT` (rede, timeout, 5xx), e só
+ * quando `input.retryable !== false`. Qualquer 4xx (incluindo
+ * `RATE_LIMITED`) propaga na primeira tentativa; ver `MESSAGING_ERROR_POLICY`
+ * para o porquê. Backoff sempre com jitter — retry sincronizado é assinatura
+ * de bot (mesmo racional do scraper, ARQUITETURA §5.6).
  */
 export async function evolutionRequest(config: EvolutionHttpConfig, input: HttpRequestInput): Promise<unknown> {
+  const retryable = input.retryable ?? true;
   let attempt = 0;
   for (;;) {
     try {
       return await doRequest(config, input);
     } catch (err) {
       if (!(err instanceof MessagingError)) throw err;
+      if (!retryable) throw err;
       const policy = MESSAGING_ERROR_POLICY[err.code];
       if (attempt >= policy.maxAttempts) throw err;
       await sleep(backoffForAttempt(err.code, attempt));

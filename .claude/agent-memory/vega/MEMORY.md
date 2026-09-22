@@ -7,3 +7,7 @@
 - [Convenção: estado operacional (pausa de fila/heartbeat) em Redis via Queue#client](convention_worker_redis_state.md) — chaves duplicadas worker/web, ScraperHealthEvent só cobre A1-A4.
 - [Bug: Queue#client do bullmq não é o Commander do ioredis](bug_bullmq_client_not_ioredis.md) — sem `.ping()`, `.set()` usa options object, não varargs `'EX', n`.
 - [Convenção: GET /dashboard/summary — fuso SP, $queryRaw parametrizado, teste sem Postgres](convention_dashboard_summary.md) — helpers de dia-calendário, cast `::int`, mock de `$queryRaw` roteado por texto, `vi.setSystemTime`.
+- [Convenção: alertas webhook do worker (alerts.ts)](convention_worker_alerts.md) — só na transição (sanidade/pausa/retomada), nunca lança, retomada manual não alerta.
+- [Convenção: rate limit de login (5/e-mail, 20/IP, 15min)](convention_login_rate_limit.md) — peek antes, checkRateLimit só em falha, reset só de e-mail no sucesso.
+- [Bug: importar lib/auth.ts crua quebra em teste Vitest (next-auth → next/server)](bug_nextauth_vitest_server_import.md) — extrair authorize + mockar next-auth no teste.
+- [Convenção: envio unitário §4.9 (evaluateSendGuard, send-window, sendLeadMessage)](convention_envio_unitario_send_guard.md) — split G1-G3 (serviço) vs G4-G11 (core), gaps de contrato preenchidos e por quê.

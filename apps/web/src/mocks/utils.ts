@@ -12,6 +12,25 @@ export function mockDelay(ms = MOCK_DELAY_MS): Promise<void> {
 }
 
 /** Simula o 404 { error } da API pra exercitar o estado de erro nas telas. */
-export function mockNotFound(message: string): never {
-  throw new ApiRequestError(404, { code: 'NOT_FOUND', message, requestId: 'mock' });
+export function mockNotFound(message: string, reason?: string): never {
+  throw new ApiRequestError(404, { code: 'NOT_FOUND', reason, message, requestId: 'mock' });
+}
+
+/** Simula um `409 CONFLICT` com `reason` (ARQUITETURA §4.0 v1.1) e `details[]` opcional (campo OU meta pontual, ver `types/common.ts`). */
+export function mockConflict(
+  reason: string,
+  message: string,
+  opts?: { details?: Array<{ path: string; message: string }> },
+): never {
+  throw new ApiRequestError(409, { code: 'CONFLICT', reason, message, details: opts?.details, requestId: 'mock' });
+}
+
+/** Simula um `422 VALIDATION_ERROR` com `reason` — usado pelos gates de payload do envio de mensagem. */
+export function mockValidationError(reason: string, message: string): never {
+  throw new ApiRequestError(422, { code: 'VALIDATION_ERROR', reason, message, requestId: 'mock' });
+}
+
+/** Simula um `502 UPSTREAM_ERROR` — falha do provedor (Evolution), nunca `500` (ARQUITETURA §4.9.5). */
+export function mockUpstreamError(reason: string, message: string): never {
+  throw new ApiRequestError(502, { code: 'UPSTREAM_ERROR', reason, message, requestId: 'mock' });
 }

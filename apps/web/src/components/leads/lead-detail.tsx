@@ -5,8 +5,10 @@ import Link from 'next/link';
 import { ArrowLeft, Globe, Loader2, MapPin, Phone, Star } from 'lucide-react';
 
 import { ErrorState } from '@/components/common/error-state';
+import { LeadConversation } from '@/components/leads/lead-conversation';
 import { LeadTimeline } from '@/components/leads/lead-timeline';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { MessageComposer } from '@/components/leads/message-composer';
+import { OptedOutBanner } from '@/components/leads/opted-out-banner';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -16,6 +18,7 @@ import { getLead, patchLead } from '@/lib/api/leads';
 import { ApiRequestError } from '@/lib/fetcher';
 import { formatDateTime, formatPhone } from '@/lib/format';
 import { LEAD_STATUS_LABEL, type LeadDetail as LeadDetailType, type LeadStatus } from '@/types/lead';
+import type { SendLeadMessageResponse } from '@/types/lead-message';
 
 const ALL_STATUSES = Object.keys(LEAD_STATUS_LABEL) as LeadStatus[];
 
@@ -39,6 +42,43 @@ export function LeadDetail({ id }: { id: string }) {
     fetchLead();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  function handleMessageSent(response: SendLeadMessageResponse) {
+    setLead((current) => {
+      if (!current) return current;
+      const isColdStatus = current.status === 'new' || current.status === 'validated';
+      const now = new Date().toISOString();
+      return {
+        ...current,
+        messages: [...current.messages, response.message],
+        lastContactedAt: response.message.sentAt ?? current.lastContactedAt,
+        status: isColdStatus ? 'contacted' : current.status,
+        activities: [
+          ...current.activities,
+          ...(isColdStatus
+            ? [
+                {
+                  id: `local_status_${Date.now()}`,
+                  leadId: current.id,
+                  type: 'status_changed' as const,
+                  payload: { from: current.status, to: 'contacted' },
+                  actor: 'system' as const,
+                  createdAt: now,
+                },
+              ]
+            : []),
+          {
+            id: `local_msg_${Date.now()}`,
+            leadId: current.id,
+            type: 'message_sent' as const,
+            payload: { messageId: response.message.id, instanceId: response.instance.id },
+            actor: 'user' as const,
+            createdAt: now,
+          },
+        ],
+      };
+    });
+  }
 
   async function handleStatusChange(nextStatus: LeadStatus) {
     if (!lead || nextStatus === lead.status) return;
@@ -131,11 +171,7 @@ export function LeadDetail({ id }: { id: string }) {
       {statusError && <ErrorState message={statusError} />}
 
       {lead.isOptedOut && (
-        <Alert variant="destructive">
-          <AlertDescription>
-            Este lead pediu para não receber mais mensagens (opt-out). Ele não pode ser incluído em campanhas.
-          </AlertDescription>
-        </Alert>
+        <OptedOutBanner optedOutAt={lead.activities.find((a) => a.type === 'opted_out')?.createdAt ?? null} />
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -193,36 +229,25 @@ export function LeadDetail({ id }: { id: string }) {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Mensagens</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {lead.messages.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nenhuma mensagem ainda — o envio de WhatsApp chega na Fase 3.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-3">
-              {lead.messages.map((message) => (
-                <li
-                  key={message.id}
-                  className={
-                    message.direction === 'outbound'
-                      ? 'ml-auto max-w-md rounded-lg bg-primary/10 p-3 text-sm'
-                      : 'max-w-md rounded-lg bg-muted p-3 text-sm'
-                  }
-                >
-                  <p>{message.body}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {formatDateTime(message.sentAt)} · {message.status}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Conversa</CardTitle>
+          </CardHeader>
+          <CardContent className="max-h-[520px] overflow-y-auto">
+            <LeadConversation messages={lead.messages} activities={lead.activities} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Enviar mensagem</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <MessageComposer lead={lead} onSent={handleMessageSent} />
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

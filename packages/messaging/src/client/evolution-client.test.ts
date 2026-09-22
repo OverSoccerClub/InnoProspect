@@ -146,27 +146,63 @@ describe('EvolutionClient.sendText', () => {
     });
   });
 
-  // Estes 3 testes exercitam o retry de transporte, que usa `sleep`/backoff
-  // reais (1s+4s) — fake timers evitam um teste lento/flaky por timeout.
-  it('faz retry de transporte em 500 e devolve sucesso na 2ª tentativa', async () => {
+  // `sendText` é a ÚNICA chamada `retryable: false` do cliente (achado do
+  // Órion, revisão de 2026-09-22): um timeout ou um 5xx podem chegar DEPOIS
+  // de a Evolution já ter processado o envio, então retentar automaticamente
+  // arrisca duplicar a mensagem pro lead. Os 4 testes abaixo provam que
+  // NENHUM desses casos gera uma 2ª chamada de rede.
+  it('NÃO retenta em 500 — propaga TRANSIENT_ERROR na 1ª tentativa (só 1 chamada de rede)', async () => {
+    const { fetchImpl, calls } = fakeFetch([jsonResponse(500, { message: 'internal error' })]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+    await expect(client.sendText('vendas-01', { to: '+5511987654321', text: 'Olá!' })).rejects.toMatchObject({
+      code: 'TRANSIENT_ERROR',
+    });
+    expect(calls.length).toBe(1);
+  });
+
+  it('NÃO retenta em erro de rede (fetch rejeita) — só 1 chamada, classificado TRANSIENT_ERROR', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    const client = new EvolutionClient({ ...config, fetchImpl: fetchImpl as unknown as typeof fetch });
+    await expect(client.sendText('vendas-01', { to: '+5511987654321', text: 'Olá!' })).rejects.toMatchObject({
+      code: 'TRANSIENT_ERROR',
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('NÃO retenta em timeout (AbortError) — só 1 chamada, classificado TIMEOUT, mesmo sendo um código retryable em OUTRAS chamadas', async () => {
+    let calls = 0;
+    const hangingFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      calls++;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      });
+    }) as typeof fetch;
+    const client = new EvolutionClient({ ...config, fetchImpl: hangingFetch, timeoutMs: 20 });
+    await expect(client.sendText('vendas-01', { to: '+5511987654321', text: 'Olá!' })).rejects.toMatchObject({ code: 'TIMEOUT' });
+    expect(calls).toBe(1);
+  });
+});
+
+describe('EvolutionClient — retry de transporte continua ativo em chamadas IDEMPOTENTES (não é sendText)', () => {
+  it('getConnectionState faz retry em 500 e devolve sucesso na 2ª tentativa', async () => {
     vi.useFakeTimers();
     try {
       const { fetchImpl, calls } = fakeFetch([
         jsonResponse(500, { message: 'internal error' }),
-        jsonResponse(201, { key: { id: 'MSG2', remoteJid: '5511987654321@s.whatsapp.net' } }),
+        jsonResponse(200, { instance: { instanceName: 'vendas-01', state: 'open' } }),
       ]);
       const client = new EvolutionClient({ ...config, fetchImpl });
-      const promise = client.sendText('vendas-01', { to: '+5511987654321', text: 'Olá!' });
+      const promise = client.getConnectionState('vendas-01');
       await vi.runAllTimersAsync();
       const result = await promise;
-      expect(result.providerMessageId).toBe('MSG2');
+      expect(result).toBe('connected');
       expect(calls.length).toBe(2);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('propaga TRANSIENT_ERROR depois de esgotar as tentativas de transporte', async () => {
+  it('getConnectionState propaga TRANSIENT_ERROR depois de esgotar as tentativas de transporte', async () => {
     vi.useFakeTimers();
     try {
       const { fetchImpl, calls } = fakeFetch([
@@ -175,47 +211,11 @@ describe('EvolutionClient.sendText', () => {
         jsonResponse(503, { message: 'unavailable' }),
       ]);
       const client = new EvolutionClient({ ...config, fetchImpl });
-      const promise = client.sendText('vendas-01', { to: '+5511987654321', text: 'Olá!' });
+      const promise = client.getConnectionState('vendas-01');
       const assertion = expect(promise).rejects.toMatchObject({ code: 'TRANSIENT_ERROR' });
       await vi.runAllTimersAsync();
       await assertion;
       expect(calls.length).toBe(3); // 1 tentativa + 2 retries (MESSAGING_ERROR_POLICY.TRANSIENT_ERROR.maxAttempts)
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('classifica erro de rede (fetch rejeita) como TRANSIENT_ERROR', async () => {
-    vi.useFakeTimers();
-    try {
-      const fetchImpl = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
-      const client = new EvolutionClient({ ...config, fetchImpl: fetchImpl as unknown as typeof fetch });
-      const promise = client.sendText('vendas-01', { to: '+5511987654321', text: 'Olá!' });
-      const assertion = expect(promise).rejects.toMatchObject({ code: 'TRANSIENT_ERROR' });
-      await vi.runAllTimersAsync();
-      await assertion;
-      expect(fetchImpl).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('classifica timeout (AbortError) como TIMEOUT — TIMEOUT é retryable, então também exercita o retry de transporte', async () => {
-    vi.useFakeTimers();
-    try {
-      let calls = 0;
-      const hangingFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-        calls++;
-        return new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
-        });
-      }) as typeof fetch;
-      const client = new EvolutionClient({ ...config, fetchImpl: hangingFetch, timeoutMs: 20 });
-      const promise = client.sendText('vendas-01', { to: '+5511987654321', text: 'Olá!' });
-      const assertion = expect(promise).rejects.toMatchObject({ code: 'TIMEOUT' });
-      await vi.runAllTimersAsync();
-      await assertion;
-      expect(calls).toBe(3); // 1 tentativa + 2 retries (MESSAGING_ERROR_POLICY.TIMEOUT.maxAttempts)
     } finally {
       vi.useRealTimers();
     }

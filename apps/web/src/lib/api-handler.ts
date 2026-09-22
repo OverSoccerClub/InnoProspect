@@ -29,17 +29,20 @@ import { checkRateLimit, clientIp } from './rate-limit';
 export class ApiHttpError extends Error {
   readonly code: ApiErrorCode;
   readonly details?: ApiErrorDetail[];
+  /** Sub-código `SCREAMING_SNAKE` (ARQUITETURA §4.0 v1.1, `@inno/contracts#apiErrorSchema`) — ver comentário em `common.ts`. */
+  readonly reason?: string;
 
-  constructor(code: ApiErrorCode, message: string, details?: ApiErrorDetail[]) {
+  constructor(code: ApiErrorCode, message: string, details?: ApiErrorDetail[], reason?: string) {
     super(message);
     this.name = 'ApiHttpError';
     this.code = code;
     this.details = details;
+    this.reason = reason;
   }
 }
 
-export function badRequest(message: string, details?: ApiErrorDetail[]): never {
-  throw new ApiHttpError('VALIDATION_ERROR', message, details);
+export function badRequest(message: string, details?: ApiErrorDetail[], reason?: string): never {
+  throw new ApiHttpError('VALIDATION_ERROR', message, details, reason);
 }
 export function unauthorized(message = 'Sessão inválida ou expirada. Faça login novamente.'): never {
   throw new ApiHttpError('UNAUTHORIZED', message);
@@ -47,14 +50,24 @@ export function unauthorized(message = 'Sessão inválida ou expirada. Faça log
 export function forbidden(message = 'Você não tem permissão para esta ação.'): never {
   throw new ApiHttpError('FORBIDDEN', message);
 }
-export function notFound(message: string): never {
-  throw new ApiHttpError('NOT_FOUND', message);
+export function notFound(message: string, reason?: string): never {
+  throw new ApiHttpError('NOT_FOUND', message, undefined, reason);
 }
-export function conflict(message: string, details?: ApiErrorDetail[]): never {
-  throw new ApiHttpError('CONFLICT', message, details);
+export function conflict(message: string, details?: ApiErrorDetail[], reason?: string): never {
+  throw new ApiHttpError('CONFLICT', message, details, reason);
 }
-export function upstreamError(message: string): never {
-  throw new ApiHttpError('UPSTREAM_ERROR', message);
+export function upstreamError(message: string, reason?: string): never {
+  throw new ApiHttpError('UPSTREAM_ERROR', message, undefined, reason);
+}
+/**
+ * `429 RATE_LIMITED` com `reason` — distinto do rate limit por IP embutido em
+ * `apiRoute({ rateLimit })` (que é para rota PÚBLICA, sem sessão). Este
+ * helper é para limite por USUÁRIO autenticado (ex.: `MANUAL_SEND_RATE_PER_MIN`,
+ * ARQUITETURA §4.9/§10) — a rota chama `checkRateLimit` (`lib/rate-limit.ts`)
+ * com uma chave por `userId` e lança isto quando estourar.
+ */
+export function rateLimited(message: string, reason?: string): never {
+  throw new ApiHttpError('RATE_LIMITED', message, undefined, reason);
 }
 
 function zodIssuesToDetails(err: ZodError): ApiErrorDetail[] {
@@ -246,10 +259,10 @@ function handleRouteError(
   if (status >= 500) {
     logger.error('api request failed', { ...logFields, err: err instanceof Error ? err : new Error(String(err)) });
   } else {
-    logger.warn('api request rejected', { ...logFields, code: apiErr.code });
+    logger.warn('api request rejected', { ...logFields, code: apiErr.code, reason: apiErr.reason });
   }
 
-  const body = apiError(apiErr.code, apiErr.message, { details: apiErr.details, requestId });
+  const body = apiError(apiErr.code, apiErr.message, { details: apiErr.details, requestId, reason: apiErr.reason });
   const res = NextResponse.json(body, { status });
   res.headers.set('x-request-id', requestId);
   return res;

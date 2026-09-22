@@ -179,6 +179,37 @@ export function variationRisk(count: number): VariationRisk {
   return 'good';
 }
 
+/** Hash simples (djb2) para transformar um `spintaxSeed` string (ARQUITETURA §4.9.4) em seed numérico do mulberry32. */
+export function hashSeed(seed: string): number {
+  let hash = 5381;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 33) ^ seed.charCodeAt(i);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Como `renderSample`, mas com valores reais (do lead) em vez dos genéricos
+ * de `SAMPLE_VALUES`, e com seed string (não numérico) — usado no compositor
+ * de envio (ARQUITETURA §4.9.4: "o que eu vi no preview é o que sai"). Uma
+ * variável sem valor real cai no genérico de exemplo (mantém o preview
+ * legível); `missingKnownVariables` de quem chama é quem decide se avisa.
+ */
+export function renderWithSeed(body: string, spintaxSeed: string, values: Partial<Record<KnownVariable, string>>): string {
+  const random = mulberry32(hashSeed(spintaxSeed));
+  return tokenize(body)
+    .tokens.map((t) => {
+      if (t.type === 'text') return t.value;
+      if (t.type === 'variable') {
+        if (!isKnownVariable(t.name)) return `{{${t.name}}}`;
+        return values[t.name] ?? SAMPLE_VALUES[t.name];
+      }
+      const idx = Math.floor(random() * t.options.length);
+      return t.options[idx] ?? '';
+    })
+    .join('');
+}
+
 /** Renderiza uma amostra: substitui variáveis por valores de exemplo e sorteia uma opção por grupo de spintax. */
 export function renderSample(body: string, seed: number): string {
   const random = mulberry32(seed);

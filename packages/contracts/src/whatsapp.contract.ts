@@ -145,3 +145,51 @@ export const messageItemSchema = z.object({
   readAt: isoDateTimeSchema.nullable(),
 });
 export type MessageItem = z.infer<typeof messageItemSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /api/v1/leads/:id/messages — envio unitário (ARQUITETURA §4.9.2)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Exatamente UM de `templateId`/`body` (ARQUITETURA §4.9.2 — "enviar os dois
+ * ou nenhum é 422"). Deliberadamente SEM `.refine()` de exclusividade aqui:
+ * a mensagem/`reason` (`BODY_OR_TEMPLATE_REQUIRED`) é responsabilidade do
+ * serviço (`lib/services/messages.ts`), que já vai buscar o template e
+ * precisa decidir isso de qualquer forma — duplicar a regra em Zod só
+ * arriscaria as duas mensagens divergirem.
+ */
+export const sendLeadMessageBodySchema = z.object({
+  templateId: idSchema.optional(),
+  body: z.string().trim().max(4000).optional(),
+  instanceId: idSchema.optional(),
+  spintaxSeed: z.string().min(1).max(200).optional(),
+  confirmOutsideBusinessWindow: z.boolean().default(false),
+  allowNonMobile: z.boolean().default(false),
+});
+export type SendLeadMessageBody = z.infer<typeof sendLeadMessageBodySchema>;
+
+export const sendLeadMessageWarningSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+});
+export type SendLeadMessageWarning = z.infer<typeof sendLeadMessageWarningSchema>;
+
+export const sendLeadMessageResponseSchema = z.object({
+  message: messageItemSchema,
+  instance: z.object({
+    id: idSchema,
+    name: z.string(),
+    phoneNumber: z.string().nullable(),
+    health: instanceHealthSchema,
+  }),
+  quota: z.object({
+    warmupDay: z.number().int().min(1),
+    isWarm: z.boolean(),
+    dailyLimit: z.number().int().min(1),
+    sentToday: z.number().int().min(0),
+    remaining: z.number().int().min(0),
+  }),
+  renderedFrom: z.object({ templateId: idSchema, spintaxSeed: z.string() }).nullable(),
+  warnings: z.array(sendLeadMessageWarningSchema),
+});
+export type SendLeadMessageResponse = z.infer<typeof sendLeadMessageResponseSchema>;

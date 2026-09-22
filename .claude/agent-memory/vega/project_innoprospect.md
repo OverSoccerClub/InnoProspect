@@ -40,9 +40,28 @@ typecheck descoberto nessa rodada: [[bug-bullmq-client-not-ioredis]].
 mas o comportamento sob concorrência real (claim atômico, sweep de pausa, heartbeat expirando) só se
 prova em ambiente com Redis de verdade.
 
+**Meu escopo entregue (Onda 2, 2026-09-22):** alerta webhook do worker (`apps/worker/src/observability/
+alerts.ts`, ver [[convention-worker-alerts]]) plugado nas 3 transições de estado da fila (incidente de
+sanidade aberto, pausa por erro de coleta, retomada automática) — nunca lança, timeout curto, só
+dispara na transição. E rate limit de tentativas de login por e-mail/IP (`lib/auth.ts`, ver
+[[convention-login-rate-limit]]) — conta só FALHA (peek antes, `checkRateLimit` só em falha, reset só
+do e-mail no sucesso; a primeira versão contava toda tentativa inclusive sucesso, corrigido ainda nesta
+rodada antes de fechar — ver a causa raiz lá). Bug de teste novo: [[bug-nextauth-vitest-server-import]].
+**Não pude validar (mesma limitação de sempre):** POST real contra um endpoint de webhook (Slack/Google
+Chat) não foi testado fora de mock — `fetch` real não disponível/necessário nesta rodada; a lógica de
+timeout/erro está testada com `fetch` mockado, mas o formato exato que Slack/Google Chat aceitam não foi
+validado contra o serviço real.
+
 **Antes de mim:** `packages/db` (schema+seed, Cronos), `packages/contracts` (Zod, Nova/Cronos),
 `packages/core` (dedupe/phone/status/uf, já com `MACHINE_UPDATABLE_FIELDS` pronto), `packages/scraper`
 (engine Playwright completo, `runSearch`/`SearchEngine`), `apps/web` telas (Lyra, rodando em mock).
+
+**Meu escopo entregue (§4.9 envio unitário + mensagens reais na ficha, 2026-09-22):** primeiro (e
+único) call site de produção de `EvolutionClient.sendText` — `apps/web/src/lib/services/messages.ts`
+(`sendLeadMessage`) + `evaluateSendGuard`/`send-window.ts`/`optout-notice.ts` em `packages/core`.
+`reason` opcional adicionado ao envelope de erro (`packages/contracts/src/common.ts`, aprovado pelo
+Atlas). `getLeadDetail` (`lib/services/leads.ts`) agora devolve `messages`/`lastContactedAt` reais.
+Detalhe completo, gaps de contrato preenchidos e por quê, em [[convention-envio-unitario-send-guard]].
 
 **Como aplicar:** antes de tocar em `apps/web/src/app/api/**`, `lib/api-handler.ts`, `lib/auth*.ts`,
 `middleware.ts` ou `apps/worker/**`, ler este arquivo + [[convention-api-routes-fase1]] +

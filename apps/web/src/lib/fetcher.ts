@@ -13,6 +13,13 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 export class ApiRequestError extends Error {
   readonly code: ApiErrorCode;
   readonly status: number;
+  /**
+   * Sub-código legível por máquina (ARQUITETURA.md §4.0/§4.9.7) — ex.:
+   * `OPTED_OUT`, `DAILY_LIMIT_REACHED`, `QUIET_HOURS`. Use isto para
+   * ramificar a UI de erro; `message` é só para exibir ao usuário.
+   */
+  readonly reason?: string;
+  /** `path` pode ser um nome de campo (validação) ou uma chave semântica como `resetsAt`/`optedOutAt` (regra de negócio) — ver nota em `types/common.ts`. */
   readonly details?: Array<{ path: string; message: string }>;
   readonly requestId: string;
 
@@ -21,6 +28,7 @@ export class ApiRequestError extends Error {
     this.name = 'ApiRequestError';
     this.status = status;
     this.code = body.code;
+    this.reason = body.reason;
     this.details = body.details;
     this.requestId = body.requestId;
   }

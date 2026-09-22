@@ -77,8 +77,9 @@ function decodeCursor(cursor?: string): number {
   }
 }
 
-export function mockListTemplates(params: { cursor?: string; limit?: number }) {
-  const all = [...getTemplates()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+export function mockListTemplates(params: { cursor?: string; limit?: number; isActive?: boolean }) {
+  let all = [...getTemplates()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  if (params.isActive !== undefined) all = all.filter((t) => t.isActive === params.isActive);
   const limit = Math.min(100, params.limit ?? 25);
   const start = decodeCursor(params.cursor);
   const page = all.slice(start, start + limit);

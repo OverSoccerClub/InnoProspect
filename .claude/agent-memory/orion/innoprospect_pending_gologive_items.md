@@ -13,12 +13,12 @@ sessões futuras, porque são coisas que Vega/Vulcano podem já ter corrigido:
 2. ~~Login quebrado em produção (fetch cru sem csrfToken)~~ — **RESOLVIDO**, confirmado em 2026-08-03:
    `apps/web/src/lib/auth-client.ts` já usa `signIn('credentials', { email, password, redirect: false })`
    de `next-auth/react`.
-3. **Faltam headers de segurança** (CSP, X-Frame-Options, Referrer-Policy) — nenhum `headers()` em
-   `apps/web/next.config.ts`. Reconfirmado AINDA PENDENTE em 2026-08-03 (Fase 3 — WhatsApp/opt-out —
-   revisada, nenhum `headers()` adicionado). Era dívida conhecida/planejada (ARQUITETURA §9.1, Fase
-   5.2, "Órion + Vega"). Agora que existe a página pública `/descadastro/:token` (sem sessão, alvo real
-   de clickjacking) e o dashboard segue sem `X-Frame-Options`, a superfície cresceu — cobrar
-   explicitamente quando a Fase 5 for revisada, não deixar rolar para uma "Fase 6".
+3. ~~Faltam headers de segurança~~ — **RESOLVIDO**, confirmado em 2026-09-22: `apps/web/next.config.ts`
+   agora tem `headers()` completo (CSP sem `unsafe-eval` em produção — confirmado lendo a lógica do
+   `NODE_ENV`, não só a afirmação de quem implementou —, X-Frame-Options, X-Content-Type-Options,
+   Referrer-Policy, Permissions-Policy, HSTS, `frame-ancestors 'none'`). Resta `'unsafe-inline'` em
+   `script-src`/`style-src` (CSP sem nonce), decisão documentada como melhoria futura, não é pendência
+   crítica. Ver [[innoprospect-onda-a-envio-unitario]].
 4. **`PLAYWRIGHT_BROWSERS_PATH` no `apps/worker/Dockerfile`** — ainda não confirmado (sem Docker na
    máquina de dev). Não foi reavaliado na auditoria de 2026-08-03 (fora do escopo, que foi WhatsApp/
    opt-out/webhook) — **se um build real já rodou desde então, reconferir meu status "não validado".**

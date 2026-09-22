@@ -1,6 +1,30 @@
-import type { LeadActivity, LeadDetail, LeadFilter, LeadListItem, LeadListResponse, LeadStatus, MessageItem, PhoneType } from '@/types/lead';
+import { formatPhone } from '@/lib/format';
+import { evaluateSendWindow } from '@/lib/send-window';
+import {
+  checkSpintaxSyntax,
+  countVariations,
+  extractKnownVariables,
+  findUnknownVariables,
+  type KnownVariable,
+  renderWithSeed,
+} from '@/lib/spintax';
+import type { LeadActivity, LeadDetail, LeadListItem, LeadListResponse, LeadFilter, LeadStatus, MessageItem, PhoneType } from '@/types/lead';
+import type {
+  LeadMessagePreviewResponse,
+  SendLeadMessageRequest,
+  SendLeadMessageResponse,
+  SendMessageWarning,
+} from '@/types/lead-message';
+import type { TemplateItem } from '@/types/template';
 import { mockListCities, mockListUfs } from './locations';
-import { mockNotFound, mulberry32, pick } from './utils';
+import { mockGetTemplate } from './templates';
+import { mockConflict, mockNotFound, mockUpstreamError, mockValidationError, mulberry32, pick } from './utils';
+import {
+  mockFindInstanceRaw,
+  mockListInstancesRaw,
+  mockRefundInstanceQuota,
+  mockReserveInstanceQuota,
+} from './whatsapp';
 
 const CATEGORIES = [
   'Clínica odontológica',
@@ -82,7 +106,17 @@ const CATEGORY_NAME_POOL: Record<string, string[]> = {
 const STATUSES: LeadStatus[] = ['new', 'validated', 'contacted', 'responded', 'negotiating', 'won', 'discarded'];
 const PHONE_TYPES: PhoneType[] = ['mobile', 'mobile', 'mobile', 'landline', 'unknown'];
 
-type MockLead = LeadDetail;
+/**
+ * Guarda `messages` no formato completo (`MessageItem`, com `instanceId`)
+ * mesmo sabendo que `GET /leads/:id` de verdade devolve o resumo
+ * (`LeadMessageSummary`, ver types/lead.ts) — é exatamente o que o backend
+ * real faz também: `resolveInstanceForSend` (Vega, `lib/services/messages.ts`)
+ * consulta `prisma.message.findFirst` para pegar `instanceId` da última
+ * mensagem, não confia no formato serializado da ficha. `mockGetLead`
+ * (a "resposta HTTP" simulada) segue expondo o formato completo por
+ * enquanto — ver TODO no handoff sobre `leadDetailSchema.messages`.
+ */
+type MockLead = Omit<LeadDetail, 'messages'> & { messages: MessageItem[] };
 
 let leads: MockLead[] | null = null;
 
@@ -133,9 +167,14 @@ function buildLeads(): MockLead[] {
             ? [
                 {
                   id: `${id}_msg_1`,
+                  leadId: id,
+                  campaignTargetId: null,
+                  instanceId: 'wa_1',
                   direction: 'outbound',
-                  body: `Olá! Tudo bem? Vi que vocês atuam com ${category.toLowerCase()} e gostaria de apresentar uma solução para atrair mais clientes.`,
+                  body: `Olá! Tudo bem? Vi que vocês atuam com ${category.toLowerCase()} e gostaria de apresentar uma solução para atrair mais clientes. Se preferir não receber mais mensagens, responda SAIR.`,
+                  providerMessageId: `mock-prov-${id}-1`,
                   status: 'delivered',
+                  errorCode: null,
                   sentAt: createdAt,
                   deliveredAt: createdAt,
                   readAt: null,
@@ -179,7 +218,111 @@ function buildLeads(): MockLead[] {
       }
     }
   }
+
+  // Dois leads recebem uma conversa "de verdade" (várias mensagens, status
+  // variado, uma delas terminando em opt-out) — para a ficha do lead ter algo
+  // rico para mostrar sem depender de gerar dado via envio manual primeiro.
+  const optedOutDemo = result.find((l) => l.isOptedOut);
+  if (optedOutDemo) attachDemoConversation(optedOutDemo, { optedOut: true });
+  const richDemo = result.find((l) => !l.isOptedOut && l.phoneType === 'mobile' && l.status === 'responded');
+  if (richDemo) attachDemoConversation(richDemo, { optedOut: false });
+
   return result;
+}
+
+/** Substitui a conversa de um lead por uma sequência plausível — só para demo/screenshot. */
+function attachDemoConversation(lead: MockLead, opts: { optedOut: boolean }): void {
+  const base = new Date(lead.createdAt).getTime();
+  const at = (offsetMin: number) => new Date(base + offsetMin * 60_000).toISOString();
+
+  const opener: MessageItem = {
+    id: `${lead.id}_msg_demo_1`,
+    leadId: lead.id,
+    campaignTargetId: null,
+    instanceId: 'wa_1',
+    direction: 'outbound',
+    body: `Olá! Tudo bem? Aqui é da InnoProspect. Vi que a ${lead.name} atua com ${(lead.category ?? 'o segmento').toLowerCase()} em ${lead.city ?? 'sua região'} e separei uma condição especial para quem ainda não conhece a gente.\n\nSe preferir não receber mais mensagens, responda SAIR.`,
+    providerMessageId: `mock-prov-${lead.id}-1`,
+    status: 'read',
+    errorCode: null,
+    sentAt: at(0),
+    deliveredAt: at(1),
+    readAt: at(6),
+  };
+
+  if (opts.optedOut) {
+    const optOutReply: MessageItem = {
+      id: `${lead.id}_msg_demo_2`,
+      leadId: lead.id,
+      campaignTargetId: null,
+      instanceId: 'wa_1',
+      direction: 'inbound',
+      body: 'SAIR',
+      providerMessageId: null,
+      status: 'read',
+      errorCode: null,
+      sentAt: at(8),
+      deliveredAt: at(8),
+      readAt: at(8),
+    };
+    lead.messages = [opener, optOutReply];
+    lead.activities = [
+      ...lead.activities,
+      {
+        id: `${lead.id}_act_optout`,
+        leadId: lead.id,
+        type: 'opted_out',
+        payload: { messageId: optOutReply.id },
+        actor: 'lead',
+        createdAt: at(8),
+      },
+    ];
+    lead.lastContactedAt = opener.sentAt;
+    lead.isOptedOut = true;
+    return;
+  }
+
+  const reply: MessageItem = {
+    id: `${lead.id}_msg_demo_2`,
+    leadId: lead.id,
+    campaignTargetId: null,
+    instanceId: 'wa_1',
+    direction: 'inbound',
+    body: 'Oi! Pode me contar mais sobre os valores?',
+    providerMessageId: null,
+    status: 'read',
+    errorCode: null,
+    sentAt: at(22),
+    deliveredAt: at(22),
+    readAt: at(22),
+  };
+  const followUp: MessageItem = {
+    id: `${lead.id}_msg_demo_3`,
+    leadId: lead.id,
+    campaignTargetId: null,
+    instanceId: 'wa_1',
+    direction: 'outbound',
+    body: 'Claro! Temos planos a partir de R$ 197/mês, com teste grátis de 7 dias. Posso te enviar os detalhes por aqui mesmo?',
+    providerMessageId: `mock-prov-${lead.id}-3`,
+    status: 'delivered',
+    errorCode: null,
+    sentAt: at(26),
+    deliveredAt: at(27),
+    readAt: null,
+  };
+  lead.messages = [opener, reply, followUp];
+  lead.lastContactedAt = followUp.sentAt;
+  lead.activities = [
+    ...lead.activities,
+    {
+      id: `${lead.id}_act_msg_received`,
+      leadId: lead.id,
+      type: 'message_received',
+      payload: null,
+      actor: 'lead',
+      createdAt: at(22),
+    },
+  ];
 }
 
 function getLeads(): MockLead[] {
@@ -277,13 +420,30 @@ export function mockListLeads(filter: LeadFilter): LeadListResponse {
   };
 }
 
-export function mockGetLead(id: string): LeadDetail {
+/** Referência mutável ao registro persistente — só para quem precisa gravar (`mockSendLeadMessage`). */
+function getLeadRecord(id: string): MockLead {
   const lead = getLeads().find((l) => l.id === id);
-  if (!lead) mockNotFound(`Lead "${id}" não encontrado.`);
+  if (!lead) mockNotFound(`Lead "${id}" não encontrado.`, 'LEAD_NOT_FOUND');
   return lead;
 }
 
-export function mockPatchLead(id: string, patch: Partial<LeadDetail>): LeadDetail {
+/**
+ * `GET /leads/:id` — snapshot (cópia rasa), nunca a referência viva.
+ * ⚠️ Bug real encontrado testando o envio: quando isto devolvia a referência
+ * direta, o estado do React (`setLead`) e o registro do mock passavam a
+ * apontar para o MESMO objeto. `mockSendLeadMessage` empurra a mensagem no
+ * registro (`getLeadRecord`) e devolve `{ message }`; se o chamador (UI)
+ * também faz `[...lead.messages, response.message]` sobre esse estado, a
+ * mensagem aparece duas vezes — o array já tinha sido mutado por baixo.
+ * Mock devolvendo cópia é o mesmo contrato de uma API HTTP real (JSON
+ * sempre desacopla o cliente do armazenamento) — evita essa classe de bug.
+ */
+export function mockGetLead(id: string): LeadDetail {
+  const lead = getLeadRecord(id);
+  return { ...lead, activities: [...lead.activities], messages: [...lead.messages], tags: [...lead.tags] };
+}
+
+export function mockPatchLead(id: string, patch: Partial<Omit<LeadDetail, 'messages'>>): LeadDetail {
   const all = getLeads();
   const index = all.findIndex((l) => l.id === id);
   if (index === -1) mockNotFound(`Lead "${id}" não encontrado.`);
@@ -304,4 +464,306 @@ export function mockPatchLead(id: string, patch: Partial<LeadDetail>): LeadDetai
   }
   all[index] = updated;
   return updated;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Envio unitário de mensagem (ARQUITETURA.md §4.9) — POST /leads/:id/messages
+// e o preview que o alimenta. O Vega implementa a rota real em paralelo;
+// este mock segue a §4.9.3 (portões, na mesma ordem) e a §4.9.6 (janela).
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Valores reais do lead para as variáveis conhecidas (ARQUITETURA §4.4/§4.9.4). */
+function leadVariableValues(lead: LeadDetail): Partial<Record<KnownVariable, string>> {
+  const values: Partial<Record<KnownVariable, string>> = {
+    // ⚠️ Sem endpoint de "minha empresa" (config do tenant) ainda — placeholder
+    // fixo, igual ao preview genérico do editor de template. Confirmar com o
+    // Vega de onde isso vem quando a rota real existir.
+    minha_empresa: 'Sua Empresa',
+  };
+  if (lead.name) {
+    values.nome = lead.name;
+    values.primeiro_nome = lead.name.trim().split(/\s+/)[0];
+  }
+  if (lead.city) values.cidade = lead.city;
+  if (lead.uf) values.uf = lead.uf;
+  if (lead.category) values.categoria = lead.category;
+  if (lead.website) values.site = lead.website;
+  if (lead.phoneE164) values.telefone = formatPhone(lead.phoneE164);
+  return values;
+}
+
+function defaultSpintaxSeed(leadId: string, templateId: string, now = new Date()): string {
+  const today = now.toISOString().slice(0, 10);
+  return `${leadId}:${templateId}:${today}`;
+}
+
+/** `POST /templates/:id/preview` com `leadId` — variáveis reais + variações de spintax seedadas (§4.9.4). */
+export function mockPreviewLeadMessage(leadId: string, templateId: string, sampleCount = 3): LeadMessagePreviewResponse {
+  const lead = mockGetLead(leadId);
+  const template = mockGetTemplate(templateId);
+  const values = leadVariableValues(lead);
+  const usedVariables = extractKnownVariables(template.body);
+  const missingVariables = usedVariables.filter((v) => v !== 'minha_empresa' && !values[v]);
+
+  const baseSeed = defaultSpintaxSeed(leadId, templateId);
+  // Sem sentido oferecer 3 "variações" idênticas quando o template não tem
+  // spintax — trava no número real de combinações possíveis.
+  const variationCount = Math.min(sampleCount, countVariations(template.body));
+  const previews = Array.from({ length: variationCount }, (_, i) => {
+    const seed = i === 0 ? baseSeed : `${baseSeed}#${i + 1}`;
+    const text = renderWithSeed(template.body, seed, values);
+    return { text, length: text.length, spintaxSeed: seed };
+  });
+
+  return { previews, missingVariables };
+}
+
+const INSTANCE_STATUS_LABEL: Record<string, string> = {
+  disconnected: 'desconectada',
+  connecting: 'conectando',
+  qr_pending: 'aguardando QR code',
+  connected: 'conectada',
+  banned: 'banida',
+};
+
+function quotaResetsAt(now: Date): string {
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+  return tomorrow.toISOString();
+}
+
+export function mockSendLeadMessage(leadId: string, input: SendLeadMessageRequest): SendLeadMessageResponse {
+  const now = new Date();
+  const lead = getLeadRecord(leadId); // G1 (lead) — registro vivo: este fluxo grava (write-ahead, §4.9.5)
+
+  // G2 — payload
+  const hasTemplate = Boolean(input.templateId?.trim());
+  const hasBody = Boolean(input.body?.trim());
+  if (hasTemplate === hasBody) {
+    mockValidationError('BODY_OR_TEMPLATE_REQUIRED', 'Escolha um template ou digite uma mensagem — nunca os dois, nem nenhum.');
+  }
+
+  let finalText: string;
+  let renderedFrom: SendLeadMessageResponse['renderedFrom'] = null;
+
+  if (hasTemplate) {
+    let template: TemplateItem;
+    try {
+      template = mockGetTemplate(input.templateId!);
+    } catch {
+      mockNotFound(`Template "${input.templateId}" não encontrado.`, 'TEMPLATE_NOT_FOUND');
+    }
+    const unknown = findUnknownVariables(template.body);
+    if (unknown.length > 0) {
+      mockValidationError('UNKNOWN_VARIABLE', `Variável desconhecida no template: {{${unknown[0]}}}.`);
+    }
+    const syntaxIssues = checkSpintaxSyntax(template.body);
+    if (syntaxIssues.length > 0) {
+      mockValidationError('INVALID_SPINTAX', syntaxIssues[0]!.message);
+    }
+    const seed = input.spintaxSeed ?? defaultSpintaxSeed(leadId, template.id, now);
+    finalText = renderWithSeed(template.body, seed, leadVariableValues(lead));
+    renderedFrom = { templateId: template.id, spintaxSeed: seed };
+  } else {
+    const body = input.body!.trim();
+    if (body.length < 1 || body.length > 4000) {
+      mockValidationError('BODY_TOO_LONG', 'A mensagem precisa ter entre 1 e 4000 caracteres.');
+    }
+    finalText = body;
+  }
+
+  // G3 — telefone
+  if (!lead.phoneE164) {
+    mockConflict('LEAD_HAS_NO_PHONE', 'Este lead não tem um telefone cadastrado — não há para onde enviar.');
+  }
+
+  // G4 — celular
+  if (lead.phoneType !== 'mobile' && !input.allowNonMobile) {
+    mockConflict(
+      'LEAD_NOT_MOBILE',
+      lead.phoneType === 'landline'
+        ? 'Este número está classificado como fixo — fixos não recebem WhatsApp. Confirme se quer enviar mesmo assim.'
+        : 'Não temos certeza se este número é celular. Confirme se quer enviar mesmo assim.',
+    );
+  }
+
+  // G5/G6 — janela de envio
+  const window = evaluateSendWindow(now);
+  if (window.level === 'quiet_hours') {
+    mockConflict(
+      'QUIET_HOURS',
+      `Fora do horário permitido para contato comercial (08h–20h, exceto domingo). Você poderá enviar a partir de ${formatWindowTime(window.nextOpensAt)}.`,
+      { details: [{ path: 'nextWindowOpensAt', message: window.nextOpensAt.toISOString() }] },
+    );
+  }
+  if (window.level === 'outside_business' && !input.confirmOutsideBusinessWindow) {
+    mockConflict(
+      'OUTSIDE_BUSINESS_WINDOW',
+      `Fora do horário comercial (09h–18h, seg. a sex.). A próxima janela comercial abre em ${formatWindowTime(window.nextOpensAt)}. Você pode confirmar o envio mesmo assim.`,
+      { details: [{ path: 'nextWindowOpensAt', message: window.nextOpensAt.toISOString() }] },
+    );
+  }
+
+  // G7 — instância
+  const instance = pickInstanceForSend(lead, input.instanceId);
+
+  // G8 — cota diária
+  if (instance.today.remaining <= 0) {
+    mockConflict(
+      'DAILY_LIMIT_REACHED',
+      `A instância "${instance.name}" já atingiu o limite de envios de hoje (aquecimento). Tente novamente amanhã ou escolha outro número.`,
+      { details: [{ path: 'resetsAt', message: quotaResetsAt(now) }] },
+    );
+  }
+
+  // G9 — duplo clique
+  const lastOutbound = [...lead.messages].reverse().find((m) => m.direction === 'outbound');
+  if (lastOutbound?.sentAt && now.getTime() - new Date(lastOutbound.sentAt).getTime() < 60_000) {
+    mockConflict('DUPLICATE_SEND', 'Acabamos de enviar uma mensagem para este lead. Aguarde um minuto antes de enviar de novo.');
+  }
+
+  // G10 — primeiro contato frio
+  const isColdFirstContact = lead.messages.length === 0;
+  if (isColdFirstContact) {
+    if (hasTemplate && renderedFrom) {
+      const template = mockGetTemplate(renderedFrom.templateId);
+      if (!extractKnownVariables(template.body).includes('minha_empresa')) {
+        mockConflict('MISSING_COMPANY_NAME', 'Primeiro contato precisa dizer quem está enviando — adicione {{minha_empresa}} ao template.');
+      }
+    }
+    if (!/\bsair\b/i.test(finalText)) {
+      mockConflict('MISSING_OPTOUT_NOTICE', 'Primeiro contato precisa oferecer uma saída fácil (ex.: "responda SAIR para não receber mais mensagens").');
+    }
+  }
+
+  // G11 — opt-out (checagem "sem cache", a mais próxima da rede)
+  if (lead.isOptedOut) {
+    const optOutActivity = lead.activities.find((a) => a.type === 'opted_out');
+    mockConflict('OPTED_OUT', 'Este número pediu para não receber mais mensagens. Não é possível enviar — esse bloqueio é definitivo.', {
+      details: optOutActivity ? [{ path: 'optedOutAt', message: optOutActivity.createdAt }] : undefined,
+    });
+  }
+
+  // "Envio" — write-ahead: reserva a cota antes de "chamar a rede".
+  mockReserveInstanceQuota(instance.id);
+  const shouldFail = mulberry32(hashCode(`${leadId}:${now.getTime()}`))() < 0.04;
+
+  const message: MessageItem = {
+    id: `${leadId}_msg_${Date.now()}`,
+    leadId,
+    campaignTargetId: null,
+    instanceId: instance.id,
+    direction: 'outbound',
+    body: finalText,
+    providerMessageId: shouldFail ? null : `mock-prov-${leadId}-${Date.now()}`,
+    status: shouldFail ? 'failed' : 'sent',
+    errorCode: shouldFail ? 'EVOLUTION_TRANSIENT' : null,
+    sentAt: shouldFail ? null : now.toISOString(),
+    deliveredAt: null,
+    readAt: null,
+  };
+  lead.messages = [...lead.messages, message];
+
+  if (shouldFail) {
+    mockRefundInstanceQuota(instance.id);
+    lead.activities = [
+      ...lead.activities,
+      { id: `${leadId}_act_${Date.now()}`, leadId, type: 'message_failed', payload: { messageId: message.id }, actor: 'system', createdAt: now.toISOString() },
+    ];
+    mockUpstreamError('EVOLUTION_TRANSIENT', 'A Evolution não respondeu a tempo. A mensagem ficou registrada como falhou — você pode tentar de novo.');
+  }
+
+  lead.lastContactedAt = message.sentAt;
+  if (lead.status === 'new' || lead.status === 'validated') {
+    const from = lead.status;
+    lead.status = 'contacted';
+    lead.activities = [
+      ...lead.activities,
+      { id: `${leadId}_act_${Date.now()}_status`, leadId, type: 'status_changed', payload: { from, to: 'contacted' }, actor: 'system', createdAt: now.toISOString() },
+    ];
+  }
+  lead.activities = [
+    ...lead.activities,
+    { id: `${leadId}_act_${Date.now()}_sent`, leadId, type: 'message_sent', payload: { messageId: message.id, instanceId: instance.id }, actor: 'user', createdAt: now.toISOString() },
+  ];
+
+  const warnings: SendMessageWarning[] = [];
+  if (window.level === 'outside_business') {
+    warnings.push({ code: 'OUTSIDE_BUSINESS_WINDOW_CONFIRMED', message: 'Enviado fora do horário comercial, conforme confirmado.' });
+  }
+  if (lead.phoneType !== 'mobile' && input.allowNonMobile) {
+    warnings.push({ code: 'NON_MOBILE_CONFIRMED', message: 'Enviado para um número não confirmado como celular.' });
+  }
+  if (instance.health === 'degraded') {
+    warnings.push({ code: 'INSTANCE_DEGRADED', message: 'Esta instância teve falhas recentes e está degradada — considere usar outra.' });
+  }
+  if (instance.today.remaining <= Math.ceil(instance.warmup.dailyLimit * 0.1)) {
+    warnings.push({ code: 'LOW_QUOTA_REMAINING', message: `Restam poucos envios hoje nesta instância (${instance.today.remaining}).` });
+  }
+  if (!isColdFirstContact && !/\bsair\b/i.test(finalText)) {
+    warnings.push({ code: 'NO_OPTOUT_NOTICE_IN_REPLY', message: 'Esta resposta não menciona a opção de sair da lista.' });
+  }
+
+  return {
+    message,
+    instance: { id: instance.id, name: instance.name, phoneNumber: instance.phoneNumber, health: instance.health },
+    quota: {
+      warmupDay: instance.warmup.day,
+      isWarm: instance.warmup.isWarm,
+      dailyLimit: instance.warmup.dailyLimit,
+      sentToday: instance.today.sent,
+      remaining: instance.today.remaining,
+    },
+    renderedFrom,
+    warnings,
+  };
+}
+
+function formatWindowTime(date: Date): string {
+  return new Intl.DateTimeFormat('pt-BR', { weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
+function hashCode(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) hash = (hash * 31 + value.charCodeAt(i)) | 0;
+  return hash;
+}
+
+/** Afinidade lead→instância, depois maior cota entre as conectadas (ARQUITETURA §4.9.4). */
+function pickInstanceForSend(lead: MockLead, requestedInstanceId?: string) {
+  if (requestedInstanceId) {
+    const instance = mockFindInstanceRaw(requestedInstanceId);
+    if (!instance) mockNotFound(`Instância "${requestedInstanceId}" não encontrada.`, 'INSTANCE_NOT_FOUND');
+    if (instance.status === 'banned') {
+      mockConflict('INSTANCE_BANNED', `A instância "${instance.name}" foi banida pelo WhatsApp e não pode mais enviar mensagens.`);
+    }
+    if (instance.status !== 'connected') {
+      mockConflict('INSTANCE_NOT_CONNECTED', `A instância "${instance.name}" está ${INSTANCE_STATUS_LABEL[instance.status] ?? instance.status}. Conecte-a antes de enviar.`);
+    }
+    return instance;
+  }
+
+  const lastMessage = [...lead.messages].reverse()[0];
+  if (lastMessage) {
+    const affinity = mockFindInstanceRaw(lastMessage.instanceId);
+    if (affinity && affinity.status === 'connected' && affinity.today.remaining > 0) return affinity;
+  }
+
+  const connected = mockListInstancesRaw().filter((i) => i.status === 'connected');
+  if (connected.length === 0) {
+    mockConflict('INSTANCE_NOT_CONNECTED', 'Nenhuma instância de WhatsApp está conectada. Conecte um número em WhatsApp antes de enviar.', {
+      details: mockListInstancesRaw().map((i) => ({ path: i.id, message: `${i.name}: ${INSTANCE_STATUS_LABEL[i.status] ?? i.status}` })),
+    });
+  }
+  const withQuota = connected.filter((i) => i.today.remaining > 0);
+  if (withQuota.length === 0) {
+    mockConflict('INSTANCE_NOT_CONNECTED', 'Todas as instâncias conectadas já atingiram o limite de envios de hoje.', {
+      details: connected.map((i) => ({ path: i.id, message: `${i.name}: cota esgotada hoje` })),
+    });
+  }
+  return [...withQuota].sort((a, b) => {
+    if (b.today.remaining !== a.today.remaining) return b.today.remaining - a.today.remaining;
+    return (a.health === 'degraded' ? 1 : 0) - (b.health === 'degraded' ? 1 : 0);
+  })[0]!;
 }

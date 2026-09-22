@@ -1,15 +1,16 @@
-import { CheckCircle2, MessageSquare, PlusCircle, ShieldOff, Tag } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, MessageSquare, PlusCircle, ShieldOff, Tag } from 'lucide-react';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { formatDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import type { LeadActivity, LeadActivityType } from '@/types/lead';
+import { LEAD_STATUS_LABEL, type LeadActivity, type LeadActivityType } from '@/types/lead';
 
 const ICON: Record<LeadActivityType, typeof CheckCircle2> = {
   created: PlusCircle,
   status_changed: CheckCircle2,
   note_added: Tag,
   message_sent: MessageSquare,
+  message_failed: AlertTriangle,
   message_received: MessageSquare,
   opted_out: ShieldOff,
 };
@@ -19,15 +20,27 @@ const LABEL: Record<LeadActivityType, string> = {
   status_changed: 'Status alterado',
   note_added: 'Nota adicionada',
   message_sent: 'Mensagem enviada',
+  message_failed: 'Falha no envio',
   message_received: 'Mensagem recebida',
   opted_out: 'Descadastrado (opt-out)',
 };
 
+/**
+ * O payload guarda o valor interno do enum (`new`, `responded`...). Mostrá-lo
+ * cru deixava a linha do tempo dizendo `de "new" para "responded"` na tela.
+ * Traduz pelo mesmo mapa que o `LeadStatusBadge` usa; um valor desconhecido
+ * (payload antigo ou estado novo ainda sem rótulo) aparece como veio em vez de
+ * sumir.
+ */
+function statusLabel(value: string): string {
+  return (LEAD_STATUS_LABEL as Record<string, string>)[value] ?? value;
+}
+
 function describePayload(activity: LeadActivity): string | null {
-  if (activity.type === 'status_changed') {
+  if (activity.type === 'status_changed' && activity.payload) {
     const from = activity.payload.from as string | undefined;
     const to = activity.payload.to as string | undefined;
-    if (from && to) return `de "${from}" para "${to}"`;
+    if (from && to) return `de ${statusLabel(from)} para ${statusLabel(to)}`;
   }
   return null;
 }

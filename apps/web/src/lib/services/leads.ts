@@ -1,18 +1,21 @@
 /**
  * lib/services/leads.ts — lógica de negócio de `Lead` (ARQUITETURA §4.3).
  *
- * Campos que dependem de models de fases futuras ficam com valor neutro
+ * Campo que ainda depende de model de fase futura, com valor neutro
  * documentado:
- *   - `lastContactedAt` / filtro `contactedInCampaign`: sempre `null`/no-op
- *     (depende de `Message`/`CampaignTarget` estarem sendo populados pelo
- *     disparo, que é a Fase 4).
- *   - `LeadDetail.messages`: sempre `[]` (idem).
+ *   - filtro `contactedInCampaign`: continua no-op (depende de
+ *     `CampaignTarget` sendo populado pelo disparo em massa, Fase 4).
  *
- * ⚠️ `isOptedOut` NÃO é mais um desses. A tabela `OptOut` existe desde a Fase
- * 3 e é consultada de verdade aqui — ver `fetchOptedOutPhones`. Enquanto ficou
- * chumbado em `false`, a lista mostrava alguém que pediu para não ser
- * contatado como um lead comum, sem nenhum aviso ao operador. Achado da Íris
- * na revisão da Fase 3.
+ * ⚠️ `isOptedOut` e `messages`/`lastContactedAt` NÃO são mais desses. A
+ * tabela `OptOut` existe desde a Fase 3 e é consultada de verdade aqui — ver
+ * `fetchOptedOutPhones`. `Message` existe desde a Fase 3 (o webhook grava
+ * inbound, e agora `lib/services/messages.ts` grava outbound) — a ficha do
+ * lead (`getLeadDetail`) devolve a timeline real e `lastContactedAt` a partir
+ * da última mensagem de SAÍDA, em vez do `[]`/`null` fixos de antes.
+ * `listLeads` continua sem consultar `Message` por lead (evitaria N+1 numa
+ * listagem paginada) — `lastContactedAt` na LISTAGEM continua `null` até essa
+ * decisão de performance ser revisitada (ex.: coluna denormalizada em `Lead`,
+ * mesmo padrão já usado para `isOptedOut` antes da Fase 3).
  */
 import { prisma, type Lead, type LeadStatus, type Prisma } from '@inno/db';
 import { checkStatusTransition } from '@inno/core';
@@ -48,6 +51,7 @@ async function fetchOptedOutPhones(phones: readonly (string | null)[]): Promise<
 function toListItem(
   lead: Lead & { city: { name: string } | null },
   optedOutPhones: ReadonlySet<string>,
+  lastContactedAt: string | null = null,
 ): LeadListItem {
   return {
     id: lead.id,
@@ -64,7 +68,7 @@ function toListItem(
     status: lead.status,
     tags: lead.tags,
     isOptedOut: lead.phoneE164 !== null && optedOutPhones.has(lead.phoneE164),
-    lastContactedAt: null,
+    lastContactedAt,
     createdAt: lead.createdAt.toISOString(),
   };
 }
@@ -207,10 +211,33 @@ export async function getLeadDetail(id: string): Promise<LeadDetail> {
   });
   if (!lead) notFound('Lead não encontrado.');
 
-  const optedOutPhones = await fetchOptedOutPhones([lead.phoneE164]);
+  // Uma única consulta para a ficha (não é a listagem — sem risco de N+1):
+  // toda mensagem (entrada e saída) deste lead, mais antiga primeiro, para a
+  // timeline renderizar na ordem de uma conversa.
+  const [optedOutPhones, messages] = await Promise.all([
+    fetchOptedOutPhones([lead.phoneE164]),
+    prisma.message.findMany({
+      where: { leadId: id },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, direction: true, body: true, status: true, errorCode: true, sentAt: true, deliveredAt: true, readAt: true, createdAt: true },
+    }),
+  ]);
+
+  // `lastContactedAt` = a mensagem de SAÍDA mais recente (ARQUITETURA §4.3
+  // `LeadListItem.lastContactedAt`). Usa `sentAt` quando existe (envio
+  // confirmado); cai para `createdAt` numa `queued`/`failed` sem `sentAt` —
+  // ainda é o momento em que TENTAMOS contatar, mais correto que `null`.
+  let lastContactedAt: string | null = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!;
+    if (message.direction === 'outbound') {
+      lastContactedAt = (message.sentAt ?? message.createdAt).toISOString();
+      break;
+    }
+  }
 
   return {
-    ...toListItem(lead, optedOutPhones),
+    ...toListItem(lead, optedOutPhones, lastContactedAt),
     notes: lead.notes,
     latitude: lead.latitude,
     longitude: lead.longitude,
@@ -229,7 +256,18 @@ export async function getLeadDetail(id: string): Promise<LeadDetail> {
       actor: activity.actor,
       createdAt: activity.createdAt.toISOString(),
     })),
-    messages: [], // sem `Message` na Fase 1 (Fase 3)
+    messages: messages.map((message) => ({
+      id: message.id,
+      direction: message.direction,
+      body: message.body,
+      status: message.status,
+      sentAt: message.sentAt?.toISOString() ?? null,
+      deliveredAt: message.deliveredAt?.toISOString() ?? null,
+      readAt: message.readAt?.toISOString() ?? null,
+      // Só em falha: é o que permite à tela separar "pode ter saído"
+      // (EVOLUTION_SEND_UNCERTAIN) de "não saiu". Ver leadMessageItemSchema.
+      errorCode: message.status === 'failed' ? message.errorCode : null,
+    })),
   };
 }
 
