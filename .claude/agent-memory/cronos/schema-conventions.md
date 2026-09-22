@@ -40,5 +40,23 @@ seguintes (Fase 2/3/4, `20260801130000_add_messaging_and_campaigns`):
   `search_jobs`) não têm esse risco, mas sempre vale conferir.
 - **Toda migração em banco com dado real precisa ser aditiva**: sem
   `ALTER COLUMN` destrutivo, sem `NOT NULL` sem default em tabela existente,
-  sem rename. Até agora (Fases 1-4) isso sempre foi possível porque cada
-  fase nova só adicionou tabelas, nunca precisou alterar `Lead`/`SearchJob`.
+  sem rename. Isso já valeu tanto para tabelas NOVAS (Fases 1-4, só
+  `CREATE TABLE`) quanto para **índice novo em tabela existente** com dado
+  (`20260922100000_dashboard_summary_indexes`, primeira migração deste
+  projeto que faz `ALTER`/`CREATE INDEX` em `leads`/`search_jobs`/
+  `search_tasks` já povoadas) — `CREATE INDEX` sozinho é sempre aditivo por
+  natureza (não apaga nem transforma dado), o cuidado nesse caso não é
+  aditividade e sim lock de escrita, ver [[migracao-nao-transacional-postgres]].
+- **Índice composto: coluna de IGUALDADE antes da coluna de FAIXA/ordenação**
+  no `WHERE`. Ex.: `WHERE status = 'completed' AND finishedAt >= X` pede
+  `(status, finishedAt)`, nunca `(finishedAt, status)` — o Postgres usa a(s)
+  primeira(s) coluna(s) do índice para restringir por igualdade e só então
+  faz range scan na próxima. Um índice composto com a coluna líder errada
+  para o padrão de uso real não serve o `WHERE` (ex.: `(status, createdAt)`
+  existente em `Lead` NÃO cobre um filtro puro por `createdAt` sem `status`
+  — precisou de `@@index([createdAt])` dedicado, ver migração acima).
+- **Nunca aceitar sugestão de índice de outro agente sem reler a query
+  real primeiro** (mesma migração acima: Vega sugeriu índice em `createdAt`
+  também para a query `optedOut` do dashboard, mas essa query não filtra por
+  `createdAt` — só `phoneE164`, já coberto por índice existente. Índice não
+  criado, para não pagar custo de escrita por uma garantia que já existe).

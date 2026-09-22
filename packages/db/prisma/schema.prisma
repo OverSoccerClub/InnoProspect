@@ -317,6 +317,14 @@ model SearchJob {
   // índice parcial (WHERE) no schema DSL. Este índice normal aqui só
   // acelera a leitura que a API faz antes de decidir.
   @@index([niche, uf, status])
+  // GET /api/v1/dashboard/summary (`searches.completedLast30d`): WHERE
+  // status = 'completed' AND finishedAt >= cutoff. Igualdade primeiro
+  // (status), faixa depois (finishedAt) — ordem que o planner do Postgres
+  // consegue usar como index range scan; o inverso (finishedAt, status)
+  // não ajudaria porque o filtro por igualdade viria depois na árvore do
+  // índice. `@@index([status, createdAt])` já existe mas não serve: chave
+  // diferente (createdAt, não finishedAt).
+  @@index([status, finishedAt])
   @@map("search_jobs")
 }
 
@@ -363,6 +371,10 @@ model SearchTask {
   @@index([searchJobId, status])
   // Consumo da fila pelo worker: próxima task pendente, maior população primeiro.
   @@index([status, priority])
+  // GET /api/v1/dashboard/summary (`searches.tasksFailedLast30d`): WHERE
+  // status = 'failed' AND finishedAt >= cutoff. Mesma lógica de ordem do
+  // índice equivalente em SearchJob (igualdade antes de faixa).
+  @@index([status, finishedAt])
   @@map("search_tasks")
 }
 
@@ -471,10 +483,22 @@ model Lead {
 
   // Unicidade da dedupe key — a garantia mais importante deste model.
   // (@unique acima já cria o índice; listado aqui só como documentação.)
-  // Filtro/join principal da ficha do lead e de busca por telefone.
+  // Filtro/join principal da ficha do lead e de busca por telefone. Também
+  // é quem cobre a query `optedOut` do dashboard (EXISTS por phoneE164) —
+  // não precisa de índice extra em createdAt, porque essa query não filtra
+  // por createdAt (só phoneE164 IS NOT NULL + EXISTS contra opt_outs, que
+  // já tem @unique(phoneE164) do lado de lá).
   @@index([phoneE164])
   // Listagem padrão (GET /leads, sort default createdAt:desc) + filtro por status.
   @@index([status, createdAt])
+  // GET /api/v1/dashboard/summary: `createdLast7d`/`createdPrev7d` (WHERE
+  // createdAt BETWEEN ...) e o `$queryRaw` de `byDay` (WHERE createdAt >=
+  // ...) filtram createdAt SEM nenhum predicado de status — o índice
+  // composto acima (status, createdAt) não serve esse padrão porque
+  // "status" é a coluna líder: um range scan puro em createdAt exigiria
+  // varrer o índice inteiro (todos os valores de status) em vez de um
+  // range scan direto. Índice simples e dedicado para esse caso.
+  @@index([createdAt])
   // GET /leads?cityIbgeCode= e fanout reverso (leads de um município).
   @@index([cityId])
   // GET /leads?searchJobId= (ficha "quem essa busca trouxe").

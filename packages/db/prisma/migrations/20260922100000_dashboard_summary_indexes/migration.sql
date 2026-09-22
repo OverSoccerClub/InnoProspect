@@ -1,0 +1,74 @@
+-- InnoProspect — índices pedidos por `GET /api/v1/dashboard/summary`
+-- (apps/web/src/lib/services/dashboard.ts).
+--
+-- Gerada com `prisma migrate diff --from-schema-datamodel <snapshot do
+-- schema ANTES desta mudança> --to-schema-datamodel prisma/schema.prisma
+-- --script` — sem Postgres disponível nesta máquina de desenvolvimento (ver
+-- [[innoprospect-bloqueio-docker]] na memória do Cronos). ⚠️ Esta migração
+-- NÃO foi aplicada contra um banco vivo. Ela roda no boot do container via
+-- `prisma migrate deploy` (entrypoint fail-fast) — conferir o resultado no
+-- primeiro boot em produção, não só aqui.
+--
+-- ⚠️ 100% ADITIVA: só `CREATE INDEX`, nenhuma linha altera coluna ou dado
+-- existente. Confirmado por leitura da migração inteira: nenhuma linha
+-- referencia `search_jobs_active_niche_uf_key` (índice único parcial escrito
+-- à mão na migração `20260730120000_init`, que o Prisma DSL não expressa) —
+-- ele continua intocado.
+--
+-- Vega apontou 3 consultas sem índice em dashboard.ts. Conferi as 3 antes de
+-- aceitar a sugestão dele (ver comentário em cada `@@index` no schema.prisma
+-- para o raciocínio completo por consulta):
+--   1. `Lead`: `createdLast7d`/`createdPrev7d` (WHERE createdAt BETWEEN) e o
+--      `$queryRaw` de `byDay` (WHERE createdAt >= ...) filtram createdAt SEM
+--      nenhum predicado de status — o índice composto `(status, createdAt)`
+--      já existente não serve (status é a coluna líder). ACEITO: índice
+--      simples novo em `createdAt`.
+--   2. `SearchJob`/`SearchTask`: `completedLast30d`/`tasksFailedLast30d`
+--      (WHERE status = X AND finishedAt >= cutoff) — ACEITO exatamente como
+--      sugerido: `(status, finishedAt)`, igualdade antes de faixa.
+--   3. `optedOut` (Lead) — Vega também citou esta consulta como candidata a
+--      um índice em createdAt, mas ela NÃO filtra por createdAt (só
+--      `phoneE164 IS NOT NULL AND EXISTS (... WHERE phoneE164 = ...)`). Já
+--      está coberta pelo `@@index([phoneE164])` existente em `leads` e pelo
+--      `@unique(phoneE164)` existente em `opt_outs` — CORRIGIDO: nenhum
+--      índice novo criado para ela, para não pagar custo de escrita por uma
+--      garantia que já existe.
+--
+-- DECISÃO CONSCIENTE: `CREATE INDEX` simples (SEM `CONCURRENTLY`) nas 3
+-- tabelas. Motivo: `leads`/`search_jobs`/`search_tasks` têm hoje volume
+-- baixíssimo (leads "ainda quase zero", ver PROGRESSO.md) — o lock de
+-- escrita que `CREATE INDEX` simples toma é da ordem de milissegundos aqui,
+-- igual às migrações anteriores (`20260730120000_init`,
+-- `20260801130000_...`) que já usaram `CREATE INDEX` simples em `leads` sem
+-- problema. `CREATE INDEX CONCURRENTLY` evitaria o lock, mas não roda dentro
+-- de transação, e por padrão `prisma migrate deploy` embrulha cada
+-- migration.sql numa transação — usar CONCURRENTLY aqui exigiria confirmar
+-- (não apenas assumir) o mecanismo do Prisma 6.19 de detectar statements
+-- não-transacionais e pular o wrapper para o arquivo inteiro, o que eu não
+-- validei contra um Postgres vivo (ver memória `migracao-nao-transacional-
+-- postgres`: não usar CONCURRENTLY sem validar primeiro em ambiente de
+-- teste — o risco de `migrate deploy` falhar em produção por isso é pior que
+-- um lock breve numa tabela pequena).
+--
+-- ⚠️ QUANDO `leads` chegar a milhões de linhas (ARQUITETURA prevê 10k-500k
+-- no ano 1, pode crescer além disso depois): revisitar esta decisão. Índice
+-- novo em tabela grande com `CREATE INDEX` simples bloqueia TODA escrita
+-- (INSERT/UPDATE/DELETE) na tabela pelo tempo de construção do índice — em
+-- milhões de linhas isso pode ser minutos, inaceitável com o worker de
+-- scraping escrevendo continuamente. Nesse cenário, migrar para
+-- `CREATE INDEX CONCURRENTLY` (que só pode indexar 1 índice por comando, não
+-- pode rodar dentro de transação, e pode falhar deixando um índice
+-- `INVALID` que precisa ser dropado e recriado) rodado FORA do pipeline
+-- `migrate deploy` — manualmente contra o banco de produção antes do boot
+-- que espera o índice existir, ou confirmando primeiro em ambiente de teste
+-- que o Prisma desta versão realmente pula a transação quando detecta
+-- CONCURRENTLY no arquivo.
+
+-- CreateIndex
+CREATE INDEX "search_jobs_status_finishedAt_idx" ON "search_jobs"("status", "finishedAt");
+
+-- CreateIndex
+CREATE INDEX "search_tasks_status_finishedAt_idx" ON "search_tasks"("status", "finishedAt");
+
+-- CreateIndex
+CREATE INDEX "leads_createdAt_idx" ON "leads"("createdAt");
