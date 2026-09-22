@@ -475,16 +475,53 @@ reserva espaço em lugar nenhum e o resultado só se revela numa screenshot
 real, nunca lendo o JSX. Preferir padding/margin no fluxo normal para a
 folga, e absolute só para o deslocamento fino por cima dela.
 
-### 9.2 Seções de marketing — ritmo e regras de honestidade
+**Rodada de refinamento (2026-09-22, mesmo dia):** o dono reprovou a 1ª
+versão do hero — título de 97 caracteres em 6 linhas, mockup pequeno e
+desalinhado, faixa vazia grande antes de "Como funciona". Correções: título
+reduzido pra uma frase de 2-3 linhas ("Leads B2B prontos para o WhatsApp."),
+o detalhe (nicho/cidade/telefone/progresso) migrou pro subtítulo; a coluna do
+mockup ficou mais larga (`lg:grid-cols-[1fr_1.1fr]`, era `[1.05fr_0.95fr]`
+favorecendo o texto) e o mockup ganhou mais peso (`max-w-lg` → `max-w-xl`,
+uma 5ª linha na tabela, uma barra de rodapé com contagem); o grid passou de
+`items-center` pra `items-start` (o texto agora é mais curto que o mockup —
+`items-center` deixava vazio embaixo dele) e o padding vertical do hero
+encolheu (`py-16..28` → `pt-14..24`/`pb-14..24` assimétrico) pra fechar o
+vão antes da próxima seção.
 
-`how-it-works.tsx` (3 passos), `features.tsx` (grid de recursos) e
-`compliance-section.tsx` (LGPD) seguem o mesmo ritmo: `section` com
-`border-t border-border`, alternando `bg-muted/30` a cada seção pra criar
-separação sem precisar de sombra, título `font-display text-2xl sm:text-3xl`
-centralizado + subtítulo `text-muted-foreground`, grid de cards
-`rounded-xl border border-border bg-card p-6 shadow-xs` com ícone em caixa
-`bg-primary/10 text-primary` — é o mesmo tratamento "ícone em caixa" que o
-dashboard já usava nos KPIs (§8, "cards do hub de configurações").
+### 9.2 Seções de marketing — ritmo, variedade e regras de honestidade
+
+**Rodada de refinamento (2026-09-22):** a 1ª versão tinha as 3 seções
+seguindo a MESMA fórmula (título centralizado + grade de N cards iguais) —
+reprovado como "parece template". A versão atual varia a composição seção a
+seção, de propósito:
+
+- `how-it-works.tsx` — passos **horizontais ligados por uma linha** (círculos
+  numerados com ícone, linha conectora atrás via `absolute` + `z-index`
+  implícito por ordem no DOM; no mobile a linha some e os passos empilham).
+- `features.tsx` — **seção dividida**: lista de recursos em texto (não
+  cards) à esquerda, `SearchProgressMockup` (2ª composição visual do
+  produto — a tela de progresso de busca, distinta do mockup de leads do
+  hero) à direita.
+- `stat-band.tsx` (**nova**) — faixa cheia com `bg-primary`, números REAIS
+  em destaque (5.571 municípios/27 UFs, seed do IBGE) — usa o par
+  `primary`/`primary-foreground` já verificado em WCAG (§7, mesmo par do
+  botão), nenhum contraste novo pra calcular. Existe pra dar um "âncora"
+  visual forte entre Recursos e Conformidade, não só mais texto.
+- `compliance-section.tsx` — também dividida, ordem INVERTIDA em relação a
+  `features.tsx` (visual à esquerda, texto à direita no desktop via
+  `lg:order-1`/`lg:order-2`) pra não repetir a mesma composição duas vezes
+  seguidas. O visual é `DescadastroPreviewMockup` — uma 3ª composição, a
+  prévia da página pública `/descadastro/:token` (mesmo ícone-em-círculo e
+  rodapé de credibilidade da tela real, ver §8).
+
+Título de seção subiu de `text-2xl sm:text-3xl` pra `text-3xl sm:text-4xl`
+em todas (hierarquia mais próxima do hero, que é `text-5xl sm:text-6xl`
+depois do mesmo refinamento) — o salto de escala entre hero e seção estava
+grande demais na 1ª versão. Todo container de seção usa o MESMO
+`mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8` (a 1ª versão tinha a grade de
+Conformidade presa a um `max-w-4xl` interno, mais estreita que as outras
+seções — bug real de largura inconsistente, visível comparando os
+screenshots lado a lado).
 
 **Regra de honestidade que é decisão de produto, não só de copy:** nenhuma
 seção de marketing pode alegar como pronto algo que só existe como schema
@@ -520,7 +557,96 @@ sem investigar tende a reproduzir o mesmo incidente. Mesma lógica de
 `acknowledgeHalt` em campanhas (§5.3): builder de confirmação carrega o
 "porquê", não só o "o quê".
 
+**Cor do botão "Revisar e retomar" — revisado na rodada de refinamento
+(2026-09-22):** a 1ª versão usava `variant="destructive"`/`"default"` no
+botão conforme a severidade, ecoando a cor do Alert. Trocado para
+`variant="outline"` (neutro) sempre, com o mesmo raciocínio do `ErrorState`
+(`components/common/error-state.tsx`, que já usa um botão `outline`
+"Tentar novamente" dentro de um `Alert variant="destructive"` — convenção
+pré-existente, não inventada agora): **a cor do risco é do Alert, não da
+ação**. Retomar não é uma ação destrutiva — é a ação de avanço depois de uma
+pausa de segurança, e a confirmação explícita do `ConfirmDialog` já é a
+proteção real contra clique acidental; colorir o botão de vermelho por cima
+de um Alert já vermelho não reforça, só compete visualmente. O
+`ConfirmDialog` interno também passou a usar sempre `confirmVariant="default"`
+(nunca `destructive`) pelo mesmo motivo.
+
 Tipos ainda locais em `types/scraper-queue.ts` (com o TODO de sempre) — o
 próprio endpoint foi criado pelo Vega sem contrato prévio em
 `packages/contracts` (ver comentário em
 `app/api/v1/scraper/queue/route.ts`), então não havia nada pra importar.
+
+### 9.4 Painel — redesenho completo (2026-09-22, mesma rodada)
+
+A 1ª versão do painel (§9.3 acima) foi reprovada pelo dono como "fraca e
+fria" — só 2 KPIs soltos, sem gráfico, sem riqueza visual, e um painel que
+"termina a dois terços da tela". Redesenho completo em cima de um endpoint
+novo, construído pelo Vega em paralelo: `GET /api/v1/dashboard/summary`
+(tipo local em `types/dashboard.ts`, TODO de sempre — trocar por
+`@inno/contracts` quando `dashboard.contract.ts` for publicado; o formato foi
+combinado com o Atlas antes de mockar, não inventado). Orquestrador:
+`components/dashboard/dashboard-content.tsx`, fonte única de dado via
+`hooks/useDashboardSummary.ts`.
+
+**Hierarquia da página, de cima pra baixo** (a "história" que a página
+conta): 1) `SummaryHero` — saudação, avatar com iniciais, data por extenso, e
+uma frase que reflete o estado real do dia (`buildStatusLine`, ex. "2 buscas
+rodando · 134 leads novos esta semana" — nunca um rótulo fixo tipo "Sua visão
+geral", reprovado por não dizer nada); 2) `QueueHealthBanner` (§9.3); 3)
+`IndicatorCard` × 4 (leads na semana com delta vs. semana anterior, total de
+leads, **% de leads com celular** — é o número que decide se o lead serve
+pro WhatsApp, por isso ganhou indicador próprio em vez de ficar escondido em
+uma ficha, e buscas ativas); 4) `LeadsAreaChart` (2/3) + `StatusFunnel` (1/3);
+5) `RecentSearches` + `RecentLeads`; 6) `TopListCard` (UFs e categorias) +
+`SystemHealthCard`.
+
+**Gráficos em SVG próprio, sem lib (Recharts/D3/etc.) — decisão
+justificada, não default por preguiça:** para uma série de 30 pontos e um
+funil de 7 categorias, uma lib de gráfico pesaria no bundle sem necessidade,
+e mais importante: a CSP do projeto (`next.config.ts`) não libera
+`'unsafe-eval'`, e várias libs de gráfico geram/avaliam função em runtime —
+arriscar isso exigiria auditar a lib inteira contra a CSP antes de usar (ver
+[[bug-dev-csp-blocks-hydration]] pra um exemplo real de quanto isso já doeu
+nesta mesma rodada). `components/dashboard/charts/{sparkline,area-chart}.tsx`
+são `<svg>` com `<path>`/`<polyline>` calculados a mão — leves, sem
+dependência nova, 100% controlados. Se o painel um dia precisar de séries
+múltiplas, zoom ou pan, reconsiderar uma lib nesse momento, não antes.
+
+**Cor com intenção nos indicadores:** cada `IndicatorCard` tem sua caixa de
+ícone colorida — `primary` (leads/total), `success` (% com celular — verde
+porque é uma métrica "boa" de qualificação), `accent` (buscas ativas, pra não
+repetir a mesma cor 3x na fileira). A variação percentual usa a MESMA regra
+do Alert/badges: **a seta é colorida (ícone, piso WCAG 3:1), o número da
+variação fica em `text-muted-foreground`** — nunca o texto da variação em
+verde/vermelho direto (ver §1.4/§4, é a mesma armadilha de token dual-role de
+sempre, aplicada de novo aqui por consistência, não por acidente).
+
+**Acabamento:** `useCountUp` (`hooks/useCountUp.ts`) anima os números de 0 até
+o valor real (ease-out, ~700ms) e cai pro valor final direto quando
+`prefers-reduced-motion: reduce` — sem RAF nenhum nesse caso, não só mais
+rápido. Entrada escalonada das seções via classe `.inno-stagger-in`
+(`globals.css`, `animation-delay` por `--stagger-delay` inline, 60ms por
+seção) — só opacidade + 8px de translateY, nunca layout, e só roda dentro de
+`@media (prefers-reduced-motion: no-preference)`, mesmo padrão das animações
+do Dialog que já existiam.
+
+**Estado de primeiro acesso é o estado padrão em produção, não um caso
+extremo:** produção começa com ZERO leads — um painel bonito só com dado
+mockado e "triste" com zero é reprovado (nota literal do dono). Quando
+`summary.leads.total === 0`, `DashboardContent` renderiza
+`FirstAccessChecklist` no lugar do painel rico inteiro: hero de boas-vindas +
+3 passos (nova busca, conectar WhatsApp, criar template — cada um com link de
+ação de verdade) + `QueueHealthBanner`/`SystemHealthCard` ainda visíveis
+(saúde do sistema não depende de ter lead nenhum, e mantém a tela parecendo
+"sistema profissional" mesmo vazia, em vez de um card solto no topo com o
+resto da viewport em branco). Nenhum gráfico morto (eixo zerado) é mostrado —
+troca por uma frase que orienta ("assim que os primeiros leads chegarem,
+esta página ganha gráfico de evolução...").
+
+**Mock rico, não sequência artificial:** `mocks/dashboard.ts` gera 30 dias
+com tendência de crescimento + ruído + queda de fim de semana (seed fixa,
+determinístico) — nunca uma progressão tipo "10, 20, 30..." que entregaria
+o gráfico como fake à primeira vista. `mockGetEmptyDashboardSummary()` existe
+à parte, só pra testar o estado de primeiro acesso — trocado manualmente em
+`lib/api/dashboard.ts` durante o teste e revertido depois, nunca um flag
+permanente no código de produção.

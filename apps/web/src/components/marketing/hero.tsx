@@ -10,6 +10,13 @@ import { Button } from '@/components/ui/button';
  * paint. O halo de fundo usa o mesmo tratamento visual do `(auth)/layout.tsx`
  * (blur sutil da cor de marca), pra manter a mesma "voz" entre login e
  * marketing.
+ *
+ * Rodada de refinamento (2026-09-22): a 1ª versão tinha um título de 97
+ * caracteres ocupando 6 linhas — hero premium fica em 2-3. Encurtei o
+ * título e movi o detalhe (nicho/cidade/telefone/progresso) pro subtítulo,
+ * e dei mais peso ao mockup (coluna mais larga, `items-start` em vez de
+ * `items-center` pra não deixar vazio embaixo dele) e menos respiro embaixo
+ * do CTA (a faixa vazia antes de "Como funciona" também foi reportada).
  */
 export function Hero() {
   return (
@@ -19,21 +26,21 @@ export function Hero() {
         className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[40rem] w-[60rem] -translate-x-1/2 -translate-y-1/3 rounded-full bg-primary/[0.08] blur-3xl"
       />
 
-      <div className="mx-auto grid w-full max-w-6xl gap-12 px-4 py-16 sm:px-6 sm:py-24 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:gap-8 lg:py-28 lg:px-8">
-        <div className="flex flex-col items-start gap-6">
+      <div className="mx-auto grid w-full max-w-6xl gap-10 px-4 pb-14 pt-14 sm:px-6 sm:pb-20 sm:pt-20 lg:grid-cols-[1fr_1.1fr] lg:items-start lg:gap-8 lg:px-8 lg:pb-24 lg:pt-24">
+        <div className="flex flex-col items-start gap-6 lg:pt-6">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-semibold text-muted-foreground shadow-xs">
             <MapPinned className="size-3.5 text-primary" aria-hidden="true" />
             Prospecção B2B a partir do Google Maps
           </span>
 
-          <h1 className="font-display text-4xl font-bold leading-[1.08] tracking-tight text-foreground sm:text-5xl lg:text-[3.25rem]">
-            Encontre leads B2B qualificados em qualquer cidade do Brasil, prontos para abordar pelo WhatsApp.
+          <h1 className="font-display text-5xl font-bold leading-[1.05] tracking-tight text-foreground sm:text-6xl">
+            Leads B2B prontos para o WhatsApp.
           </h1>
 
-          <p className="max-w-xl text-base text-muted-foreground sm:text-lg">
-            O InnoProspect varre o Google Maps por nicho e cidade, transforma cada resultado em um lead
-            organizado — telefone, tipo de linha, site, avaliação — e mostra o progresso da coleta em tempo
-            real. Você decide o nicho e a região; o sistema entrega a lista pronta pra abordagem.
+          <p className="max-w-md text-pretty text-base text-muted-foreground sm:text-lg">
+            O InnoProspect varre o Google Maps por nicho e cidade, em qualquer UF do Brasil, e organiza cada
+            resultado com telefone, tipo de linha e site. Progresso da coleta em tempo real, do primeiro
+            município ao último.
           </p>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">

@@ -1,4 +1,4 @@
-import { CheckCircle2, MapPin, Radar } from 'lucide-react';
+import { CheckCircle2, MapPin, Radar, Users } from 'lucide-react';
 
 import { LeadStatusBadge } from '@/components/leads/lead-status-badge';
 import type { LeadStatus } from '@/types/lead';
@@ -18,6 +18,7 @@ const MOCK_ROWS: MockLeadRow[] = [
   { name: 'Odonto Vida', city: 'Ribeirão Preto, SP', phone: '(16) 99222-4455', status: 'responded' },
   { name: 'Sorriso & Cia', city: 'Sorocaba, SP', phone: '(15) 99777-8899', status: 'new' },
   { name: 'Espaço Dental', city: 'São José dos Campos, SP', phone: '(12) 98123-9090', status: 'won' },
+  { name: 'Studio Bem-Estar Sul', city: 'Jundiaí, SP', phone: '(11) 97654-3210', status: 'negotiating' },
 ];
 
 /**
@@ -37,7 +38,7 @@ export function ProductMockup() {
     // tornando-o ilegível. Padding no fluxo normal garante a folga em
     // qualquer viewport (mobile empilha a seção inteira, mas o espaço
     // reservado continua valendo).
-    <div className="relative mx-auto w-full max-w-lg pt-28">
+    <div className="relative mx-auto w-full max-w-xl pt-28 lg:mx-0 lg:max-w-none">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 -z-10 translate-x-6 translate-y-6 rounded-2xl bg-primary/[0.07] blur-2xl"
@@ -68,6 +69,11 @@ export function ProductMockup() {
               <LeadStatusBadge status={row.status} />
             </div>
           ))}
+        </div>
+
+        <div className="flex items-center gap-2 border-t border-border bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
+          <Users className="size-3.5 shrink-0" aria-hidden="true" />
+          411 leads coletados nesta busca · atualizado agora
         </div>
       </div>
 

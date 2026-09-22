@@ -6,3 +6,5 @@
 - [CSP de dev sem unsafe-eval quebra hidratação no `next dev`](bug_dev_csp_blocks_hydration.md) — usar `bypassCSP:true` no Playwright só pra testar, nunca no app
 - [Card flutuante sobreposto só com `absolute` esconde overlap até screenshot real](bug_layered_card_absolute_overlap.md) — reservar espaço no fluxo (padding), não só empilhar por cima
 - [Como gerar cookie de sessão Auth.js pra testar tela logada sem Postgres](convention_test_session_cookie.md) — encode() de next-auth/jwt + os DOIS cookies (real + mock) se USE_MOCKS=true
+- [CSS `capitalize` erra em frases pt-BR](bug_css_capitalize_pt_br.md) — maiusculiza CADA palavra; fazer só a 1ª letra em JS
+- [O que "premium" significa pra este dono](feedback_dono_quer_premium_de_verdade.md) — densidade de dado real + gráfico + cor com intenção + estado vazio desenhado, não número solto e cinza

@@ -7,10 +7,10 @@ export function FinalCta() {
   return (
     <section className="border-t border-border py-16 sm:py-24">
       <div className="mx-auto flex w-full max-w-3xl flex-col items-center gap-5 px-4 text-center sm:px-6 lg:px-8">
-        <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+        <h2 className="font-display text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
           Pronto para ver seus próximos leads?
         </h2>
-        <p className="max-w-xl text-base text-muted-foreground">
+        <p className="max-w-xl text-lg text-muted-foreground">
           Entre no painel, escolha um nicho e uma UF, e acompanhe a coleta acontecer.
         </p>
         <Button asChild size="lg">

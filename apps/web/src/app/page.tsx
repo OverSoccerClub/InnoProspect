@@ -7,6 +7,7 @@ import { Hero } from '@/components/marketing/hero';
 import { HowItWorks } from '@/components/marketing/how-it-works';
 import { SiteFooter } from '@/components/marketing/site-footer';
 import { SiteHeader } from '@/components/marketing/site-header';
+import { StatBand } from '@/components/marketing/stat-band';
 
 const TITLE = 'InnoProspect — prospecção B2B a partir do Google Maps';
 const DESCRIPTION =
@@ -43,6 +44,7 @@ export default function LandingPage() {
         <Hero />
         <HowItWorks />
         <Features />
+        <StatBand />
         <ComplianceSection />
         <FinalCta />
       </main>

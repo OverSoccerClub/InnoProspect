@@ -100,12 +100,7 @@ export function QueueHealthBanner() {
               </Badge>
             )}
           </div>
-          <Button
-            size="sm"
-            variant={isCritical ? 'destructive' : 'default'}
-            className="w-fit"
-            onClick={() => setConfirmOpen(true)}
-          >
+          <Button size="sm" variant="outline" className="w-fit" onClick={() => setConfirmOpen(true)}>
             <RefreshCcw aria-hidden="true" />
             Revisar e retomar
           </Button>
@@ -121,7 +116,7 @@ export function QueueHealthBanner() {
         title="Retomar a fila de coleta"
         description="A pausa foi uma medida de segurança automática, não um bug de tela — retomar sem entender a causa (ex.: taxa alta de resultados vazios, possível bloqueio do Google Maps) tende a reproduzir o mesmo incidente minutos depois. Confirme só se você já investigou e sabe por que é seguro seguir."
         confirmLabel="Já investiguei, retomar a fila"
-        confirmVariant={isCritical ? 'destructive' : 'default'}
+        confirmVariant="default"
         errorMessage={resumeError}
         onConfirm={handleResume}
       />

@@ -6,3 +6,4 @@
 - [Bug: teste de retry/backoff com sleep real estoura timeout do vitest](bug_vitest_fake_timers_retry_backoff.md) — usar `vi.useFakeTimers()` + `runAllTimersAsync()` em testes ponta a ponta de retry.
 - [Convenção: estado operacional (pausa de fila/heartbeat) em Redis via Queue#client](convention_worker_redis_state.md) — chaves duplicadas worker/web, ScraperHealthEvent só cobre A1-A4.
 - [Bug: Queue#client do bullmq não é o Commander do ioredis](bug_bullmq_client_not_ioredis.md) — sem `.ping()`, `.set()` usa options object, não varargs `'EX', n`.
+- [Convenção: GET /dashboard/summary — fuso SP, $queryRaw parametrizado, teste sem Postgres](convention_dashboard_summary.md) — helpers de dia-calendário, cast `::int`, mock de `$queryRaw` roteado por texto, `vi.setSystemTime`.

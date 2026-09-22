@@ -60,6 +60,21 @@ hoje, precisa diferenciar). Ver [[feedback-dual-role-color-tokens]] para o achad
 tempo, sobretudo em vermelho) — isso também corrigiu um bug de contraste real e pré-existente no
 componente `Alert` (`success` com texto branco sobre fundo quase-branco, 1.02:1 de contraste).
 
+**3ª rodada, refinamento (2026-09-22, mesma sessão):** o dono reprovou a 1ª
+entrega do painel ("fraca e fria") e pediu ajustes na landing. Painel virou
+redesenho completo em cima de `GET /api/v1/dashboard/summary`, construído
+pelo Vega EM PARALELO — troquei meu tipo local (`types/dashboard.ts`) por
+reexport de `@inno/contracts` assim que vi `packages/contracts/src/
+dashboard.contract.ts` aparecer no `git status` (bateu campo a campo com o
+que eu tinha escrito combinando com o Atlas antes; ver
+[[convention-check-contracts-before-mocking]] — aconteceu de novo, 3ª vez
+nesta squad). Detalhes técnicos (gráficos em SVG próprio, estado de primeiro
+acesso, cor dos indicadores, animações) em DESIGN-SYSTEM.md §9.4. Landing:
+título do hero cortado de 97 pra ~35 caracteres, mockup redesenhado mais
+pesado, 3 seções trocaram de "grid de cards" pra composições variadas
+(stepper horizontal, seção dividida com 2º/3º mockup do produto, faixa de
+estatística) — DESIGN-SYSTEM.md §9.1/§9.2.
+
 **Identidade visual / sistema de design — 3ª rodada, "layout premium"
 (2026-09-22):** landing pública em `/` (`app/page.tsx` +
 `components/marketing/*` — header, hero com mockup do produto 100% em
