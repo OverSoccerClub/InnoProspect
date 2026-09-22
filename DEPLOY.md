@@ -272,9 +272,70 @@ uso está listado no topo de cada script e no checklist final do README.
 - **Versão da Evolution API confirmada** — `evoapicloud/evolution-api:v2.3.7` (o projeto trocou de organização/imagem; ver §4).
 - **`infra/docker-compose.yml`** — mantido (decisão abaixo), com banner "isto não é produção" reforçado no topo do arquivo e aqui no `DEPLOY.md`.
 
+---
+
 ### Decisão: `infra/docker-compose.yml` — manter, marcado como dev-only (não remover)
 
 A Nova perguntou (revisão de arquitetura, 2026-08-03) se este arquivo deveria ser marcado como dev-only ou removido, porque ele "descreve uma topologia que nunca subiu" e documentação divergente é pior que ausente. Decisão: **manter, com o aviso reforçado**, não remover. Motivos:
 1. **Utilidade real que nada mais cobre**: é o único jeito de validar, numa máquina com Docker, que os `Dockerfile`s reais do `apps/web`/`apps/worker` sobem e conversam entre si (web ↔ postgres ↔ redis ↔ Evolution) — algo que nunca foi testado nem nesta máquina de desenvolvimento nem em produção ainda. Removê-lo não resolve a causa raiz (documentação vs. realidade); só apaga uma ferramenta que vai fazer falta no dia em que alguém tiver Docker à mão e precisar reproduzir um bug de build localmente antes de gastar um deploy real testando.
 2. **Remover não é opção segura sem quebrar referência que não posso editar**: `ARQUITETURA.md §2` (arquivo da Nova, fora do meu escopo nesta tarefa) cita este caminho na estrutura de pastas. Renomear ou apagar o arquivo deixaria essa referência inconsistente sem que eu pudesse corrigi-la eu mesmo.
 3. O problema real não era a existência do arquivo, era o aviso ser fraco. Corrigido: banner grande no topo do arquivo (impossível de não ver ao abrir), nome do projeto compose trocado de `innoprospect` para `innoprospect-local-validation` (evita confundir em `docker compose ls`/nomes de container com algo de produção), e referência cruzada no topo deste `DEPLOY.md`.
+
+---
+
+## 9. CI (GitHub Actions) — o que roda antes de chegar até aqui
+
+Workflow em `.github/workflows/ci.yml`, dispara em todo `push` e `pull
+request` para `main`. Node 22 + pnpm 9.12.0 — as mesmas versões que
+`apps/web/Dockerfile` e `apps/worker/Dockerfile` usam em produção.
+
+**O que ele VALIDA:**
+- `pnpm install --frozen-lockfile` — o lockfile está íntegro e reprodutível
+  (falha se alguém commitou um `package.json` sem atualizar o
+  `pnpm-lock.yaml`).
+- `pnpm typecheck` (`tsc --noEmit` em cada workspace) e `pnpm lint`
+  (ESLint).
+- `pnpm test` — os testes automatizados (Vitest) do monorepo. Rodam com um
+  `DATABASE_URL` placeholder (mesmo valor default do `ARG DATABASE_URL` dos
+  Dockerfiles) só para o `prisma generate` resolver o schema — os testes em
+  si usam banco falso em memória (`apps/web/src/test/fake-db.ts` e
+  equivalentes), nenhuma conexão real é aberta.
+- Se isto passa aqui (Ubuntu limpo) e falha no build do EasyPanel, o
+  problema é ambiental (SO, versão de imagem base, algo específico do
+  Docker) — não é o código Node em si, que já foi validado num ambiente
+  limpo antes de chegar lá.
+
+**O que ele NÃO valida (declarado, não escondido):**
+- **Que `prisma migrate deploy` aplica de verdade.** O `DATABASE_URL` é um
+  placeholder só de formato — nunca conecta em nenhum Postgres. A migração
+  real só é testada no primeiro boot do `web` em produção (§7), contra o
+  banco de verdade.
+- **Qualquer coisa que dependa de rede/serviço externo** — Evolution API
+  respondendo, worker conectando num Redis real, etc.
+- **Que os `Dockerfile`s buildam.** O CI não roda `docker build`. Nem roda
+  `next build` — de propósito: exigiria segredos de produção (ou
+  placeholders que não provam nada sobre o build real do EasyPanel) só
+  para gerar um artefato que este workflow não usa para nada. O primeiro
+  build real continua sendo o do EasyPanel (ver aviso no topo deste
+  documento) — trate-o como ensaio, não como formalidade.
+- **Segurança do código** (auditoria OWASP — território do Órion,
+  `/revisar`) e **auditoria de dependências de terceiros** (`pnpm audit` —
+  feita manualmente por enquanto; não está automatizada neste workflow. Ver
+  achados na memória do Vulcano e no handoff da entrega que criou este CI).
+
+**Como interpretar uma falha:** o job tem um só, com passos sequenciais
+(instalar → gerar Prisma Client → typecheck → lint → test). O nome do passo
+que ficou vermelho no log do GitHub já diz qual dos quatro quebrou — não
+precisa adivinhar. Falha em `typecheck`/`lint` costuma ser um erro real de
+tipo ou uma regra de lint violada (não ambiental); falha em `pnpm install
+--frozen-lockfile` quase sempre significa que alguém editou um
+`package.json` sem rodar `pnpm install` de novo antes de commitar (o
+lockfile ficou desatualizado).
+
+**O que isto NÃO impede:** o workflow roda em `push` e `pull request`, mas
+por si só não bloqueia ninguém de dar push direto na `main` com o CI
+vermelho — ele avisa depois do fato. Para bloquear de verdade, é preciso
+ativar "Require status checks to pass before merging" na proteção da branch
+`main`, nas configurações do repositório no GitHub — isso é uma
+configuração do repositório, não deste arquivo de workflow, e não foi
+ativada nesta entrega.

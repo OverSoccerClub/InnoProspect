@@ -1,0 +1,83 @@
+name: CI
+
+# CI do InnoProspect (monorepo pnpm + Turborepo).
+#
+# O QUE ESTE WORKFLOW VALIDA: que o código instala com o lockfile congelado,
+# tipa, linta e passa nos testes automatizados (Vitest) num ambiente limpo
+# (Ubuntu, Node 22, pnpm 9.12.0 — as MESMAS versões que apps/web/Dockerfile e
+# apps/worker/Dockerfile usam em produção; não chutadas).
+#
+# O QUE ELE NÃO VALIDA — ver "DEPLOY.md §9" para a lista completa e o porquê:
+# - Que `prisma migrate deploy` aplica de verdade contra um Postgres real.
+# - Que a Evolution API responde, ou que o worker conecta num Redis real.
+# - Que os Dockerfiles buildam (`docker build` não roda aqui).
+# - Que o `next build` de produção compila — de propósito NÃO roda aqui:
+#   exigiria segredos reais (ou placeholders que não provam nada sobre o
+#   build do EasyPanel) para gerar um artefato que este workflow não usa
+#   para nada. O primeiro build real continua sendo o do EasyPanel.
+#
+# DATABASE_URL abaixo é um PLACEHOLDER, não um segredo — o MESMO valor usado
+# como default do `ARG DATABASE_URL` nos Dockerfiles. `prisma generate` só
+# precisa de uma URL com formato válido para resolver o schema do Prisma;
+# nenhuma conexão real é feita. NUNCA troque este valor por uma credencial
+# de verdade.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancela uma execução anterior do mesmo PR/branch quando chega um push novo
+# — evita gastar minutos de CI rodando uma versão já obsoleta do código.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Placeholder de formato válido — NÃO é uma credencial real. Ver nota no
+  # topo deste arquivo e a tabela "build-arg vs runtime" em DEPLOY.md §5.
+  DATABASE_URL: 'postgresql://user:pass@localhost:5432/placeholder'
+
+jobs:
+  build-and-test:
+    name: Typecheck, lint e testes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Precisa vir ANTES do actions/setup-node com cache:'pnpm' — o
+      # setup-node usa o próprio pnpm (já no PATH) para descobrir o
+      # diretório do store a cachear.
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Instalar dependências (lockfile congelado)
+        run: pnpm install --frozen-lockfile
+
+      # O script raiz `pnpm test` roda `pnpm -r --if-present run test`, que
+      # NÃO passa pelo grafo do Turborepo (turbo.json não orquestra a task
+      # `test`) — por isso o Prisma Client precisa ser gerado explicitamente
+      # aqui. `pnpm typecheck` já dispara `generate` sozinho via
+      # `turbo.json` (`dependsOn: ["^generate", "generate"]`), mas não custa
+      # nada gerar uma vez só, antes de tudo, e garantir os dois.
+      - name: Gerar Prisma Client (@inno/db)
+        run: pnpm --filter @inno/db run generate
+
+      - name: Typecheck (tsc --noEmit em cada workspace)
+        run: pnpm typecheck
+
+      - name: Lint (ESLint)
+        run: pnpm lint
+
+      - name: Testes automatizados (Vitest)
+        run: pnpm test

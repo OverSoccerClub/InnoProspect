@@ -5,3 +5,5 @@
 - [Deploy EasyPanel (Fase 5.5)](infra_deploy_easypanel.md) — Dockerfiles, compose completo, DEPLOY.md, pendências (backup, alertas)
 - [Bug pnpm hoisting em Docker monorepo](feedback_pnpm_docker_monorepo_gotchas.md) — node_modules não consolida na raiz sem --shamefully-hoist
 - [Backup/restore, headers CSP, Evolution API confirmada (2026-08)](infra_backup_evolution_headers_2026-08.md) — pré-dado-real: infra/backup/, next.config.ts headers(), v2.3.7 evoapicloud, docker-compose.yml mantido dev-only
+- [CI GitHub Actions (2026-09-22)](infra_ci_github_actions.md) — ci.yml: Node 22/pnpm 9.12.0, generate explícito antes do test, DATABASE_URL placeholder
+- [Auditoria de dependências (2026-09-22)](infra_dependency_audit_2026-09.md) — mudou de 3 high+1 moderate p/ 3 critical+9 high; next@15.5.22 tem RCE acionável, bump p/ >=15.5.24
