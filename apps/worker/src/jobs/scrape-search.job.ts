@@ -291,8 +291,20 @@ async function handleScrapeFailure(
   // na própria SearchTask (schema do Cronos, default 3) — o menor prevalece.
   const effectiveMaxAttempts = Math.min(policy.maxAttempts, task.maxAttempts);
 
+  // INCIDENTE (Vulcano, 2026-09-22): logar `err: message` (string) em vez do
+  // objeto Error faz o serializer padrão do pino (`pino-std-serializers`,
+  // que só age sobre valor "error-like") devolver a string intocada — a
+  // cadeia `cause` (ex.: `ScrapeError('BROWSER_CRASH', ..., { cause: err })`
+  // em packages/scraper/src/engine/browser.ts) fica MUDA no log, mesmo
+  // existindo em memória. Passar o Error de verdade (como já se faz duas
+  // linhas abaixo, no catch de sanidade, e em requeue-orphans.ts) faz o
+  // serializer encadear mensagem+stack de TODAS as causas — foi isso que
+  // transformou "Falha ao iniciar o Chromium" (sem pista nenhuma) em 20min
+  // de investigação até achar a mensagem real do Playwright.
+  const errForLog = err instanceof Error ? err : new Error(message);
+
   logger.error(
-    { searchTaskId: task.id, code, attempt: task.attempt, effectiveMaxAttempts, err: message },
+    { searchTaskId: task.id, code, attempt: task.attempt, effectiveMaxAttempts, err: errForLog },
     'falha ao processar SearchTask',
   );
 

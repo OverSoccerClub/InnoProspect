@@ -67,13 +67,51 @@
 #   o Chromium é usado hoje (ver browser.ts). Não falha o build se os
 #   caminhos não existirem/mudarem entre versões da imagem base.
 #
+# INCIDENTE REAL DE PRODUÇÃO (Vulcano, 2026-09-22) — TODA SearchTask falhando:
+# `{"code":"BROWSER_CRASH","attempt":3,"effectiveMaxAttempts":3,"err":"Falha
+# ao iniciar o Chromium",...}`, em TODOS os municípios, 3 tentativas cada. O
+# worker estava saudável no resto (Postgres, Redis, fila, retry/backoff) — só
+# o Chromium não subia. Causa raiz: `packages/scraper/package.json` pedia
+# `playwright: ^1.49.1` (caret, sem trava), o `pnpm-lock.yaml` resolveu
+# `playwright@1.62.1` num `pnpm install` de rotina, e a imagem base
+# `mcr.microsoft.com/playwright:v1.49.1-jammy` só tem o Chromium que a 1.49.1
+# espera em `/ms-playwright` — a 1.62 procura uma revisão que não existe ali.
+# Diagnóstico demorou ~20min porque o log do worker
+# (`apps/worker/src/jobs/scrape-search.job.ts`, `handleScrapeFailure`) só
+# gravava `err.message` ("Falha ao iniciar o Chromium", genérico) e descartava
+# a `cause` real (a mensagem de baixo nível do Playwright, que diria o caminho
+# exato do executável ausente) — corrigido para logar o objeto `Error`
+# completo (pino encadeia `cause` automaticamente quando o valor é
+# error-like).
+# Conserto AQUI: as duas pontas vão para **1.62.1** — `playwright` fixado em
+# `1.62.1` SEM `^` em `packages/scraper/package.json` (não bumpa mais sozinho
+# num `pnpm update` solto) e `ARG PLAYWRIGHT_VERSION=v1.62.1` abaixo.
+#
+# Por que subir a imagem em vez de rebaixar o pacote para 1.49.1 (que era a
+# proposta inicial): 1.62.1 é a versão contra a qual o projeto inteiro já
+# roda — os 366 testes, o typecheck e o lint passaram nela. Descer para
+# 1.49.1 colocaria em produção uma versão nunca exercitada aqui, e um
+# Chromium ~21 meses mais velho num scraper de Google Maps é pior para
+# detecção. A opção foi descartada antes por não se conseguir confirmar a
+# tag; ela existe — `GET https://mcr.microsoft.com/v2/playwright/manifests/
+# v1.62.1-jammy` responde 200, e uma tag inventada responde 404 (controle
+# feito, 2026-09-22), então o 200 significa mesmo "existe".
+#
+# Mais a guarda de build no stage `deps` abaixo, que FALHA o build se a
+# versão instalada do pacote `playwright` divergir do `ARG PLAYWRIGHT_VERSION`
+# desta imagem — mesmo espírito da guarda de `@inno/*` do stage `build`. Isso
+# torna o bump futuro seguro: se algum dia quiser subir de versão, precisa
+# mexer nos DOIS lados de propósito, e o build avisa alto e claro se esquecer
+# um deles.
+#
 # ⚠️ NÃO validado com `docker build` nesta máquina (sem Docker instalado).
-# Em especial, o caminho exato de `PLAYWRIGHT_BROWSERS_PATH` e a existência
-# do usuário `pwuser` PRECISAM ser conferidos no primeiro build real (rodar
+# Em especial, o caminho exato de `PLAYWRIGHT_BROWSERS_PATH`, a existência
+# do usuário `pwuser` e a NOVA guarda de versão do Playwright (stage `deps`)
+# PRECISAM ser conferidos no primeiro build real (rodar
 # `echo $PLAYWRIGHT_BROWSERS_PATH` dentro de um container da imagem base
-# `mcr.microsoft.com/playwright:v1.49.1-jammy` antes de confiar cegamente).
+# `mcr.microsoft.com/playwright:v1.62.1-jammy` antes de confiar cegamente).
 
-ARG PLAYWRIGHT_VERSION=v1.49.1
+ARG PLAYWRIGHT_VERSION=v1.62.1
 
 # ---------- Stage 1: base ----------
 FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-jammy AS base
@@ -84,6 +122,10 @@ RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 
 # ---------- Stage 2: deps (install COMPLETO — precisa das devDependencies pra buildar) ----------
 FROM base AS deps
+# ARG é global (declarado antes do 1º FROM), mas cada stage tem seu PRÓPRIO
+# escopo de ARG — sem redeclarar aqui, $PLAYWRIGHT_VERSION viria vazio dentro
+# deste stage (só vale nas linhas FROM). Ver guarda abaixo.
+ARG PLAYWRIGHT_VERSION
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/db/package.json packages/db/package.json
@@ -91,6 +133,45 @@ COPY packages/core/package.json packages/core/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/scraper/package.json packages/scraper/package.json
 RUN pnpm install --frozen-lockfile --filter worker... --shamefully-hoist
+
+# INCIDENTE REAL DE PRODUÇÃO (Vulcano, 2026-09-22): toda SearchTask falhava
+# com BROWSER_CRASH/"Falha ao iniciar o Chromium", 3 tentativas, em TODOS os
+# municípios. Causa: `packages/scraper/package.json` pedia `playwright:
+# ^1.49.1`, o `pnpm-lock.yaml` resolveu playwright@1.62.1 (semver caret sem
+# nenhuma trava), e a imagem base `mcr.microsoft.com/playwright:v1.49.1-jammy`
+# só tem o Chromium da 1.49.1 em `/ms-playwright` — a 1.62 procura uma
+# revisão de Chromium que não existe na imagem e o `chromium.launch()` do
+# packages/scraper/src/engine/browser.ts morre no boot do worker.
+#
+# Conserto: `packages/scraper/package.json` agora fixa "playwright": "1.62.1"
+# SEM `^` — nenhum `pnpm update` futuro bumpa essa dependência sozinho, e
+# mudar de versão exige uma decisão explícita (editar os dois lados: este
+# ARG e aquele package.json). A guarda abaixo é o que torna essa divergência
+# IMPOSSÍVEL de passar batido de novo: se alguém trocar só um lado (ex.: rodar
+# `pnpm update playwright` no scraper sem tocar aqui, ou bumpar só o
+# PLAYWRIGHT_VERSION deste Dockerfile), o build FALHA aqui — antes do stage
+# `build` custoso (tsup/prisma) — com a versão exata dos dois lados na
+# mensagem, em vez de morrer silenciosamente 3x por SearchTask em produção.
+RUN node -e "\
+const fs = require('fs');\
+const imageVersion = (process.env.PLAYWRIGHT_VERSION || '').replace(/^v/, '');\
+const pkgPath = 'node_modules/playwright/package.json';\
+if (!imageVersion) {\
+  console.error('\n[Dockerfile] ARG PLAYWRIGHT_VERSION nao chegou a este RUN (esqueceu o ARG PLAYWRIGHT_VERSION deste stage?).');\
+  process.exit(1);\
+}\
+if (!fs.existsSync(pkgPath)) {\
+  console.error('\n[Dockerfile] '+pkgPath+' nao existe apos o pnpm install — o pacote playwright nao foi instalado onde a guarda espera.');\
+  process.exit(1);\
+}\
+const installed = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;\
+if (installed !== imageVersion) {\
+  console.error('\n[Dockerfile] DIVERGENCIA Playwright: a imagem base traz o Chromium da versao '+imageVersion+' (ARG PLAYWRIGHT_VERSION), mas o pnpm-lock.yaml resolveu playwright@'+installed+'.');\
+  console.error('[Dockerfile] Isso e o INCIDENTE de 2026-09-22 se repetindo: o worker sobe, conecta no Postgres/Redis, e todo BrowserSession.ensureBrowser() morre com BROWSER_CRASH (Chromium nao encontrado) em toda SearchTask.');\
+  console.error('[Dockerfile] Conserto: escolha 1 versao e alinhe as DUAS pontas de proposito -- \\'playwright\\' em packages/scraper/package.json (sem ^, versao EXATA) E o \\'ARG PLAYWRIGHT_VERSION\\' no topo deste Dockerfile -- depois rode pnpm install e refaca o build.\n');\
+  process.exit(1);\
+}\
+console.log('[Dockerfile] playwright@'+installed+' bate com a imagem base ('+imageVersion+').');"
 
 # ---------- Stage 3: build (gera Prisma Client + compila o worker via tsup) ----------
 FROM deps AS build

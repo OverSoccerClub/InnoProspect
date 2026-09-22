@@ -10,3 +10,5 @@
 - [O que "premium" significa pra este dono](feedback_dono_quer_premium_de_verdade.md) — densidade de dado real + gráfico + cor com intenção + estado vazio desenhado, não número solto e cinza
 - [Bug: mock GET que devolve referência viva duplica dado no React](bug_mock_get_returns_live_reference.md) — GET tem que devolver cópia; quem precisa mutar usa um getter interno separado
 - [Erro de regra de negócio viaja em details[], não em meta](convention_error_envelope_details_vs_meta.md) — path=chave semântica (resetsAt/nextWindowOpensAt/optedOutAt), message=valor cru; confirmado contra o código real do Vega
+- [Bug: middleware bloqueia rotas de metadata (icon.svg/apple-icon.png)](bug_middleware_blocks_metadata_icon_routes.md) — matcher só isenta favicon.ico; 307 pro /login em qualquer asset novo em app/, testar sempre com curl -D
+- [Modo mock precisa de sessão Auth.js real pra chegar no dashboard](project_mock_mode_needs_real_session.md) — middleware exige sessão real sempre; login() em mock só seta cookie próprio, nunca basta sozinho

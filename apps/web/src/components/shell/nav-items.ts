@@ -9,12 +9,37 @@ export type NavItem = {
   comingSoon?: boolean;
 };
 
-export const NAV_ITEMS: NavItem[] = [
-  { href: '/painel', label: 'Visão geral', icon: LayoutDashboard },
-  { href: '/buscas', label: 'Buscas', icon: Search },
-  { href: '/leads', label: 'Leads', icon: Users },
-  { href: '/templates', label: 'Templates', icon: MessageSquareText },
-  { href: '/campanhas', label: 'Campanhas', icon: Megaphone, comingSoon: true },
-  { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
-  { href: '/configuracoes', label: 'Configurações', icon: Settings },
+export type NavSection = {
+  /** `undefined` = seção sem rótulo (a 1ª, "Visão geral" sozinha — rótulo seria ruído). */
+  label?: string;
+  items: NavItem[];
+};
+
+/**
+ * Agrupado em seções (não mais uma lista plana) — "navegação com seções" foi
+ * pedido explícito da rodada de layout premium. `Sidebar` e `MobileNav`
+ * iteram `NAV_SECTIONS` (não mais `NAV_ITEMS` direto); `NavLink` continua
+ * recebendo um `NavItem` isolado, sem mudança de contrato.
+ */
+export const NAV_SECTIONS: NavSection[] = [
+  {
+    items: [{ href: '/painel', label: 'Visão geral', icon: LayoutDashboard }],
+  },
+  {
+    label: 'Prospecção',
+    items: [
+      { href: '/buscas', label: 'Buscas', icon: Search },
+      { href: '/leads', label: 'Leads', icon: Users },
+      { href: '/templates', label: 'Templates', icon: MessageSquareText },
+      { href: '/campanhas', label: 'Campanhas', icon: Megaphone, comingSoon: true },
+    ],
+  },
+  {
+    label: 'Canais',
+    items: [{ href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle }],
+  },
+  {
+    label: 'Sistema',
+    items: [{ href: '/configuracoes', label: 'Configurações', icon: Settings }],
+  },
 ];

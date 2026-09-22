@@ -30,12 +30,12 @@ const LABEL: Record<LeadActivityType, string> = {
 };
 
 /**
- * O backend registra o tipo da atividade como texto livre, entÃ£o a tela pode
- * receber um tipo que ainda nÃ£o conhece â€” foi o que quase aconteceu quando as
- * aÃ§Ãµes em massa criaram `tags_added`/`tags_removed`: `ICON[tipo]` sairia
+ * O backend registra o tipo da atividade como texto livre, então a tela pode
+ * receber um tipo que ainda não conhece — foi o que quase aconteceu quando as
+ * ações em massa criaram `tags_added`/`tags_removed`: `ICON[tipo]` sairia
  * `undefined` e o React derrubaria a ficha inteira com "tipo de elemento
- * invÃ¡lido". Um histÃ³rico com um item genÃ©rico Ã© muito melhor do que uma
- * pÃ¡gina que nÃ£o abre.
+ * inválido". Um histórico com um item genérico é muito melhor do que uma
+ * página que não abre.
  */
 function iconePara(type: string): typeof CheckCircle2 {
   return ICON[type as LeadActivityType] ?? CheckCircle2;
@@ -46,10 +46,10 @@ function rotuloPara(type: string): string {
 }
 
 /**
- * O payload guarda o valor interno do enum (`new`, `responded`...). MostrÃ¡-lo
+ * O payload guarda o valor interno do enum (`new`, `responded`...). Mostrá-lo
  * cru deixava a linha do tempo dizendo `de "new" para "responded"` na tela.
  * Traduz pelo mesmo mapa que o `LeadStatusBadge` usa; um valor desconhecido
- * (payload antigo ou estado novo ainda sem rÃ³tulo) aparece como veio em vez de
+ * (payload antigo ou estado novo ainda sem rótulo) aparece como veio em vez de
  * sumir.
  */
 function statusLabel(value: string): string {
@@ -67,7 +67,7 @@ function describePayload(activity: LeadActivity): string | null {
 
 export function LeadTimeline({ activities }: { activities: LeadActivity[] }) {
   if (activities.length === 0) {
-    return <EmptyState title="Sem atividades ainda" description="As aÃ§Ãµes sobre este lead vÃ£o aparecer aqui." />;
+    return <EmptyState title="Sem atividades ainda" description="As ações sobre este lead vão aparecer aqui." />;
   }
 
   const sorted = [...activities].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -89,10 +89,10 @@ export function LeadTimeline({ activities }: { activities: LeadActivity[] }) {
             <div className="pb-0.5">
               <p className="text-sm font-medium">
                 {rotuloPara(activity.type)}
-                {detail && <span className="font-normal text-muted-foreground"> â€” {detail}</span>}
+                {detail && <span className="font-normal text-muted-foreground"> — {detail}</span>}
               </p>
               <p className="text-xs text-muted-foreground">
-                {formatDateTime(activity.createdAt)} Â· {actorLabel(activity.actor)}
+                {formatDateTime(activity.createdAt)} · {actorLabel(activity.actor)}
               </p>
             </div>
           </li>
@@ -103,7 +103,7 @@ export function LeadTimeline({ activities }: { activities: LeadActivity[] }) {
 }
 
 function actorLabel(actor: LeadActivity['actor']): string {
-  if (actor === 'user') return 'vocÃª';
+  if (actor === 'user') return 'você';
   if (actor === 'lead') return 'o lead';
   return 'sistema';
 }

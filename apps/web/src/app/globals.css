@@ -245,3 +245,41 @@
     animation: inno-content-out 120ms ease-in;
   }
 }
+
+/* Popover/dropdown (nível "popover" da escala de elevação, DESIGN-SYSTEM.md
+ * §3 — ver `components/ui/dropdown-menu.tsx`). Mesma técnica do Dialog
+ * acima: anima só `opacity` + a propriedade `scale` isolada, nunca
+ * `transform` — o Radix já usa `transform` pra posicionar o menu relativo
+ * ao trigger (Popper), então sobrescrever `transform` aqui quebraria o
+ * posicionamento. `transform-origin` segue a variável que o próprio Radix
+ * expõe (`--radix-dropdown-menu-content-transform-origin`, via a classe
+ * `origin-[...]` no componente), então o "zoom" nasce do canto real do
+ * trigger, não de um ponto fixo. */
+@keyframes inno-popover-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+@keyframes inno-popover-out {
+  from {
+    opacity: 1;
+    scale: 1;
+  }
+  to {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .inno-popover-content[data-state='open'] {
+    animation: inno-popover-in 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .inno-popover-content[data-state='closed'] {
+    animation: inno-popover-out 100ms ease-in;
+  }
+}

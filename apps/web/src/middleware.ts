@@ -84,6 +84,25 @@ export default auth((req) => {
   return NextResponse.next();
 });
 
+/**
+ * ⚠️ Rota de arquivo estático que não estiver NESTA lista é interceptada e,
+ * sem sessão, vira 307 para `/login` — inclusive as rotas de metadado do App
+ * Router, que o Next serve a partir de `app/` e não de `public/`.
+ *
+ * Foi o que aconteceu com o ícone do app (2026-09-22): `app/icon.svg` e
+ * `app/apple-icon.png` existiam, o Next os servia em `/icon.svg` e
+ * `/apple-icon.png`, e o middleware respondia 307 para os dois. O navegador
+ * recebia a página de login no lugar da imagem, então a aba ficava sem ícone
+ * e o log só mostrava um 404/307 de favicon — sintoma que não aponta para
+ * este arquivo. `favicon.ico` já estava isento e por isso ninguém percebeu
+ * antes: era o único ícone que o projeto não tinha.
+ *
+ * Ao acrescentar qualquer arquivo em `app/` que o navegador busca sozinho
+ * (manifest, robots.txt, sitemap.xml, opengraph-image), inclua aqui E
+ * confirme com `curl -D - http://localhost:3000/<arquivo>` que a resposta é
+ * 200, não 307. São todos assets públicos de marca — nenhum dado de usuário
+ * passa por eles.
+ */
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon\\.ico|icon\\.svg|apple-icon\\.png).*)'],
 };

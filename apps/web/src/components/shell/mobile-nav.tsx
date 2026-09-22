@@ -5,7 +5,7 @@ import { Menu, Radar } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { NAV_ITEMS } from './nav-items';
+import { NAV_SECTIONS } from './nav-items';
 import { NavLink } from './nav-link';
 
 export function MobileNav() {
@@ -27,9 +27,18 @@ export function MobileNav() {
             Inno<span className="text-primary">Prospect</span>
           </DialogTitle>
         </DialogHeader>
-        <nav aria-label="Navegação principal" className="flex flex-col gap-0.5">
-          {NAV_ITEMS.map((item) => (
-            <NavLink key={item.href} item={item} onNavigate={() => setOpen(false)} />
+        <nav aria-label="Navegação principal" className="flex flex-col gap-4 overflow-y-auto">
+          {NAV_SECTIONS.map((section, index) => (
+            <div key={section.label ?? `section-${index}`} className="flex flex-col gap-0.5">
+              {section.label && (
+                <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                  {section.label}
+                </p>
+              )}
+              {section.items.map((item) => (
+                <NavLink key={item.href} item={item} onNavigate={() => setOpen(false)} />
+              ))}
+            </div>
           ))}
         </nav>
       </DialogContent>

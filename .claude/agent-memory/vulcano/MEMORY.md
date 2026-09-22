@@ -8,3 +8,4 @@
 - [CI GitHub Actions (2026-09-22)](infra_ci_github_actions.md) — ci.yml: Node 22/pnpm 9.12.0, generate explícito antes do test, DATABASE_URL placeholder
 - [Auditoria de dependências (2026-09-22)](infra_dependency_audit_2026-09.md) — mudou de 3 high+1 moderate p/ 3 critical+9 high; next@15.5.22 tem RCE acionável, bump p/ >=15.5.24
 - [Worker morre no boot: pacotes internos .ts em produção (2026-09-22)](feedback_worker_ts_workspace_packages_runtime.md) — tsup noExternal p/ core/contracts/scraper, build próprio p/ @inno/db (Prisma engine), armadilha playwright/chromium-bidi
+- [BROWSER_CRASH: playwright npm x Chromium da imagem base (2026-09-22)](feedback_playwright_chromium_version_pin.md) — pinar exato sem ^, guarda de build, e pino só encadeia `cause` se `err` for Error de verdade
