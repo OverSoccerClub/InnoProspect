@@ -15,8 +15,8 @@ anti-ban.
 ## ⚠️ Estado atual em uma linha
 
 O código evoluiu muito, mas **nada disso está no GitHub nem em produção**: o push
-está bloqueado (credencial do GitHub expirada nesta máquina, 8 commits à frente
-do remoto) e a produção devolve **404 em todas as rotas** desde pelo menos
+está bloqueado (credencial do GitHub expirada nesta máquina; `git status -sb`
+mostra quantos commits estão à frente do remoto) e a produção devolve **404 em todas as rotas** desde pelo menos
 2026-09-22. O sistema **nunca coletou um lead real nem enviou uma mensagem real**.
 
 ---
