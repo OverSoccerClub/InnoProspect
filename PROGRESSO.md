@@ -30,11 +30,33 @@ funcionar; é **volume** (campanhas) e **saber quando quebra** (alertas).
   suspeita de bloqueio ou mudança de layout.
 - Migrações aplicadas, seed de 27 UFs e ~5.570 municípios do IBGE.
 
+## Provado em 23/09/2026 — o ciclo de mensagem fecha
+
+**Mensagem fria enviada para um lead real, entregue, e resposta chegando de
+volta ao sistema.** Isso encerra a condição principal da objeção da Nova à
+Fase 4 (ver `ARQUITETURA.md §8`). Falta confirmar a última perna: **responder
+"SAIR" criando o registro de descadastro** — até isso ser visto, o motor
+automático não deve estrear.
+
+Custou três incidentes em sequência, todos na mesma integração, e vale ler os
+três juntos porque o padrão é mais útil que cada um:
+
+1. **QR ilegível** — a tela pedia código novo a cada 2s contra um endpoint que
+   reinicia o pareamento; o código morria antes de dar tempo de escanear.
+2. **Credencial em dois NÍVEIS** — a Evolution tem chave global do servidor
+   *e* chave por instância. Só a primeira era conhecida.
+3. **Credencial em dois CANAIS** — a mesma chave pode vir no cabeçalho *ou* no
+   corpo do evento. Só o cabeçalho era lido, e o campo do corpo nem estava
+   declarado no schema: era descartado antes de qualquer comparação.
+
+**O que tornou os três solucionáveis foi uma decisão pequena:** fazer a
+recusa do webhook registrar o MOTIVO no log (mantendo a resposta HTTP
+genérica, para não virar oráculo). Antes disso o sintoma era "nada acontece",
+que não dá pista de onde procurar. Regra que fica: autenticação fail-closed
+com resposta genérica precisa de log que diga o motivo real.
+
 ## O que existe mas nunca foi exercitado de verdade
 
-- **Envio real de WhatsApp.** O código está completo e testado contra mock;
-  nenhuma mensagem fria chegou a um celular real com o webhook voltando. É a
-  condição que derruba a objeção da Nova à Fase 4 — ver "Próximos passos".
 - **Restore de backup.** Configurado, nunca restaurado.
 - **`prisma migrate deploy` em CI.** O `ci.yml` diz isso em comentário: a
   `DATABASE_URL` de lá é placeholder.
