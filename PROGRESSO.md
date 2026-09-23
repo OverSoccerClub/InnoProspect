@@ -104,9 +104,23 @@ discriminadas por motivo, disparar com cadência.
 ### Bloco 4 — O motor (4.F → 4.G → 4.H)
 Primeira campanha real com **20-30 alvos em um número**, não 50 em dois.
 
+### Bloco 5 — Camada de tendência (Fase 5, `ARQUITETURA.md §8.9`)
+Ideia do dono (23/09): usar o Google Trends para escolher **em que UF**
+prospectar, em vez de decidir no escuro. O sinal escolhe onde e que perfil,
+nunca quem — alta busca por "criação de sites" no CE significa mirar empresas
+**sem site** no CE, não empresas que fazem sites (essas são concorrentes).
+
+Invariante: **tendência é conselho, nunca engrenagem** — se o Trends quebrar, a
+coleta segue idêntica. Entrega mínima: expor os filtros que já existem e ninguém
+vê (`hasWebsite`, `phoneType`, `minRating`), somar o filtro de nº de avaliações
+que falta, e só então o ranking por UF.
+
+Validar antes de construir: uma busca escolhida pelo Trends contra uma escolhida
+no escuro, comparando fechamento.
+
 ### Depois
-`DELETE /leads/:id` · decidir o `RawCapture` · configurações re-escopadas para
-diagnóstico operacional · testes de `searches.ts` e da camada HTTP.
+`DELETE /leads/:id` · configurações re-escopadas para diagnóstico operacional ·
+testes de `searches.ts` e da camada HTTP.
 
 ---
 

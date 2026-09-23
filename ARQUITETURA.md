@@ -2822,6 +2822,71 @@ tarde que a base estava errada.
 
 ---
 
+### 8.9 🆕 Fase 5 — Camada de tendência: onde prospectar, em vez de às cegas
+
+**Origem:** ideia do dono, 23/09/2026. Hoje ele escolhe nicho e UF por intuição.
+A hipótese é que o Google Trends indique **em que região existe demanda** pelos
+serviços que ele vende (sites, sistemas, plataformas, marketplaces, aplicativos,
+automação, chatbots), e que prospectar nessas regiões converta mais.
+
+**A tradução que faz a ideia funcionar — e o erro que ela evita.** O Trends mede
+quem *procura* um serviço. Essas pessoas são anônimas: não há telefone, não há
+nome, não há como alcançá-las pelo Maps. Traduzir "buscam criação de sites no CE"
+em "raspe empresas de criação de sites no CE" traria **concorrentes**, não
+clientes. A tradução correta é:
+
+> alta busca por *criação de sites* no CE → no CE, o alvo são empresas **sem
+> site**.
+
+Ou seja: o sinal escolhe **onde** e **que perfil**, nunca **quem**.
+
+**Mapeamento serviço → perfil de alvo → filtro** (todos os filtros já existem em
+`leadFilterSchema`, exceto onde marcado):
+
+| Serviço | Perfil do alvo | Filtro |
+|---|---|---|
+| Criação de sites | Empresa sem site | `hasWebsite=false` |
+| Sistemas / plataformas | Movimento real, operação manual | `minRating` + `category` |
+| Aplicativos | Base de clientes recorrente | `category` + avaliações |
+| Marketplaces | Comércio com catálogo, sem site | `category` + `hasWebsite=false` |
+| Automação / chatbots | Alto volume de atendimento | `category` + `phoneType=mobile` |
+| Tráfego / presença | Tem site, quase sem avaliações | `hasWebsite=true` + **nº de avaliações (falta)** |
+
+**Invariante da fase: a tendência é conselho, nunca engrenagem.** A coleta não
+pode depender do Trends para funcionar. Se a fonte quebrar, o sistema continua
+operando idêntico — só perde a sugestão. Isto não é preciosismo: o Trends não tem
+API pública oficial, o endpoint usado pelas bibliotecas é interno e bloqueia por
+IP, e seria a **segunda** superfície anti-bot do projeto, da mesma natureza que
+custou uma semana de incidentes em 22-23/09.
+
+**Duas leituras erradas a evitar no desenho:** o índice do Trends é **relativo**
+(0-100 contra ele mesmo no período), não volume absoluto — "100 no RN" não é mais
+buscas que "60 em SP"; e a granularidade por cidade some em termo de nicho, então
+a unidade prática é a **UF**.
+
+**Entrega mínima (só depois da Onda 1 de robustez):**
+1. Expor na tela os filtros que já existem e ninguém vê (`hasWebsite`, `phoneType`,
+   `minRating`), mais o filtro de nº de avaliações que falta.
+2. Coleta periódica e isolada de poucos termos fixos por UF, com ranking na tela
+   de nova busca ("demanda por criação de sites: CE, PB, RN em alta").
+3. "Consultas em ascensão" do Trends como fonte de **nicho** a buscar — vale mais
+   que o mapa geográfico, porque revela oportunidade que ninguém pensaria em
+   procurar.
+
+**Validação antes de construir:** rodar uma busca numa UF escolhida pelo Trends e
+outra escolhida no escuro, e comparar fechamento. Se a diferença não aparecer, a
+fase não se justifica.
+
+**⚠️ "Ampliar para o mundo inteiro" é projeto próprio, não parâmetro.** Quatro
+camadas são Brasil-específicas: a base de 5.570 municípios do IBGE com UF de duas
+letras; a normalização de telefone (DDD, 9º dígito, fixo vs. móvel); o idioma da
+query e dos seletores do Maps; e o regime jurídico — GDPR para prospecção fria na
+Europa é ordem de grandeza mais restritivo que LGPD para dado B2B público no
+Brasil, e o WhatsApp não é o canal dominante em vários países. Provar a tese
+dentro do Brasil primeiro.
+
+---
+
 ## 9. Riscos, mitigações e dívidas conscientes
 
 ### 9.1 Riscos
