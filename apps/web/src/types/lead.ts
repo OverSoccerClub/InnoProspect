@@ -12,11 +12,12 @@ import type {
   LeadBulkAction,
   LeadExportColumn,
   LeadMessageItem,
+  LeadPageSize,
   MessageItem,
   MessageStatus,
   MessageDirection,
 } from '@inno/contracts';
-export { LEAD_EXPORT_COLUMNS } from '@inno/contracts';
+export { LEAD_EXPORT_COLUMNS, LEAD_PAGE_SIZES } from '@inno/contracts';
 export type {
   BulkLeadsBody,
   BulkLeadsResponse,
@@ -24,6 +25,7 @@ export type {
   LeadBulkAction,
   LeadExportColumn,
   LeadMessageItem,
+  LeadPageSize,
   MessageItem,
   MessageStatus,
   MessageDirection,
@@ -57,6 +59,24 @@ export type LeadListItem = {
   isOptedOut: boolean;
   lastContactedAt: string | null;
   createdAt: string;
+  /**
+   * De qual busca este lead veio — SEMPRE presente (`Lead.searchJobId` é
+   * obrigatório no schema; todo lead nasce de uma busca). Onda de 2026-09-23
+   * (pedido do dono: "mostrar de qual busca/nicho eles são"). Confirmado
+   * contra `packages/contracts/src/lead.contract.ts#leadListItemSchema`
+   * (Vega) — `idSchema`, não `.nullable()`.
+   */
+  searchJobId: string;
+  /** Nicho buscado na origem (`SearchJob.niche`) — é o texto que a UI mostra, não `searchJobId`. */
+  searchNiche: string;
+  /**
+   * `true` quando a categoria real do lead diverge do nicho buscado — o Google
+   * Maps devolve resultados geograficamente próximos, não só do nicho exato
+   * (decisão do dono: nunca descartar, só marcar). Coluna persistida
+   * (`Lead.offNiche`), recalculada a cada upsert do scraping — ver
+   * `packages/core/src/leads/niche.ts#isOffNiche`.
+   */
+  offNiche: boolean;
 };
 
 export type LeadFacets = {
@@ -64,9 +84,20 @@ export type LeadFacets = {
   total: number;
 };
 
+/**
+ * `page`/`pageSize`/`total`/`totalPages` no ENVELOPE (não dentro de `page` —
+ * `page` aqui É o número da página, não um objeto de cursor). Contrato fixado
+ * pelo Atlas em 2026-09-23 para `GET /leads` — substitui a paginação por
+ * cursor usada até então (ver `PARA O PRÓXIMO` do handoff da Lyra daquele
+ * dia). Só o `apps/web` sabe disto por ora: `@inno/contracts`/`lib/services/
+ * leads.ts` ainda são cursor-based — o Vega está migrando em paralelo.
+ */
 export type LeadListResponse = {
   data: LeadListItem[];
-  page: { cursor: string | null; nextCursor: string | null; limit: number; total: number };
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
   facets: LeadFacets;
 };
 
@@ -114,12 +145,16 @@ export type LeadFilter = {
   minRating?: number;
   tags?: string[];
   optedOut?: boolean;
+  /** `true` = só divergentes do nicho buscado; `false` = só aderentes; ausente = todos. */
+  offNiche?: boolean;
   contactedInCampaign?: boolean;
   createdFrom?: string;
   createdTo?: string;
   sort?: string;
-  cursor?: string;
-  limit?: number;
+  /** Base 1 — default `1`. */
+  page?: number;
+  /** Default `25` — só `LEAD_PAGE_SIZES` (@inno/contracts), backend rejeita qualquer outro valor. */
+  pageSize?: LeadPageSize;
 };
 
 export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {

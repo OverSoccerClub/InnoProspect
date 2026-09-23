@@ -21,12 +21,14 @@ import {
 } from '@/types/lead';
 import type { LeadMessagePreviewResponse, SendLeadMessageRequest, SendLeadMessageResponse } from '@/types/lead-message';
 
-export async function listLeads(filter: LeadFilter = {}): Promise<LeadListResponse> {
-  if (USE_MOCKS) {
-    await mockDelay();
-    return mockListLeads(filter);
-  }
-  return apiGet<LeadListResponse>('/api/v1/leads', {
+/**
+ * Todo campo de `LeadFilter` que NÃO é paginação — reaproveitado por
+ * `listLeads` e `exportLeads` para os dois nunca divergirem sobre "o que é o
+ * filtro atual" (o mesmo risco que motiva `resolveLeadWhere` no backend do
+ * Vega ser compartilhado entre `listLeads`/`export`/`bulk`).
+ */
+function filterQueryParams(filter: LeadFilter) {
+  return {
     q: filter.q,
     status: filter.status,
     uf: filter.uf,
@@ -39,12 +41,31 @@ export async function listLeads(filter: LeadFilter = {}): Promise<LeadListRespon
     minRating: filter.minRating,
     tags: filter.tags,
     optedOut: filter.optedOut,
+    offNiche: filter.offNiche,
     contactedInCampaign: filter.contactedInCampaign,
     createdFrom: filter.createdFrom,
     createdTo: filter.createdTo,
+  };
+}
+
+/**
+ * `GET /api/v1/leads` — paginação NUMERADA (`page`/`pageSize`), não cursor.
+ * Contrato fixado pelo Atlas em 2026-09-23 — ver nota em `types/lead.ts`
+ * (`LeadListResponse`). Em modo real, isto assume que o backend já fala este
+ * contrato; enquanto o Vega não publicar a migração, a resposta real não vai
+ * ter `page`/`pageSize`/`totalPages` no formato esperado (ver PENDÊNCIAS do
+ * handoff da Lyra) — não é regressão desta função, é a integração pendente.
+ */
+export async function listLeads(filter: LeadFilter = {}): Promise<LeadListResponse> {
+  if (USE_MOCKS) {
+    await mockDelay();
+    return mockListLeads(filter);
+  }
+  return apiGet<LeadListResponse>('/api/v1/leads', {
+    ...filterQueryParams(filter),
     sort: filter.sort,
-    cursor: filter.cursor,
-    limit: filter.limit,
+    page: filter.page,
+    pageSize: filter.pageSize,
   });
 }
 
@@ -96,7 +117,15 @@ export async function sendLeadMessage(leadId: string, input: SendLeadMessageRequ
 }
 
 /**
- * `GET /api/v1/leads/export` — CSV com o filtro atual da tela (ARQUITETURA §4.3).
+ * `GET /api/v1/leads/export` — CSV com o filtro atual da tela (ARQUITETURA §4.3),
+ * SEM paginação: sempre o dump completo do que o filtro resolve, nunca só a
+ * página visível — é por isto que `exportLeads` recebe o mesmo `LeadFilter` da
+ * tela mas nunca `page`/`pageSize` (`filterQueryParams` de propósito não inclui
+ * paginação). Antes desta revisão só `q/status/uf/cityIbgeCode` eram
+ * repassados ao endpoint real — qualquer outro filtro ativo na tela
+ * (`searchJobId`, `offNiche`, tags, etc.) era ignorado pelo export e o CSV
+ * saía maior que a lista visível. Corrigido reaproveitando `filterQueryParams`.
+ *
  * Em modo mock, como não existe servidor gerando o arquivo, montamos o CSV no
  * cliente (mesmo formato: BOM, separador `;`, decimal com vírgula — ver
  * `mocks/leads.ts`) e disparamos como download de Blob; em modo real, é uma
@@ -110,13 +139,7 @@ export async function exportLeads(filter: LeadFilter): Promise<void> {
     triggerBlobDownload(filename, csv, 'text/csv;charset=utf-8');
     return;
   }
-  const query = toQueryString({
-    q: filter.q,
-    status: filter.status,
-    uf: filter.uf,
-    cityIbgeCode: filter.cityIbgeCode,
-    category: filter.category,
-  });
+  const query = toQueryString(filterQueryParams(filter));
   triggerUrlDownload(`/api/v1/leads/export${query}`);
 }
 

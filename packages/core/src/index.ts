@@ -3,6 +3,7 @@
  * sem Next). Ver ARQUITETURA.md §2/§3/§6.4/§6.7.
  */
 export * from './leads/dedupe.js';
+export * from './leads/niche.js';
 export * from './leads/phone.js';
 export * from './leads/status.js';
 export * from './templates/render.js';

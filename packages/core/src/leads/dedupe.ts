@@ -32,6 +32,12 @@ export const MACHINE_UPDATABLE_FIELDS = [
   'latitude',
   'longitude',
   'lastSeenAt',
+  // 🆕 2026-09-23: DERIVADO de `category` (acima, máquina/mutável) + o nicho
+  // da busca de ORIGEM (`Lead.searchJobId`, imutável) — recalculado a cada
+  // upsert para acompanhar uma correção de categoria do Google Maps entre
+  // uma coleta e outra. Ver packages/core/src/leads/niche.ts (`isOffNiche`)
+  // para o critério e a limitação sobre recoleta por outra busca.
+  'offNiche',
 ] as const;
 export type MachineUpdatableField = (typeof MACHINE_UPDATABLE_FIELDS)[number];
 

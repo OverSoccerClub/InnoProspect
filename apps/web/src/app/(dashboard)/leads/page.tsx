@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/common/page-header';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorState } from '@/components/common/error-state';
 import { LoadingRows } from '@/components/common/loading-rows';
+import { Pagination } from '@/components/common/pagination';
 import { LeadBulkToolbar } from '@/components/leads/lead-bulk-toolbar';
 import { EMPTY_LEADS_FILTER, LeadFilters, type LeadsFilterState } from '@/components/leads/lead-filters';
 import { LeadTable } from '@/components/leads/lead-table';
@@ -18,10 +19,16 @@ import { Table, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useLeads } from '@/hooks/useLeads';
 import { exportLeads } from '@/lib/api/leads';
+import { clampPage } from '@/lib/pagination';
+import { cn } from '@/lib/utils';
+import { LEAD_PAGE_SIZES, type LeadPageSize } from '@/types/lead';
 
 export default function LeadsPage() {
   const [filters, setFilters] = useState<LeadsFilterState>(EMPTY_LEADS_FILTER);
   const debouncedQ = useDebouncedValue(filters.q, 300);
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<LeadPageSize>(LEAD_PAGE_SIZES[0]);
 
   const apiFilter = useMemo(
     () => ({
@@ -29,22 +36,54 @@ export default function LeadsPage() {
       status: filters.status.length > 0 ? filters.status : undefined,
       uf: filters.uf ? [filters.uf] : undefined,
       cityIbgeCode: filters.cityIbgeCode ? [filters.cityIbgeCode] : undefined,
-      limit: 25,
+      searchJobId: filters.searchJobId || undefined,
+      offNiche: filters.offNiche === '' ? undefined : filters.offNiche === 'true',
+      page,
+      pageSize,
     }),
-    [debouncedQ, filters.status, filters.uf, filters.cityIbgeCode],
+    [debouncedQ, filters.status, filters.uf, filters.cityIbgeCode, filters.searchJobId, filters.offNiche, page, pageSize],
   );
 
-  const { response, isLoading, isLoadingMore, error, loadMore, refetch } = useLeads(apiFilter);
+  const { response, isLoading, error, refetch } = useLeads(apiFilter);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
-  const hasAnyFilter = Boolean(filters.q || filters.status.length > 0 || filters.uf || filters.cityIbgeCode);
+  const hasAnyFilter = Boolean(
+    filters.q || filters.status.length > 0 || filters.uf || filters.cityIbgeCode || filters.searchJobId || filters.offNiche,
+  );
   const leads = response?.data ?? [];
+  // Uma vez que já carregou pela 1ª vez, uma troca de página/filtro NUNCA
+  // mais mostra o esqueleto de novo — mantém a última lista conhecida na
+  // tela, esmaecida, até a resposta nova chegar. Sem isto, cada clique em
+  // "página 2" apagava a tabela inteira por um instante (esqueleto de novo),
+  // mesmo a busca sendo rápida — a lista "pisca" a cada troca.
+  const hasLoadedOnce = response !== null;
 
-  // Seleção é sobre o conjunto visível na tela — trocar o filtro invalida a seleção anterior.
+  // Trocar qualquer filtro (ou o tamanho da página) sempre volta para a
+  // página 1 — senão o operador pode ficar "perdido" na página 6 de um
+  // resultado que agora só tem 2.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedQ, filters.status, filters.uf, filters.cityIbgeCode, filters.searchJobId, filters.offNiche, pageSize]);
+
+  // Caso real do escopo: o filtro mudou e a página que estava na tela deixou
+  // de existir (ex.: estava na 7, o resultado novo só tem 3). O efeito acima
+  // já manda pra página 1 antes de qualquer busca nova sair — este aqui é o
+  // cinto de segurança para quando a resposta mesmo assim vier com uma
+  // `totalPages` menor que a página pedida (filtro mudou por outra via, ou o
+  // backend real um dia clampar diferente do cliente).
+  useEffect(() => {
+    if (!response) return;
+    const clamped = clampPage(page, response.totalPages);
+    if (clamped !== page) setPage(clamped);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [response]);
+
+  // Seleção é sobre o conjunto visível na tela (a página atual) — trocar o
+  // filtro OU a página invalida a seleção anterior.
   useEffect(() => {
     setSelectedIds(new Set());
     setBulkNotice(null);
@@ -77,6 +116,7 @@ export default function LeadsPage() {
     setExportError(null);
     setIsExporting(true);
     try {
+      // Exporta o FILTRO inteiro (todas as páginas), nunca só a página visível.
       await exportLeads(apiFilter);
     } catch {
       setExportError('Não foi possível gerar o CSV agora. Tente novamente.');
@@ -93,7 +133,7 @@ export default function LeadsPage() {
         meta={
           response && (
             <span className="rounded-full bg-accent px-2.5 py-0.5 text-xs font-medium text-accent-foreground">
-              <span className="tabular-nums">{response.facets.total}</span> lead(s) encontrados
+              <span className="tabular-nums">{response.total}</span> lead(s) encontrados
             </span>
           )
         }
@@ -115,7 +155,7 @@ export default function LeadsPage() {
 
       {error && <ErrorState message={error.message} onRetry={refetch} />}
 
-      {!error && isLoading && (
+      {!error && isLoading && !hasLoadedOnce && (
         <Table>
           <TableHeader>
             <TableRow>
@@ -137,49 +177,62 @@ export default function LeadsPage() {
         </Table>
       )}
 
-      {!error && !isLoading && leads.length === 0 && !hasAnyFilter && (
-        <EmptyState
-          icon={<Users className="size-8" aria-hidden="true" />}
-          title="Nenhum lead ainda"
-          description="Os leads aparecem aqui depois que uma busca é concluída. Crie uma busca para começar a coletar."
-          action={
-            <Button asChild size="sm">
-              <Link href="/buscas/nova">
-                <Search />
-                Criar uma busca
-              </Link>
-            </Button>
-          }
-        />
-      )}
-
-      {!error && !isLoading && leads.length === 0 && hasAnyFilter && (
-        <EmptyState title="Nenhum lead encontrado" description="Tente ajustar os filtros aplicados." />
-      )}
-
-      {!error && !isLoading && leads.length > 0 && (
-        <div className="flex flex-col gap-4">
-          {bulkNotice && (
-            <Alert variant="success">
-              <AlertDescription>{bulkNotice}</AlertDescription>
-            </Alert>
-          )}
-
-          {selectedIds.size > 0 && (
-            <LeadBulkToolbar
-              selectedIds={[...selectedIds]}
-              onCleared={() => setSelectedIds(new Set())}
-              onApplied={handleBulkApplied}
+      {!error && hasLoadedOnce && response && (
+        <div
+          aria-busy={isLoading}
+          className={cn('flex flex-col gap-4', isLoading && 'pointer-events-none opacity-60 transition-opacity')}
+        >
+          {leads.length === 0 && !hasAnyFilter && (
+            <EmptyState
+              icon={<Users className="size-8" aria-hidden="true" />}
+              title="Nenhum lead ainda"
+              description="Os leads aparecem aqui depois que uma busca é concluída. Crie uma busca para começar a coletar."
+              action={
+                <Button asChild size="sm">
+                  <Link href="/buscas/nova">
+                    <Search />
+                    Criar uma busca
+                  </Link>
+                </Button>
+              }
             />
           )}
 
-          <LeadTable leads={leads} selectedIds={selectedIds} onToggle={toggleOne} onToggleAll={toggleAll} />
+          {leads.length === 0 && hasAnyFilter && (
+            <EmptyState title="Nenhum lead encontrado" description="Tente ajustar os filtros aplicados." />
+          )}
 
-          {response?.page.nextCursor && (
-            <Button variant="outline" onClick={loadMore} disabled={isLoadingMore} className="w-fit self-center">
-              {isLoadingMore && <Loader2 className="animate-spin" aria-hidden="true" />}
-              {isLoadingMore ? 'Carregando…' : 'Carregar mais leads'}
-            </Button>
+          {leads.length > 0 && (
+            <>
+              {bulkNotice && (
+                <Alert variant="success">
+                  <AlertDescription>{bulkNotice}</AlertDescription>
+                </Alert>
+              )}
+
+              {selectedIds.size > 0 && (
+                <LeadBulkToolbar
+                  selectedIds={[...selectedIds]}
+                  onCleared={() => setSelectedIds(new Set())}
+                  onApplied={handleBulkApplied}
+                />
+              )}
+
+              <LeadTable leads={leads} selectedIds={selectedIds} onToggle={toggleOne} onToggleAll={toggleAll} />
+
+              <Pagination
+                page={response.page}
+                totalPages={response.totalPages}
+                pageSize={response.pageSize}
+                pageSizeOptions={LEAD_PAGE_SIZES}
+                total={response.total}
+                onPageChange={setPage}
+                // `Pagination` só oferece as opções de `LEAD_PAGE_SIZES` — o cast é seguro.
+                onPageSizeChange={(size) => setPageSize(size as LeadPageSize)}
+                isLoading={isLoading}
+                itemLabel="leads"
+              />
+            </>
           )}
         </div>
       )}

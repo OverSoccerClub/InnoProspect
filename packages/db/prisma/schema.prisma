@@ -417,6 +417,32 @@ model Lead {
   latitude    Float?
   longitude   Float?
 
+  /// Sinaliza que `category` diverge do nicho da busca de ORIGEM (abaixo,
+  /// `searchJobId` → `SearchJob.niche`) — o Google Maps devolve resultados
+  /// PRÓXIMOS ao termo buscado, não só o nicho exato (achado real do dono,
+  /// 2026-09-23: buscar "escritório de arquitetura" trouxe Magazine Luiza,
+  /// cartório, assistência técnica, copiadora — todos MANTIDOS como leads,
+  /// só sinalizados). DECISÃO DO DONO, não reabrir: marcar, nunca descartar
+  /// — nenhuma rota pode usar este campo para excluir da coleta/listagem por
+  /// padrão. Critério explicável e como mudá-lo em
+  /// packages/core/src/leads/niche.ts (`isOffNiche`). PERSISTIDO (não
+  /// calculado em tempo de consulta) por 3 motivos: auditável (o dono revê
+  /// os marcados e julga se o critério acertou), filtrável em SQL sem
+  /// comparação textual cara a cada leitura, e porque `category` legitima-
+  /// mente muda entre coletas (é MACHINE_UPDATABLE_FIELDS) — sem persistir,
+  /// toda listagem recalcularia a mesma comparação de novo. É por isso que
+  /// este campo está no bloco MÁQUINA: RECALCULADO a cada upsert (create E
+  /// update, `MACHINE_UPDATABLE_FIELDS` em packages/core/src/leads/
+  /// dedupe.ts), não travado na criação — acompanha uma correção de
+  /// categoria do Google Maps entre uma coleta e outra do MESMO lead.
+  /// LIMITAÇÃO ACEITA: é relativo ao nicho de `searchJobId`, que é ORIGEM
+  /// (imutável, ver comentário abaixo) — se o MESMO estabelecimento for
+  /// recoletado por uma busca de nicho diferente (upsert por `dedupeKey`),
+  /// o lead continua marcado relativo à busca ORIGINAL, não à nova. Ver
+  /// comentário completo em `isOffNiche` sobre por que isso não tem solução
+  /// sem deixar de tratar `searchJobId` como imutável.
+  offNiche Boolean @default(false)
+
   /// cid/place id do Google Maps, quando capturado. Maior precedência na
   /// composição do dedupeKey (ver abaixo).
   externalRef String?
@@ -503,6 +529,13 @@ model Lead {
   @@index([cityId])
   // GET /leads?searchJobId= (ficha "quem essa busca trouxe").
   @@index([searchJobId])
+  // 🆕 2026-09-23: GET /leads?searchJobId=&offNiche= — "desta busca, só os
+  // divergentes/aderentes" (ARQUITETURA/contrato de leads). Composto com
+  // `searchJobId` como coluna líder: também serve o filtro `searchJobId`
+  // sozinho (o índice simples acima já cobria isso; mantido por não haver
+  // motivo para removê-lo numa migração aditiva — revisitar se a duplicação
+  // pesar em escrita quando o volume crescer).
+  @@index([searchJobId, offNiche])
   // GET /leads?uf= — facet de alto uso na tela de leads (ARQUITETURA §4.3).
   @@index([uf])
   // Busca textual (`q=`) via ILIKE em GET /leads — pg_trgm dá índice GIN

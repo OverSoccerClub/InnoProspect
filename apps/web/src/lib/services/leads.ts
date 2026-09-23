@@ -29,6 +29,19 @@
  * alteração. Nunca falha o lote inteiro por um item ruim; só a validação de
  * ESCOPO da chamada (contagem via `expectedCount`, teto de itens) recusa a
  * chamada toda.
+ *
+ * `GET /leads` (2026-09-23, achado do dono em produção — resultados fora do
+ * nicho buscado, ex.: Magazine Luiza numa busca de "escritório de
+ * arquitetura"): `listLeads` trocou paginação por CURSOR por paginação
+ * NUMERADA (`page`/`pageSize` → `skip`/`take`, envelope FLAT com
+ * `page`/`pageSize`/`total`/`totalPages`, não mais aninhado num objeto
+ * `page`) — decisão do Atlas, custo de `OFFSET` em tabela grande registrado
+ * em `leadPaginationQuerySchema` (@inno/contracts). `Lead.offNiche` (coluna
+ * persistida, recalculada a cada upsert do scraping — ver
+ * `packages/core/src/leads/niche.ts`) ganhou filtro (`buildWhere`) e é
+ * exposto em `LeadListItem` junto com `searchJobId`/`searchNiche` — de
+ * brinde, `POST /leads/bulk` e `GET /leads/export` também passam a aceitar
+ * `filter.offNiche` (mesmo `leadFilterSchema`), sem mudança própria.
  */
 import { prisma, type Lead, type LeadStatus, type Prisma } from '@inno/db';
 import { checkStatusTransition } from '@inno/core';
@@ -75,7 +88,7 @@ async function fetchOptedOutPhones(phones: readonly (string | null)[]): Promise<
 }
 
 function toListItem(
-  lead: Lead & { city: { name: string } | null },
+  lead: Lead & { city: { name: string } | null; searchJob: { niche: string } },
   optedOutPhones: ReadonlySet<string>,
   lastContactedAt: string | null = null,
 ): LeadListItem {
@@ -95,6 +108,11 @@ function toListItem(
     tags: lead.tags,
     isOptedOut: lead.phoneE164 !== null && optedOutPhones.has(lead.phoneE164),
     lastContactedAt,
+    // 🆕 2026-09-23: origem da busca + sinal de divergência de nicho (ver
+    // `Lead.offNiche` em schema.prisma e `isOffNiche` em @inno/core).
+    searchJobId: lead.searchJobId,
+    searchNiche: lead.searchJob.niche,
+    offNiche: lead.offNiche,
     createdAt: lead.createdAt.toISOString(),
   };
 }
@@ -147,6 +165,11 @@ function buildWhere(
     const lista = [...options.todosOptedOut];
     where.phoneE164 = filter.optedOut ? { in: lista } : { notIn: lista };
   }
+  // 🆕 2026-09-23: `Lead.offNiche` é coluna persistida — filtro direto em
+  // SQL, sem comparação textual em tempo de consulta. Ver o campo no schema
+  // e `isOffNiche` (@inno/core) para o critério e por que é recalculado a
+  // cada upsert do scraping, não travado na criação.
+  if (filter.offNiche !== undefined) where.offNiche = filter.offNiche;
 
   // `contactedInCampaign`: continua no-op — depende de `Message`/
   // `CampaignTarget` serem populados pelo disparo, que é a Fase 4.
@@ -206,21 +229,23 @@ export async function listLeads(filter: ListLeadsQuery): Promise<ListLeadsRespon
     { id: 'asc' },
   ];
 
+  // 🆕 2026-09-23: paginação NUMERADA (page/pageSize), não mais cursor — ver
+  // o comentário de `leadPaginationQuerySchema` (@inno/contracts) sobre o
+  // custo de OFFSET alto em tabela grande, aceito pelo Atlas para este
+  // endpoint. `skip`/`take` substituem `cursor`/`limit + 1`.
+  const skip = (filter.page - 1) * filter.pageSize;
+
   const [total, rows, statusGroups] = await Promise.all([
     prisma.lead.count({ where: whereWithStatus }),
     prisma.lead.findMany({
       where: whereWithStatus,
-      include: { city: { select: { name: true } } },
+      include: { city: { select: { name: true } }, searchJob: { select: { niche: true } } },
       orderBy,
-      take: filter.limit + 1,
-      ...(filter.cursor ? { cursor: { id: filter.cursor }, skip: 1 } : {}),
+      skip,
+      take: filter.pageSize,
     }),
     prisma.lead.groupBy({ by: ['status'], where: whereForFacets, _count: { _all: true } }),
   ]);
-
-  const hasMore = rows.length > filter.limit;
-  const page = hasMore ? rows.slice(0, filter.limit) : rows;
-  const nextCursor = hasMore ? (page[page.length - 1]?.id ?? null) : null;
 
   const byStatus: Record<LeadStatus, number> = { ...EMPTY_STATUS_COUNTS };
   let facetsTotal = 0;
@@ -230,11 +255,17 @@ export async function listLeads(filter: ListLeadsQuery): Promise<ListLeadsRespon
   }
 
   // Uma consulta para a página inteira — não uma por lead.
-  const optedOutPhones = await fetchOptedOutPhones(page.map((lead) => lead.phoneE164));
+  const optedOutPhones = await fetchOptedOutPhones(rows.map((lead) => lead.phoneE164));
 
   return {
-    data: page.map((lead) => toListItem(lead, optedOutPhones)),
-    page: { cursor: filter.cursor ?? null, nextCursor, limit: filter.limit, total },
+    data: rows.map((lead) => toListItem(lead, optedOutPhones)),
+    // FLAT no envelope (não aninhado num objeto `page`) — ver o comentário de
+    // `listLeadsResponseSchema` (@inno/contracts): formato conferido contra o
+    // que a Lyra já consome (`apps/web/src/types/lead.ts#LeadListResponse`).
+    page: filter.page,
+    pageSize: filter.pageSize,
+    total,
+    totalPages: Math.ceil(total / filter.pageSize),
     facets: { byStatus, total: facetsTotal },
   };
 }
@@ -244,6 +275,7 @@ export async function getLeadDetail(id: string): Promise<LeadDetail> {
     where: { id },
     include: {
       city: { select: { name: true } },
+      searchJob: { select: { niche: true } },
       activities: { orderBy: { createdAt: 'desc' } },
     },
   });

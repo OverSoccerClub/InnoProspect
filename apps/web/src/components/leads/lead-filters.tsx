@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import { useSearchJobs } from '@/hooks/useSearchJobs';
 import { useUfs } from '@/hooks/useUfs';
 import { listCities } from '@/lib/api/locations';
 import { cn } from '@/lib/utils';
@@ -16,9 +17,20 @@ export type LeadsFilterState = {
   status: LeadStatus[];
   uf: string;
   cityIbgeCode: string;
+  /** id de `SearchJobSummary` (vazio = todas as buscas). */
+  searchJobId: string;
+  /** `''` = todos, `'true'` = só fora do nicho, `'false'` = só aderentes — `<select>` nativo só fala string. */
+  offNiche: '' | 'true' | 'false';
 };
 
-export const EMPTY_LEADS_FILTER: LeadsFilterState = { q: '', status: [], uf: '', cityIbgeCode: '' };
+export const EMPTY_LEADS_FILTER: LeadsFilterState = {
+  q: '',
+  status: [],
+  uf: '',
+  cityIbgeCode: '',
+  searchJobId: '',
+  offNiche: '',
+};
 
 const ALL_STATUSES = Object.keys(LEAD_STATUS_LABEL) as LeadStatus[];
 
@@ -31,6 +43,9 @@ export function LeadFilters({
 }) {
   const { ufs } = useUfs();
   const [cities, setCities] = useState<City[]>([]);
+  // Todas as buscas (não paginado aqui — se um dia passar de ~100 buscas,
+  // isto precisa virar um combobox com busca; ver PENDÊNCIAS do handoff).
+  const { jobs: searchJobs, isLoading: isLoadingSearchJobs } = useSearchJobs({ limit: 100 });
 
   useEffect(() => {
     if (!value.uf) {
@@ -54,11 +69,18 @@ export function LeadFilters({
     });
   }
 
-  const hasActiveFilters = Boolean(value.q || value.status.length > 0 || value.uf || value.cityIbgeCode);
+  const hasActiveFilters = Boolean(
+    value.q || value.status.length > 0 || value.uf || value.cityIbgeCode || value.searchJobId || value.offNiche,
+  );
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      {/* `sm:flex-wrap`: com 6 controles (busca + 4 selects + botão), uma única
+          linha sem wrap ultrapassaria a largura da tela em telas médias —
+          shrink de flex item sem `min-width:0` não é garantia contra overflow
+          (mesma causa raiz do bug de tabela já registrado na memória). Quebra
+          em 2 linhas antes de estourar, em vez de rolar a página inteira. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
         <Input
           aria-label="Buscar por nome, telefone ou endereço"
           placeholder="Buscar leads…"
@@ -92,6 +114,30 @@ export function LeadFilters({
               {city.nome}
             </option>
           ))}
+        </Select>
+        <Select
+          aria-label="Filtrar por busca de origem"
+          value={value.searchJobId}
+          onChange={(e) => onChange({ ...value, searchJobId: e.target.value })}
+          disabled={isLoadingSearchJobs && searchJobs.length === 0}
+          className="sm:max-w-[220px]"
+        >
+          <option value="">Todas as buscas</option>
+          {searchJobs.map((job) => (
+            <option key={job.id} value={job.id}>
+              {job.name}
+            </option>
+          ))}
+        </Select>
+        <Select
+          aria-label="Filtrar por aderência ao nicho buscado"
+          value={value.offNiche}
+          onChange={(e) => onChange({ ...value, offNiche: e.target.value as LeadsFilterState['offNiche'] })}
+          className="sm:max-w-[190px]"
+        >
+          <option value="">Nicho: todos os leads</option>
+          <option value="false">Só aderentes ao nicho</option>
+          <option value="true">Só fora do nicho</option>
         </Select>
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={() => onChange(EMPTY_LEADS_FILTER)}>

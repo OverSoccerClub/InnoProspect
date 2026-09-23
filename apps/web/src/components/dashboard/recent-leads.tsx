@@ -13,6 +13,7 @@ import { listLeads } from '@/lib/api/leads';
 import { formatRelative } from '@/lib/format';
 import type { LeadListItem } from '@/types/lead';
 
+const PAGE_SIZE = 25;
 const LIMIT = 5;
 
 /** Leads recentes — mesmo `GET /api/v1/leads` que a tela Leads já usa, ordenado por `createdAt` (padrão do contrato). */
@@ -26,7 +27,9 @@ export function RecentLeads() {
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-    listLeads({ limit: LIMIT })
+    // `pageSize` só aceita 25|50|100 (contrato) — pega a menor página válida
+    // e corta no cliente para os `LIMIT` mais recentes deste card.
+    listLeads({ page: 1, pageSize: PAGE_SIZE })
       .then((res) => {
         if (!cancelled) setLeads(res.data.slice(0, LIMIT));
       })

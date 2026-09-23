@@ -69,6 +69,7 @@ export function LeadBulkToolbar({
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-sm font-medium text-foreground">
           {selectedIds.length} {selectedIds.length === 1 ? 'lead selecionado' : 'leads selecionados'}
+          <span className="ml-1 font-normal text-muted-foreground">nesta página</span>
         </span>
 
         <div className="flex items-center gap-1.5">

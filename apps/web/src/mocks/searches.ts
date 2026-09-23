@@ -8,6 +8,31 @@ import type {
 import { mockListCities } from './locations';
 import { mockNotFound, mulberry32 } from './utils';
 
+/**
+ * Nicho de busca ↔ categoria de lead, 1:1 — fonte única para os ids/nichos
+ * usados tanto na seed de `SearchJob` abaixo quanto na atribuição de
+ * `searchJobId`/`searchNiche`/`offNiche` de cada lead mockado
+ * (`mocks/leads.ts`). Sem isto, os dois arquivos inventariam ids diferentes
+ * para "a busca de clínica odontológica", e o filtro "por busca" da tela de
+ * leads mostraria opções que a tela de buscas nunca lista.
+ *
+ * `'Escritório de arquitetura'` é a busca real que motivou o pedido do dono
+ * (2026-09-23): "escritório de arquitetura" trouxe Magazine Luiza, Cartório,
+ * loja de informática e copiadora — resultados geograficamente próximos, não
+ * do nicho. `mocks/leads.ts` usa esta entrada para reproduzir esse cenário.
+ */
+export const LEAD_ORIGIN_JOB_BY_CATEGORY: Record<string, { id: string; niche: string; uf: string }> = {
+  'Clínica odontológica': { id: 'search_running_demo', niche: 'clínica odontológica', uf: 'SP' },
+  Restaurante: { id: 'search_completed_demo', niche: 'restaurante', uf: 'ES' },
+  'Escritório de advocacia': { id: 'search_failed_demo', niche: 'escritório de advocacia', uf: 'MG' },
+  'Pet shop': { id: 'search_cancelled_demo', niche: 'pet shop', uf: 'RJ' },
+  'Salão de beleza': { id: 'search_salao_demo', niche: 'salão de beleza', uf: 'SP' },
+  Academia: { id: 'search_academia_demo', niche: 'academia', uf: 'MG' },
+  'Loja de roupas': { id: 'search_roupas_demo', niche: 'loja de roupas', uf: 'RJ' },
+  'Oficina mecânica': { id: 'search_oficina_demo', niche: 'oficina mecânica', uf: 'SP' },
+  'Escritório de arquitetura': { id: 'search_arquitetura_demo', niche: 'escritório de arquitetura', uf: 'SP' },
+};
+
 type MockJob = {
   id: string;
   name: string;
@@ -221,6 +246,73 @@ function seedIfNeeded() {
       cities: pbCities,
       secondsPerTask: 4,
       failCount: 3,
+    },
+    // As 5 abaixo existem para dar origem consistente aos leads mockados
+    // (`mocks/leads.ts`, via `LEAD_ORIGIN_JOB_BY_CATEGORY`) — sem elas, o
+    // filtro "por busca" da tela de leads teria opções que esta lista nunca
+    // mostra. Todas `completed`, sem falha (o interesse aqui é a origem, não
+    // mais um cenário de erro — já cobertos acima).
+    {
+      id: 'search_salao_demo',
+      name: 'salão de beleza — SP',
+      niche: 'salão de beleza',
+      uf: 'SP',
+      createdAtMs: now - 172_800_000,
+      createdAt: new Date(now - 172_800_000).toISOString(),
+      live: false,
+      fixedStatus: 'completed',
+      cities: spCities.slice(0, 6),
+      secondsPerTask: 4,
+    },
+    {
+      id: 'search_academia_demo',
+      name: 'academia — MG',
+      niche: 'academia',
+      uf: 'MG',
+      createdAtMs: now - 259_200_000,
+      createdAt: new Date(now - 259_200_000).toISOString(),
+      live: false,
+      fixedStatus: 'completed',
+      cities: mgCities.slice(0, 6),
+      secondsPerTask: 4,
+    },
+    {
+      id: 'search_roupas_demo',
+      name: 'loja de roupas — RJ',
+      niche: 'loja de roupas',
+      uf: 'RJ',
+      createdAtMs: now - 345_600_000,
+      createdAt: new Date(now - 345_600_000).toISOString(),
+      live: false,
+      fixedStatus: 'completed',
+      cities: rjCities.slice(0, 5),
+      secondsPerTask: 4,
+    },
+    {
+      id: 'search_oficina_demo',
+      name: 'oficina mecânica — SP',
+      niche: 'oficina mecânica',
+      uf: 'SP',
+      createdAtMs: now - 432_000_000,
+      createdAt: new Date(now - 432_000_000).toISOString(),
+      live: false,
+      fixedStatus: 'completed',
+      cities: spCities.slice(6, 12),
+      secondsPerTask: 4,
+    },
+    {
+      // A busca real que motivou o pedido do dono (2026-09-23) — ver nota em
+      // `LEAD_ORIGIN_JOB_BY_CATEGORY`.
+      id: 'search_arquitetura_demo',
+      name: 'escritório de arquitetura — SP',
+      niche: 'escritório de arquitetura',
+      uf: 'SP',
+      createdAtMs: now - 518_400_000,
+      createdAt: new Date(now - 518_400_000).toISOString(),
+      live: false,
+      fixedStatus: 'completed',
+      cities: spCities.slice(0, 8),
+      secondsPerTask: 4,
     },
   );
 }

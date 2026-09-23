@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { BadgeAlert, Globe, Star } from 'lucide-react';
 
+import { LeadOrigin } from '@/components/leads/lead-origin';
 import { LeadStatusBadge } from '@/components/leads/lead-status-badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -98,6 +99,7 @@ export function LeadTable({
                         )}
                       </div>
                     )}
+                    <LeadOrigin searchNiche={lead.searchNiche} offNiche={lead.offNiche} />
                   </div>
                 </div>
               </TableCell>

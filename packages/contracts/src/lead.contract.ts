@@ -17,8 +17,6 @@ import {
   leadStatusSchema,
   messageDirectionSchema,
   messageStatusSchema,
-  paginatedSchema,
-  paginationQuerySchema,
   phoneTypeSchema,
   ufSchema,
 } from './common.js';
@@ -70,13 +68,68 @@ export const leadFilterSchema = z.object({
   /** default `false` = esconde opt-outs (ARQUITETURA §4.3). */
   optedOut: booleanQuerySchema,
   contactedInCampaign: booleanQuerySchema,
+  /**
+   * 🆕 2026-09-23 (achado do dono em produção): `true` = só os leads cuja
+   * `category` diverge do nicho da busca de ORIGEM (`Lead.offNiche`); `false`
+   * = só os aderentes; ausente = todos. Critério em
+   * `packages/core/src/leads/niche.ts` (`isOffNiche`) — NUNCA usado para
+   * excluir da coleta, só para filtrar a listagem quando o operador pedir.
+   * Reaproveitado de brinde por `POST /leads/bulk` (`filter`) e
+   * `GET /leads/export` (mesmo `leadFilterSchema`) — não pedido
+   * explicitamente para os dois, mas nenhum dos dois precisou de mudança
+   * própria para ganhar isto.
+   */
+  offNiche: booleanQuerySchema,
   createdFrom: isoDateTimeSchema.optional(),
   createdTo: isoDateTimeSchema.optional(),
 });
 export type LeadFilter = z.infer<typeof leadFilterSchema>;
 
-/** `GET /api/v1/leads` — filtro + paginação + ordenação. */
-export const listLeadsQuerySchema = leadFilterSchema.merge(paginationQuerySchema).extend({
+// ─────────────────────────────────────────────────────────────────────────
+// Paginação numerada de `GET /leads` — 🆕 2026-09-23, substitui a paginação
+// por cursor (`common.ts#paginationQuerySchema`/`pageInfoSchema`) SÓ para
+// este endpoint. Pedido do dono: seletor de "quantos por página" +
+// navegação por número de página, o que exige acesso por OFFSET (cursor não
+// dá para "ir direto para a página 7"). As demais listagens
+// (`search.contract.ts`, `template.contract.ts`, `campaign.contract.ts`,
+// `optout.contract.ts`) CONTINUAM em `paginationQuerySchema`/`pageInfoSchema`
+// — não tocadas por esta mudança.
+//
+// ⚠️ CUSTO REGISTRADO (pedido explícito do Atlas): `OFFSET` alto degrada em
+// tabela grande — o Postgres ainda PRECISA percorrer e descartar as `OFFSET`
+// linhas anteriores antes de devolver a página, então o custo de "página 400
+// com pageSize=100" (offset 40.000) cresce quase linearmente com o número da
+// página, não é O(1) como o cursor. Com 10k-500k leads (ARQUITETURA, ano 1):
+// nas primeiras páginas (uso real esperado — ninguém navega manualmente até
+// a página 4.000) o custo é irrelevante; no fim de uma base de 500k com
+// pageSize=25 (20.000 páginas), a última página exigiria escanear/descartar
+// ~499.975 linhas do índice de ordenação a cada requisição — caro. Cursor
+// não tem esse problema porque salta direto pelo índice a partir do último
+// id visto, sem descartar nada.
+// MITIGAÇÃO ACEITA para o MVP: nenhuma — decisão do Atlas foi paginação
+// numerada mesmo com esse custo, porque o padrão de uso real (dashboard
+// interno, poucos operadores, filtros que reduzem a base antes de paginar)
+// raramente chega a páginas profundas. Se isso se tornar um problema medido
+// em produção, a saída SEM mudar o contrato de novo é o serviço trocar a
+// implementação por keyset pagination "disfarçada" de página numerada
+// (mantendo um mapa página→cursor em cache, populado conforme o operador
+// navega sequencialmente) — não implementado agora por ser complexidade sem
+// necessidade medida ainda.
+export const LEAD_PAGE_SIZES = [25, 50, 100] as const;
+export type LeadPageSize = (typeof LEAD_PAGE_SIZES)[number];
+
+export const leadPaginationQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z
+    .preprocess((val) => (val === undefined || val === null || val === '' ? 25 : val), z.coerce.number().int())
+    .refine((val): val is LeadPageSize => (LEAD_PAGE_SIZES as readonly number[]).includes(val), {
+      message: `pageSize deve ser um de: ${LEAD_PAGE_SIZES.join(', ')}`,
+    }),
+});
+export type LeadPaginationQuery = z.infer<typeof leadPaginationQuerySchema>;
+
+/** `GET /api/v1/leads` — filtro + paginação numerada + ordenação. */
+export const listLeadsQuerySchema = leadFilterSchema.merge(leadPaginationQuerySchema).extend({
   sort: leadSortSchema,
 });
 export type ListLeadsQuery = z.infer<typeof listLeadsQuerySchema>;
@@ -101,6 +154,12 @@ export const leadListItemSchema = z.object({
   tags: z.array(z.string()),
   isOptedOut: z.boolean(),
   lastContactedAt: isoDateTimeSchema.nullable(),
+  /** 🆕 2026-09-23: busca de ORIGEM deste lead (`Lead.searchJobId`, imutável). */
+  searchJobId: idSchema,
+  /** 🆕 2026-09-23: `SearchJob.niche` da busca de origem — para exibir ao lado de `offNiche` sem 2ª chamada. */
+  searchNiche: z.string(),
+  /** 🆕 2026-09-23: `true` = `category` diverge do nicho de origem — ver `leadFilterSchema.offNiche`. NUNCA é motivo de exclusão automática. */
+  offNiche: z.boolean(),
   createdAt: isoDateTimeSchema,
 });
 export type LeadListItem = z.infer<typeof leadListItemSchema>;
@@ -112,7 +171,22 @@ export const leadFacetsSchema = z.object({
 });
 export type LeadFacets = z.infer<typeof leadFacetsSchema>;
 
-export const listLeadsResponseSchema = paginatedSchema(leadListItemSchema).extend({
+/**
+ * 🆕 2026-09-23: `page`/`pageSize`/`total`/`totalPages` FLAT no envelope
+ * (não mais aninhados num objeto `page`) — aqui `page` É o número da
+ * página, não um objeto de cursor. Formato conferido contra o que a Lyra já
+ * consome de verdade em `apps/web/src/types/lead.ts#LeadListResponse` (ela
+ * implementou contra a especificação do Atlas em paralelo) — bate 1:1.
+ * Substitui o `paginatedSchema`/`pageInfoSchema` genérico por cursor de
+ * `common.ts`, só para este endpoint (ver comentário de
+ * `leadPaginationQuerySchema` acima).
+ */
+export const listLeadsResponseSchema = z.object({
+  data: z.array(leadListItemSchema),
+  page: z.number().int().min(1),
+  pageSize: z.number().int(),
+  total: z.number().int().min(0),
+  totalPages: z.number().int().min(0),
   facets: leadFacetsSchema,
 });
 export type ListLeadsResponse = z.infer<typeof listLeadsResponseSchema>;

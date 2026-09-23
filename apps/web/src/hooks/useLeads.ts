@@ -8,17 +8,21 @@ import type { LeadFilter, LeadListResponse } from '@/types/lead';
 export type UseLeadsState = {
   response: LeadListResponse | null;
   isLoading: boolean;
-  isLoadingMore: boolean;
   error: Error | null;
-  loadMore: () => void;
   refetch: () => void;
 };
 
-/** Busca leads para um filtro e acumula páginas ao chamar `loadMore` (paginação por cursor). */
+/**
+ * Busca UMA página de leads para um filtro (`filter.page`/`filter.pageSize`
+ * incluídos) — paginação NUMERADA, substituiu o acúmulo por cursor
+ * (`loadMore`) que este hook tinha antes de 2026-09-23. Cada troca de página,
+ * de registros-por-página ou de qualquer filtro dispara uma busca nova que
+ * SUBSTITUI `data` — nunca concatena, porque a tela agora mostra "página X de
+ * Y", não uma lista que cresce.
+ */
 export function useLeads(filter: LeadFilter): UseLeadsState {
   const [response, setResponse] = useState<LeadListResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -48,25 +52,7 @@ export function useLeads(filter: LeadFilter): UseLeadsState {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey, reloadKey]);
 
-  const loadMore = useCallback(() => {
-    if (!response?.page.nextCursor || isLoadingMore) return;
-    setIsLoadingMore(true);
-    listLeads({ ...filter, cursor: response.page.nextCursor })
-      .then((res) => {
-        setResponse((prev) =>
-          prev
-            ? { data: [...prev.data, ...res.data], page: res.page, facets: res.facets }
-            : res,
-        );
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err : new Error('Não foi possível carregar mais leads.'));
-      })
-      .finally(() => setIsLoadingMore(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterKey, response?.page.nextCursor, isLoadingMore]);
-
   const refetch = useCallback(() => setReloadKey((k) => k + 1), []);
 
-  return { response, isLoading, isLoadingMore, error, loadMore, refetch };
+  return { response, isLoading, error, refetch };
 }

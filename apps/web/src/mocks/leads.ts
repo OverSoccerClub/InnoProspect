@@ -1,4 +1,5 @@
 import { formatPhone } from '@/lib/format';
+import { clampPage, computeTotalPages, normalizePageSize } from '@/lib/pagination';
 import { evaluateSendWindow } from '@/lib/send-window';
 import {
   checkSpintaxSyntax,
@@ -30,6 +31,7 @@ import type {
 } from '@/types/lead-message';
 import type { TemplateItem } from '@/types/template';
 import { mockListCities, mockListUfs } from './locations';
+import { LEAD_ORIGIN_JOB_BY_CATEGORY } from './searches';
 import { mockGetTemplate } from './templates';
 import { mockConflict, mockNotFound, mockUpstreamError, mockValidationError, mulberry32, pick } from './utils';
 import {
@@ -48,6 +50,9 @@ const CATEGORIES = [
   'Academia',
   'Loja de roupas',
   'Oficina mecânica',
+  // Categoria real do pedido do dono (2026-09-23) — a busca por este nicho é
+  // a que gerou os leads "fora do nicho" abaixo (ver ARCHITECTURE_OFF_NICHE_DEMO).
+  'Escritório de arquitetura',
 ];
 
 // Nomes de empresa por categoria (fictícios, mas plausíveis) — a versão
@@ -114,6 +119,14 @@ const CATEGORY_NAME_POOL: Record<string, string[]> = {
     'Total Car Serviços',
     'Auto Peças e Serviços',
   ],
+  'Escritório de arquitetura': [
+    'Estúdio Arquitetura Viva',
+    'Atelier de Projetos Horizonte',
+    'Arquitetura & Espaço',
+    'Traço Fino Arquitetura',
+    'Casa Croqui Arquitetura',
+    'Núcleo Arquitetônico',
+  ],
 };
 
 const STATUSES: LeadStatus[] = ['new', 'validated', 'contacted', 'responded', 'negotiating', 'won', 'discarded'];
@@ -133,6 +146,69 @@ type MockLead = Omit<LeadDetail, 'messages'> & { messages: MessageItem[] };
 
 let leads: MockLead[] | null = null;
 
+/**
+ * Reproduz, com nome e categoria reais, o caso que o dono relatou
+ * (2026-09-23): buscou "escritório de arquitetura" e a lista trouxe Magazine
+ * Luiza, Cartório Benício, INFONOT Computadores e Ciano Cópias — resultados
+ * geograficamente próximos, sem relação com o nicho buscado. Ficam anexados
+ * à MESMA busca (`search_arquitetura_demo`) que os escritórios de
+ * arquitetura de verdade, para o filtro "por busca" e o selo "fora do nicho"
+ * serem verificáveis lado a lado com um cenário que o dono já viu na prática
+ * — não um exemplo genérico.
+ */
+function buildArchitectureOffNicheDemoLeads(random: () => number, startCounter: number): MockLead[] {
+  const job = LEAD_ORIGIN_JOB_BY_CATEGORY['Escritório de arquitetura']!;
+  const demo: Array<{ name: string; category: string; hasWebsite: boolean }> = [
+    // Categorias alinhadas 1:1 com o exemplo real citado em
+    // `packages/core/src/leads/niche.ts` (Vega) — mesmo relato do dono,
+    // descrito nos dois lados independentemente; manter os textos iguais
+    // evita qualquer estranheza ao comparar o critério real com este mock.
+    { name: 'Magazine Luiza', category: 'Loja de departamentos', hasWebsite: true },
+    { name: 'Cartório Benício', category: 'Cartório de registro', hasWebsite: false },
+    { name: 'INFONOT Computadores', category: 'Assistência técnica', hasWebsite: true },
+    { name: 'Ciano Cópias', category: 'Copiadora', hasWebsite: false },
+  ];
+
+  const items: MockLead[] = demo.map((item, index): MockLead => {
+    const counter = startCounter + index;
+    const id = `lead_${counter}`;
+    const createdAt = new Date(Date.now() - (10 + index) * 86_400_000).toISOString();
+    const phoneE164 = `+55119${String(70000000 + counter).padStart(8, '0')}`;
+    return {
+      id,
+      name: item.name,
+      phoneE164,
+      phoneType: 'mobile',
+      address: `Av. Paulista, ${1000 + counter} — São Paulo`,
+      city: 'São Paulo',
+      uf: 'SP',
+      website: item.hasWebsite ? `https://www.${item.name.toLowerCase().replace(/\s+/g, '')}.com.br` : null,
+      category: item.category,
+      rating: Math.round((3.5 + random() * 1.5) * 10) / 10,
+      reviewCount: Math.floor(random() * 800),
+      status: 'new',
+      tags: [],
+      isOptedOut: false,
+      lastContactedAt: null,
+      createdAt,
+      searchJobId: job.id,
+      searchNiche: job.niche,
+      offNiche: true,
+      notes: null,
+      latitude: null,
+      longitude: null,
+      source: { type: 'google_maps', url: null, collectedAt: createdAt, searchJobId: job.id },
+      firstSeenAt: createdAt,
+      lastSeenAt: createdAt,
+      activities: [
+        { id: `${id}_act_created`, leadId: id, type: 'created', payload: { source: 'scraper' }, actor: 'system', createdAt },
+      ],
+      messages: [],
+    };
+  });
+  return items;
+}
+
 function buildLeads(): MockLead[] {
   const random = mulberry32(42);
   const ufs = mockListUfs().filter((u) => ['SP', 'ES', 'MG', 'RJ', 'BA'].includes(u.sigla));
@@ -145,6 +221,18 @@ function buildLeads(): MockLead[] {
       const leadsInCity = 2 + Math.floor(random() * 4);
       for (let i = 0; i < leadsInCity; i++) {
         const category = pick(CATEGORIES, random);
+        // Origem da busca: por padrão a busca cujo nicho é a própria
+        // categoria do lead. ~7% das vezes o lead "vaza" para a busca de OUTRO
+        // nicho — reproduz o comportamento real relatado pelo dono: o Google
+        // Maps devolve resultados próximos geograficamente, não só do nicho
+        // buscado (decisão dele: marcar como fora do nicho, nunca descartar).
+        let originJob = LEAD_ORIGIN_JOB_BY_CATEGORY[category]!;
+        let offNiche = false;
+        if (random() < 0.07) {
+          const otherCategories = CATEGORIES.filter((c) => c !== category);
+          originJob = LEAD_ORIGIN_JOB_BY_CATEGORY[pick(otherCategories, random)]!;
+          offNiche = true;
+        }
         const status = pick(STATUSES, random);
         const phoneType = pick(PHONE_TYPES, random);
         const hasWebsite = random() > 0.4;
@@ -218,10 +306,13 @@ function buildLeads(): MockLead[] {
           isOptedOut,
           lastContactedAt: messages.length > 0 ? messages[0]?.sentAt ?? null : null,
           createdAt,
+          searchJobId: originJob.id,
+          searchNiche: originJob.niche,
+          offNiche,
           notes: null,
           latitude: null,
           longitude: null,
-          source: { type: 'google_maps', url: null, collectedAt: createdAt, searchJobId: null },
+          source: { type: 'google_maps', url: null, collectedAt: createdAt, searchJobId: originJob.id },
           firstSeenAt: createdAt,
           lastSeenAt: createdAt,
           activities,
@@ -231,6 +322,8 @@ function buildLeads(): MockLead[] {
       }
     }
   }
+
+  result.push(...buildArchitectureOffNicheDemoLeads(random, counter));
 
   // Dois leads recebem uma conversa "de verdade" (várias mensagens, status
   // variado, uma delas terminando em opt-out) — para a ficha do lead ter algo
@@ -343,19 +436,6 @@ function getLeads(): MockLead[] {
   return leads;
 }
 
-// btoa/atob (não Buffer): esse módulo roda tanto no client quanto no server.
-function encodeCursor(index: number): string {
-  return btoa(String(index));
-}
-function decodeCursor(cursor?: string): number {
-  if (!cursor) return 0;
-  try {
-    return Number(atob(cursor)) || 0;
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * Filtragem compartilhada entre `mockListLeads` (paginada) e
  * `mockExportLeadsCsv`/`mockBulkUpdateLeads` (dump/alvo completo do filtro,
@@ -385,6 +465,8 @@ function filterLeads(filter: LeadFilter): MockLead[] {
   if (filter.phoneType) items = items.filter((l) => l.phoneType === filter.phoneType);
   if (filter.minRating !== undefined) items = items.filter((l) => (l.rating ?? 0) >= filter.minRating!);
   if (filter.tags && filter.tags.length > 0) items = items.filter((l) => l.tags.some((t) => filter.tags?.includes(t)));
+  if (filter.searchJobId) items = items.filter((l) => l.searchJobId === filter.searchJobId);
+  if (filter.offNiche !== undefined) items = items.filter((l) => l.offNiche === filter.offNiche);
 
   // default do contrato: esconde opt-outs a menos que peçam explicitamente
   const optedOut = filter.optedOut ?? false;
@@ -393,6 +475,13 @@ function filterLeads(filter: LeadFilter): MockLead[] {
   return items;
 }
 
+/**
+ * `GET /leads` — paginação NUMERADA (`page`/`pageSize`), não cursor (ver
+ * `types/lead.ts` e a nota em `lib/api/leads.ts`). Usa os mesmos
+ * `computeTotalPages`/`clampPage` de `lib/pagination.ts` que a tela usa do
+ * lado do cliente — os dois lados nunca podem discordar sobre qual é a
+ * "última página válida" quando um filtro reduz o resultado.
+ */
 export function mockListLeads(filter: LeadFilter): LeadListResponse {
   let items = filterLeads(filter);
 
@@ -415,11 +504,11 @@ export function mockListLeads(filter: LeadFilter): LeadListResponse {
     return av > bv ? dir : -dir;
   });
 
-  const limit = Math.min(100, filter.limit ?? 25);
-  const start = decodeCursor(filter.cursor);
-  const pageItems = items.slice(start, start + limit);
-  const nextIndex = start + limit;
-  const nextCursor = nextIndex < items.length ? encodeCursor(nextIndex) : null;
+  const pageSize = normalizePageSize(filter.pageSize);
+  const totalPages = computeTotalPages(items.length, pageSize);
+  const page = clampPage(filter.page ?? 1, totalPages);
+  const start = (page - 1) * pageSize;
+  const pageItems = items.slice(start, start + pageSize);
 
   const data: LeadListItem[] = pageItems.map((lead) => ({
     id: lead.id,
@@ -438,11 +527,17 @@ export function mockListLeads(filter: LeadFilter): LeadListResponse {
     isOptedOut: lead.isOptedOut,
     lastContactedAt: lead.lastContactedAt,
     createdAt: lead.createdAt,
+    searchJobId: lead.searchJobId,
+    searchNiche: lead.searchNiche,
+    offNiche: lead.offNiche,
   }));
 
   return {
     data,
-    page: { cursor: filter.cursor ?? null, nextCursor, limit, total: items.length },
+    page,
+    pageSize,
+    total: items.length,
+    totalPages,
     facets,
   };
 }

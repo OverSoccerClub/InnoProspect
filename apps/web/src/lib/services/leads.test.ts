@@ -35,6 +35,9 @@ type RawLead = {
   status: string;
   tags: string[];
   createdAt: Date;
+  searchJobId: string;
+  searchJob: { niche: string };
+  offNiche: boolean;
 };
 
 function rawLead(overrides: Partial<RawLead> & Pick<RawLead, 'id' | 'phoneE164'>): RawLead {
@@ -52,6 +55,9 @@ function rawLead(overrides: Partial<RawLead> & Pick<RawLead, 'id' | 'phoneE164'>
     status: 'new',
     tags: [],
     createdAt: new Date('2026-01-01'),
+    searchJobId: 'job-default',
+    searchJob: { niche: 'nicho padrão' },
+    offNiche: false,
     ...overrides,
   };
 }
@@ -71,6 +77,8 @@ function matchesWhere(lead: RawLead, where: Record<string, unknown> = {}): boole
       if (lead.phoneE164 && cond.notIn.includes(lead.phoneE164)) return false;
     }
   }
+  if ('searchJobId' in where && lead.searchJobId !== where.searchJobId) return false;
+  if ('offNiche' in where && lead.offNiche !== where.offNiche) return false;
   return true;
 }
 
@@ -79,6 +87,46 @@ const leadsFixture: RawLead[] = [
   rawLead({ id: 'lead-b', phoneE164: '+5511987654321' }), // opted-out, lead 2 de 2 com o MESMO telefone (rede/franquia)
   rawLead({ id: 'lead-c', phoneE164: '+5511900000000' }), // não descadastrado
   rawLead({ id: 'lead-d', phoneE164: null }), // sem telefone — nunca pode ser "opted out"
+
+  // ── Paginação numerada: 5 leads isolados por status='validated', para não
+  // se misturar com os 4 de cima nos testes de paginação/offNiche. ──────────
+  rawLead({ id: 'pag-1', phoneE164: '+5511911111101', status: 'validated' }),
+  rawLead({ id: 'pag-2', phoneE164: '+5511911111102', status: 'validated' }),
+  rawLead({ id: 'pag-3', phoneE164: '+5511911111103', status: 'validated' }),
+  rawLead({ id: 'pag-4', phoneE164: '+5511911111104', status: 'validated' }),
+  rawLead({ id: 'pag-5', phoneE164: '+5511911111105', status: 'validated' }),
+
+  // ── offNiche: casos REAIS do relato do dono (busca "escritório de
+  // arquitetura", 2026-09-23) — origem comum `job-arquitetura`, critério real
+  // (`isOffNiche`, @inno/core) já rodou no worker e persistiu o valor abaixo;
+  // aqui só provamos que `listLeads` FILTRA e EXPÕE o que está persistido. ──
+  rawLead({
+    id: 'lead-magazine-luiza',
+    phoneE164: '+5511922220001',
+    status: 'contacted',
+    category: 'Loja de departamentos',
+    searchJobId: 'job-arquitetura',
+    searchJob: { niche: 'escritório de arquitetura' },
+    offNiche: true,
+  }),
+  rawLead({
+    id: 'lead-cartorio-benicio',
+    phoneE164: '+5511922220002',
+    status: 'contacted',
+    category: 'Cartório de Registro',
+    searchJobId: 'job-arquitetura',
+    searchJob: { niche: 'escritório de arquitetura' },
+    offNiche: true,
+  }),
+  rawLead({
+    id: 'lead-escritorio-legitimo',
+    phoneE164: '+5511922220003',
+    status: 'contacted',
+    category: 'Escritório de arquitetura',
+    searchJobId: 'job-arquitetura',
+    searchJob: { niche: 'escritório de arquitetura' },
+    offNiche: false,
+  }),
 ];
 const optOutsFixture = [{ phoneE164: '+5511987654321' }];
 
@@ -114,14 +162,26 @@ vi.mock('@/lib/logger', async () => {
 
 const { listLeads, getLeadDetail } = await import('./leads');
 
-function baseQuery(overrides: Partial<ListLeadsQuery> = {}): ListLeadsQuery {
-  return { ...listLeadsQuerySchema.parse({}), ...overrides };
+// `pageSize` aceita `number` solto aqui (não só 25|50|100): os testes de
+// paginação abaixo testam a MATEMÁTICA de `listLeads` diretamente com um
+// fixture pequeno (5 itens) — o contrato real (só 25|50|100 passam da borda
+// HTTP) é coberto à parte, contra `listLeadsQuerySchema` (ver describe
+// "paginação numerada").
+function baseQuery(overrides: Partial<Omit<ListLeadsQuery, 'pageSize'>> & { pageSize?: number } = {}): ListLeadsQuery {
+  return { ...listLeadsQuerySchema.parse({}), ...overrides } as ListLeadsQuery;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  prismaMock.lead.findMany.mockImplementation(async ({ where }: { where?: Record<string, unknown> } = {}) =>
-    leadsFixture.filter((l) => matchesWhere(l, where)),
+  prismaMock.lead.findMany.mockImplementation(
+    async ({
+      where,
+      skip = 0,
+      take,
+    }: { where?: Record<string, unknown>; skip?: number; take?: number } = {}) => {
+      const matched = leadsFixture.filter((l) => matchesWhere(l, where));
+      return take !== undefined ? matched.slice(skip, skip + take) : matched.slice(skip);
+    },
   );
   prismaMock.lead.count.mockImplementation(async ({ where }: { where?: Record<string, unknown> } = {}) =>
     leadsFixture.filter((l) => matchesWhere(l, where)).length,
@@ -285,5 +345,114 @@ describe('getLeadDetail — messages/lastContactedAt (antes: sempre [] / null fi
 
     expect(detail.messages).toEqual([]);
     expect(detail.lastContactedAt).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 🆕 2026-09-23: paginação NUMERADA (substituiu cursor) + `Lead.offNiche`
+// (achado do dono em produção — Google Maps devolve resultados PRÓXIMOS ao
+// nicho buscado, não só o nicho exato). Isolados via `status: 'validated'`
+// (5 leads `pag-*`) para não se misturar com os fixtures de opt-out acima.
+// ─────────────────────────────────────────────────────────────────────────
+describe('listLeads — paginação numerada (page/pageSize)', () => {
+  it('primeira página: devolve os primeiros `pageSize` itens e o envelope FLAT correto', async () => {
+    const result = await listLeads(baseQuery({ status: ['validated'], page: 1, pageSize: 2 }));
+
+    expect(result.data.map((l) => l.id)).toEqual(['pag-1', 'pag-2']);
+    expect(result.page).toBe(1);
+    expect(result.pageSize).toBe(2);
+    expect(result.total).toBe(5);
+    expect(result.totalPages).toBe(3); // ceil(5/2)
+  });
+
+  it('página do meio: devolve o trecho certo, nem o primeiro nem o último', async () => {
+    const result = await listLeads(baseQuery({ status: ['validated'], page: 2, pageSize: 2 }));
+
+    expect(result.data.map((l) => l.id)).toEqual(['pag-3', 'pag-4']);
+    expect(result.page).toBe(2);
+    expect(result.totalPages).toBe(3);
+  });
+
+  it('última página: devolve só o resto (pode ser menor que pageSize)', async () => {
+    const result = await listLeads(baseQuery({ status: ['validated'], page: 3, pageSize: 2 }));
+
+    expect(result.data.map((l) => l.id)).toEqual(['pag-5']);
+    expect(result.page).toBe(3);
+    expect(result.totalPages).toBe(3);
+  });
+
+  it('página além da última: devolve lista vazia, sem lançar (a UI decide se clampa antes de pedir)', async () => {
+    const result = await listLeads(baseQuery({ status: ['validated'], page: 99, pageSize: 2 }));
+
+    expect(result.data).toEqual([]);
+    expect(result.total).toBe(5);
+    expect(result.totalPages).toBe(3);
+  });
+
+  it('pageSize inválido (fora de 25|50|100) é rejeitado pela validação do contrato — VALIDATION_ERROR', () => {
+    const parsed = listLeadsQuerySchema.safeParse({ pageSize: '30' });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues[0]?.message).toMatch(/pageSize deve ser um de/);
+    }
+  });
+
+  it('page inválido (0 ou negativo) é rejeitado pela validação do contrato', () => {
+    expect(listLeadsQuerySchema.safeParse({ page: 0 }).success).toBe(false);
+    expect(listLeadsQuerySchema.safeParse({ page: -1 }).success).toBe(false);
+  });
+
+  it('sem page/pageSize na query, cai no default (page=1, pageSize=25)', () => {
+    const parsed = listLeadsQuerySchema.parse({});
+    expect(parsed.page).toBe(1);
+    expect(parsed.pageSize).toBe(25);
+  });
+});
+
+describe('listLeads — filtro por searchJobId (ficha "quem essa busca trouxe")', () => {
+  it('devolve só os leads da busca pedida', async () => {
+    const result = await listLeads(baseQuery({ searchJobId: 'job-arquitetura' }));
+
+    expect(result.data.map((l) => l.id).sort()).toEqual(
+      ['lead-magazine-luiza', 'lead-cartorio-benicio', 'lead-escritorio-legitimo'].sort(),
+    );
+  });
+
+  it('cada item expõe searchJobId e searchNiche da busca de origem', async () => {
+    const result = await listLeads(baseQuery({ searchJobId: 'job-arquitetura' }));
+
+    for (const lead of result.data) {
+      expect(lead.searchJobId).toBe('job-arquitetura');
+      expect(lead.searchNiche).toBe('escritório de arquitetura');
+    }
+  });
+});
+
+describe('listLeads — filtro offNiche e o critério de divergência com casos REAIS do relato do dono', () => {
+  // A busca real foi "escritório de arquitetura"; os 4 achados do relato
+  // (Magazine Luiza, Cartório Benicio, INFONOT, Ciano Cópias) provam o
+  // CRITÉRIO em packages/core/src/leads/niche.test.ts — aqui provamos que
+  // `listLeads` FILTRA por `offNiche` e EXPÕE o valor persistido corretamente
+  // (a fixture já traz o `offNiche` que o worker teria calculado).
+  it('offNiche=true devolve só os leads marcados como fora do nicho (Magazine Luiza, Cartório Benicio)', async () => {
+    const result = await listLeads(baseQuery({ searchJobId: 'job-arquitetura', offNiche: true }));
+
+    expect(result.data.map((l) => l.id).sort()).toEqual(['lead-cartorio-benicio', 'lead-magazine-luiza']);
+    expect(result.data.every((l) => l.offNiche)).toBe(true);
+  });
+
+  it('offNiche=false devolve só os aderentes (o escritório de arquitetura legítimo, nunca os divergentes)', async () => {
+    const result = await listLeads(baseQuery({ searchJobId: 'job-arquitetura', offNiche: false }));
+
+    expect(result.data.map((l) => l.id)).toEqual(['lead-escritorio-legitimo']);
+    expect(result.data.every((l) => !l.offNiche)).toBe(true);
+  });
+
+  it('sem o filtro offNiche, todos aparecem juntos — decisão do dono: marcar, nunca descartar', async () => {
+    const result = await listLeads(baseQuery({ searchJobId: 'job-arquitetura' }));
+
+    expect(result.data).toHaveLength(3);
+    expect(result.data.find((l) => l.id === 'lead-magazine-luiza')).toBeTruthy();
   });
 });

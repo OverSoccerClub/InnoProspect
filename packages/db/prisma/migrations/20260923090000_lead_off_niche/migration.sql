@@ -1,0 +1,59 @@
+-- InnoProspect — `Lead.offNiche` (sinalização "fora do nicho da busca de
+-- origem", ver comentário completo em `packages/db/prisma/schema.prisma`
+-- no campo `offNiche` e em `packages/core/src/leads/niche.ts`).
+--
+-- Gerada com `prisma migrate diff --from-schema-datamodel <snapshot do
+-- schema ANTES desta mudança> --to-schema-datamodel prisma/schema.prisma
+-- --script` — sem Postgres disponível nesta máquina de desenvolvimento (ver
+-- `innoprospect-bloqueio-docker` na memória do Cronos). ⚠️ NÃO foi aplicada
+-- contra um banco vivo. Roda no boot via `prisma migrate deploy`
+-- (entrypoint fail-fast) — conferir o resultado no primeiro boot.
+--
+-- ⚠️ 100% ADITIVA: uma coluna nova com DEFAULT constante + um índice novo.
+-- Nenhuma linha altera coluna ou dado existente de tabela já em uso.
+--
+-- DECISÃO CONSCIENTE sobre o DEFAULT: `false` é só um placeholder de boot —
+-- os ~180 leads que já existem hoje foram coletados ANTES do critério de
+-- divergência existir, então nenhum deles tem `offNiche` calculado de
+-- verdade. Depois desta migração aplicar, rodar o backfill (lógica de
+-- negócio, não SQL — precisa de `isOffNiche` + o nicho de cada
+-- `SearchJob.niche`, por isso é script, não parte desta migração):
+--   pnpm --filter worker run backfill:off-niche
+-- (`apps/worker/src/scripts/backfill-off-niche.ts`) — idempotente, pode
+-- rodar de novo sempre que o CRITÉRIO em `niche.ts` mudar (ver comentário
+-- "COMO MUDAR O CRITÉRIO DEPOIS" lá), sem exigir migração de schema nova.
+--
+-- CUSTO EM ESCALA (pedido explícito: registrar o que seria necessário com
+-- 500k linhas, mesmo não sendo o caso hoje):
+--   1. `ADD COLUMN ... DEFAULT false` sozinho seria BARATO mesmo em 500k
+--      linhas — Postgres 11+ trata DEFAULT de valor CONSTANTE como só
+--      metadado (não reescreve a tabela linha a linha). O que segue abaixo
+--      (`CREATE INDEX`) é a parte cara, não esta linha.
+--   2. `CREATE INDEX` simples (sem CONCURRENTLY) toma lock de escrita na
+--      tabela pelo tempo de construção do índice — em 500k linhas isso pode
+--      ser da ordem de minutos, inaceitável com o worker de scraping
+--      escrevendo continuamente. Mesma ressalva já registrada na migração
+--      `20260922100000_dashboard_summary_indexes`: nesse cenário, trocar por
+--      `CREATE INDEX CONCURRENTLY` rodado FORA do `prisma migrate deploy`
+--      (não pode rodar dentro de transação; por padrão o Prisma embrulha
+--      cada `migration.sql` numa transação) — manualmente contra produção
+--      antes do boot que espera o índice existir, ou confirmando primeiro em
+--      ambiente de teste que esta versão do Prisma pula o wrapper quando
+--      detecta CONCURRENTLY no arquivo.
+--   3. O BACKFILL em si (script, não SQL) também merece nota em escala: hoje
+--      ele varre a tabela inteira em memória por página (~180 linhas, sem
+--      drama). Com 500k, precisaria paginar por cursor (mesmo padrão de
+--      `iterateLeadsForExport` em `apps/web/src/lib/services/leads.ts`) em
+--      vez de `findMany` sem `take` — o script atual já pagina desde já,
+--      exatamente por isso (ver comentário lá).
+--
+-- Decisão sobre lock, hoje: `leads` tem ~180 linhas (ARQUITETURA projeta
+-- 10k-500k no ano 1, mas HOJE está longe disso) — `CREATE INDEX` simples é
+-- da ordem de milissegundos aqui, igual às 3 migrações anteriores que já
+-- usaram `CREATE INDEX` simples sem problema.
+
+-- AlterTable
+ALTER TABLE "leads" ADD COLUMN     "offNiche" BOOLEAN NOT NULL DEFAULT false;
+
+-- CreateIndex
+CREATE INDEX "leads_searchJobId_offNiche_idx" ON "leads"("searchJobId", "offNiche");

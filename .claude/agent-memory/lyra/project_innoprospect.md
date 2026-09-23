@@ -240,3 +240,26 @@ compartilhado, só eu podia tocar `components/ui/table.tsx`) + `/leads`
   sozinho). Lição prática: NUNCA rodar `next dev`/`next build` extra num
   diretório com um dev server compartilhado vivo — usar só `pnpm
   typecheck`/`lint`/`test` (não tocam `.next`) como portão nesses casos.
+
+**Leads — origem da busca + "fora do nicho" + paginação numerada (2026-09-23,
+pedido do dono após buscar "escritório de arquitetura" e receber Magazine
+Luiza/Cartório/loja de informática/copiadora na lista):** `GET /leads`
+trocou paginação por cursor por paginação NUMERADA (`page`/`pageSize` flat no
+envelope — `LeadListResponse.page` agora É o número da página, não um objeto
+de cursor) — contrato fixado pelo Atlas, implementado por mim (tipos/mocks/
+UI) e pelo Vega (`@inno/contracts#leadPaginationQuerySchema`,
+`lib/services/leads.ts`) EM PARALELO, na mesma sessão — ver
+[[convention-check-contracts-before-mocking]] (adendo) sobre como percebi
+pelo `pnpm typecheck` que ele tinha publicado o mesmo contrato ainda sem
+commit. `LeadListItem` ganhou `searchJobId`/`searchNiche` (sempre presentes,
+`idSchema`/`string`, não nullable — todo lead tem origem) e `offNiche`
+(booleano, coluna persistida, critério em
+`packages/core/src/leads/niche.ts#isOffNiche`: raiz de palavra em comum entre
+nicho e categoria, permissivo de propósito). NUNCA usar `offNiche` para
+excluir da listagem por padrão — é sinal, decisão do dono é marcar, nunca
+descartar. UI: origem mostrada como linha secundária sob o nome (não coluna,
+não agrupamento — a lista é paginada, um grupo por busca quebraria ao
+atravessar página), selo "fora do nicho" só ícone/borda coloridos (ver
+[[feedback-dual-role-color-tokens]], mesmo bug do `Alert` evitado de novo).
+Paginação numerada + seletor de tamanho: ver
+[[convention-numbered-pagination]] (componente/lib novos, reusáveis).

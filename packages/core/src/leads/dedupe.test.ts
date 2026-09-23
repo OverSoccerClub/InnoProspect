@@ -14,7 +14,7 @@ describe('MACHINE_UPDATABLE_FIELDS', () => {
     }
   });
 
-  it('lista exatamente os campos do handoff do Cronos', () => {
+  it('lista exatamente os campos do handoff do Cronos + offNiche (2026-09-23, derivado de category)', () => {
     expect([...MACHINE_UPDATABLE_FIELDS].sort()).toEqual(
       [
         'name',
@@ -29,6 +29,7 @@ describe('MACHINE_UPDATABLE_FIELDS', () => {
         'latitude',
         'longitude',
         'lastSeenAt',
+        'offNiche',
       ].sort(),
     );
   });

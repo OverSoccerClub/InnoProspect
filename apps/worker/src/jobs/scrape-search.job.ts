@@ -17,6 +17,7 @@ import { type Prisma, prisma } from '@inno/db';
 import {
   buildMachineUpdate,
   computeDedupeKey,
+  isOffNiche,
   normalizeBrPhone,
 } from '@inno/core';
 import {
@@ -181,7 +182,18 @@ export function createScrapeSearchProcessor(scrapeQueue: Queue) {
         // de integridade — o upsert abaixo é o que garante a unicidade de
         // verdade). Numa corrida rara entre 2 tasks de cidades vizinhas
         // capturando a mesma empresa, o contador pode errar por 1; aceitável.
-        const existing = await prisma.lead.findUnique({ where: { dedupeKey }, select: { id: true } });
+        // Também carrega o nicho da busca de ORIGEM deste lead, se ele já
+        // existir — `offNiche` (abaixo) é sempre relativo à busca que
+        // CRIOU o lead (`searchJobId`, imutável), nunca à busca atual
+        // (`task.searchJob`) quando as duas são diferentes (re-coleta do
+        // mesmo estabelecimento por outra busca) — ver a limitação aceita
+        // documentada em `isOffNiche` (packages/core/src/leads/niche.ts).
+        const existing = await prisma.lead.findUnique({
+          where: { dedupeKey },
+          select: { id: true, searchJob: { select: { niche: true } } },
+        });
+        const originNiche = existing?.searchJob.niche ?? task.searchJob.niche;
+        const offNiche = isOffNiche(originNiche, business.category);
 
         await prisma.lead.upsert({
           where: { dedupeKey },
@@ -201,6 +213,7 @@ export function createScrapeSearchProcessor(scrapeQueue: Queue) {
             longitude: business.longitude,
             externalRef: business.externalRef,
             dedupeKey,
+            offNiche,
             sourceType: 'google_maps_scrape',
             sourceUrl: business.sourceUrl,
             sourceQuery: output.meta.queryString,
@@ -226,6 +239,7 @@ export function createScrapeSearchProcessor(scrapeQueue: Queue) {
             latitude: business.latitude,
             longitude: business.longitude,
             lastSeenAt: collectedAt,
+            offNiche,
           }),
         });
 
