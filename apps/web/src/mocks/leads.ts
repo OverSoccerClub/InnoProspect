@@ -467,6 +467,8 @@ function filterLeads(filter: LeadFilter): MockLead[] {
   if (filter.tags && filter.tags.length > 0) items = items.filter((l) => l.tags.some((t) => filter.tags?.includes(t)));
   if (filter.searchJobId) items = items.filter((l) => l.searchJobId === filter.searchJobId);
   if (filter.offNiche !== undefined) items = items.filter((l) => l.offNiche === filter.offNiche);
+  if (filter.createdFrom) items = items.filter((l) => l.createdAt >= filter.createdFrom!);
+  if (filter.createdTo) items = items.filter((l) => l.createdAt <= filter.createdTo!);
 
   // default do contrato: esconde opt-outs a menos que peçam explicitamente
   const optedOut = filter.optedOut ?? false;

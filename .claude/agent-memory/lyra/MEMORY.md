@@ -17,3 +17,5 @@
 - [Derive outcome visual dos contadores de progresso, nunca de status+percent isolados](convention_derive_outcome_from_progress_not_status.md) — bug real: busca com tudo falho aparecia "Concluída" verde; achado em /buscas
 - [Bug: kebab/DropdownMenu num CardHeader com badges estoura a página em 390px sem flex-wrap+flex-1](bug_card_header_kebab_overflow_mobile.md) — medir sempre, não só ler o CSS
 - [Paginação numerada reutilizável (página+tamanho)](convention_numbered_pagination.md) — lib/pagination.ts + components/common/pagination.tsx; reusar antes de recriar
+- [Padrão pra barra de filtros com muitos campos](convention_filter_state_module.md) — módulo puro + `<details>` "Mais filtros" + chips removíveis; usado em /leads (6→13 filtros)
+- [Medir geometria sem cookie de sessão](convention_measure_via_public_route_content_width.md) — injetar no /login, mas calcular a largura de CONTEÚDO real (menos sidebar/padding), não o viewport bruto

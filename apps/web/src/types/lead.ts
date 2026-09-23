@@ -157,6 +157,12 @@ export type LeadFilter = {
   pageSize?: LeadPageSize;
 };
 
+export const PHONE_TYPE_LABEL: Record<PhoneType, string> = {
+  mobile: 'Celular',
+  landline: 'Fixo',
+  unknown: 'Desconhecido',
+};
+
 export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {
   new: 'Novo',
   validated: 'Validado',

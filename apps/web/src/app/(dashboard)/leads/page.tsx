@@ -10,7 +10,7 @@ import { ErrorState } from '@/components/common/error-state';
 import { LoadingRows } from '@/components/common/loading-rows';
 import { Pagination } from '@/components/common/pagination';
 import { LeadBulkToolbar } from '@/components/leads/lead-bulk-toolbar';
-import { EMPTY_LEADS_FILTER, LeadFilters, type LeadsFilterState } from '@/components/leads/lead-filters';
+import { LeadFilters } from '@/components/leads/lead-filters';
 import { LeadTable } from '@/components/leads/lead-table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -19,29 +19,29 @@ import { Table, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useLeads } from '@/hooks/useLeads';
 import { exportLeads } from '@/lib/api/leads';
+import { EMPTY_LEADS_FILTER, hasAnyLeadFilter, toApiLeadFilter, type LeadsFilterState } from '@/lib/lead-filter-state';
 import { clampPage } from '@/lib/pagination';
 import { cn } from '@/lib/utils';
 import { LEAD_PAGE_SIZES, type LeadPageSize } from '@/types/lead';
 
 export default function LeadsPage() {
   const [filters, setFilters] = useState<LeadsFilterState>(EMPTY_LEADS_FILTER);
+  // Só os campos de texto livre (cada tecla mudaria o filtro) são debounced —
+  // selects/pills/datas aplicam na hora, como antes desta rodada.
   const debouncedQ = useDebouncedValue(filters.q, 300);
+  const debouncedCategory = useDebouncedValue(filters.category, 300);
+  const debouncedTags = useDebouncedValue(filters.tags, 300);
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<LeadPageSize>(LEAD_PAGE_SIZES[0]);
 
   const apiFilter = useMemo(
     () => ({
-      q: debouncedQ || undefined,
-      status: filters.status.length > 0 ? filters.status : undefined,
-      uf: filters.uf ? [filters.uf] : undefined,
-      cityIbgeCode: filters.cityIbgeCode ? [filters.cityIbgeCode] : undefined,
-      searchJobId: filters.searchJobId || undefined,
-      offNiche: filters.offNiche === '' ? undefined : filters.offNiche === 'true',
+      ...toApiLeadFilter({ ...filters, q: debouncedQ, category: debouncedCategory, tags: debouncedTags }),
       page,
       pageSize,
     }),
-    [debouncedQ, filters.status, filters.uf, filters.cityIbgeCode, filters.searchJobId, filters.offNiche, page, pageSize],
+    [filters, debouncedQ, debouncedCategory, debouncedTags, page, pageSize],
   );
 
   const { response, isLoading, error, refetch } = useLeads(apiFilter);
@@ -51,9 +51,7 @@ export default function LeadsPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
-  const hasAnyFilter = Boolean(
-    filters.q || filters.status.length > 0 || filters.uf || filters.cityIbgeCode || filters.searchJobId || filters.offNiche,
-  );
+  const hasAnyFilter = hasAnyLeadFilter(filters);
   const leads = response?.data ?? [];
   // Uma vez que já carregou pela 1ª vez, uma troca de página/filtro NUNCA
   // mais mostra o esqueleto de novo — mantém a última lista conhecida na
@@ -67,7 +65,23 @@ export default function LeadsPage() {
   // resultado que agora só tem 2.
   useEffect(() => {
     setPage(1);
-  }, [debouncedQ, filters.status, filters.uf, filters.cityIbgeCode, filters.searchJobId, filters.offNiche, pageSize]);
+  }, [
+    debouncedQ,
+    debouncedCategory,
+    debouncedTags,
+    filters.status,
+    filters.uf,
+    filters.cityIbgeCode,
+    filters.searchJobId,
+    filters.offNiche,
+    filters.hasWebsite,
+    filters.hasPhone,
+    filters.phoneType,
+    filters.minRating,
+    filters.createdFrom,
+    filters.createdTo,
+    pageSize,
+  ]);
 
   // Caso real do escopo: o filtro mudou e a página que estava na tela deixou
   // de existir (ex.: estava na 7, o resultado novo só tem 3). O efeito acima

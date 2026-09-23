@@ -10,6 +10,26 @@ App Router + Tailwind 4 + Prisma/Postgres + worker Node separado (scraping do Go
 WhatsApp via Evolution API). Arquitetura fechada em `ARQUITETURA.md` (autora: Nova) — §2 é contrato de
 estrutura de pastas, §4 é contrato de API. Fases do produto em §8 do mesmo arquivo.
 
+**Filtros avançados de leads (2026-09-23, mesmo dia da paginação numerada,
+pedido separado do dono):** `leadFilterSchema` já aceitava
+`hasWebsite`/`hasPhone`/`phoneType`/`minRating`/`category`/`tags`/
+`createdFrom`/`createdTo` — o backend respondia a todos, a tela só expunha
+busca/UF/cidade/status/origem/nicho. Expus os 7 que faltavam sem inflar a
+barra: `lib/lead-filter-state.ts` (módulo puro, testável, ver
+[[convention-filter-state-module]]) + painel `<details>` "Mais filtros" +
+linha de chips de filtro ativo removíveis + 2 atalhos ("Sem site",
+"Pronto para WhatsApp" = telefone + tipo celular, porque envio de mensagem
+exige móvel). `lib/api/leads.ts` e o mock (`filterQueryParams`/
+`filterLeads`) já sabiam de quase tudo isso desde a rodada da paginação —
+só faltou `createdFrom`/`createdTo` no mock, que adicionei. Medi
+768px/1280px sem precisar de cookie de sessão — ver
+[[convention-measure-via-public-route-content-width]] (achado: medir no
+viewport bruto em vez da largura de conteúdo real por trás da sidebar
+esconderia que a barra principal vira `flex-col` a 768px real, não
+`flex-row`). Pendência registrada pro Vega: falta filtro de **número de
+avaliações** (só existe `minRating`) — é o que separa empresa ativa de
+parada, peça da Fase 5, exige campo novo no contrato.
+
 **4ª rodada — Onda 2B (2026-09-22, mesma sessão do dia, EM PARALELO com a
 Onda 2A que cobriu leads/templates):** dois bugs reais relatados pelo dono em
 produção, ambos em `/buscas/[id]`: (1) busca com os 5 municípios falhando e
