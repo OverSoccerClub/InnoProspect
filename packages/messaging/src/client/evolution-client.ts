@@ -94,6 +94,22 @@ function parseE164OrThrow(raw: string): string {
 export class EvolutionClient {
   constructor(private readonly config: EvolutionClientConfig) {}
 
+  /**
+   * `GET /instance/fetchInstances` — checagem de conectividade do SERVIDOR
+   * (Fase 4.B, botão "testar conexão" do cadastro de `EvolutionServer`), não
+   * de uma instância específica: confirma que `baseUrl` é alcançável E que
+   * `apiKey` é aceita, sem depender de nenhuma instância já existir naquele
+   * servidor. `retryable: false` de propósito — é um teste manual, disparado
+   * por clique; o operador quer saber AGORA se funcionou, não esperar o
+   * backoff de retry de transporte. Lança `MessagingError` em qualquer falha
+   * (rede/timeout/401/etc.) — quem chama decide o que fazer com isso (a rota
+   * de teste, `apps/web`, converte para `{ok:false, error}`, nunca deixa
+   * borbulhar como erro HTTP da PRÓPRIA rota de teste).
+   */
+  async testConnection(): Promise<void> {
+    await evolutionRequest(this.config, { method: 'GET', path: EVOLUTION_PATHS.fetchInstances(), retryable: false });
+  }
+
   /** `POST /instance/create` — cria a instância na Evolution e já pede o QR (`qrcode:true`). */
   async createInstance(input: CreateInstanceInput): Promise<CreateInstanceResult> {
     if (!input.instanceName || input.instanceName.trim().length < 2) {

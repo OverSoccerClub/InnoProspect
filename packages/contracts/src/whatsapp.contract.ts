@@ -59,6 +59,15 @@ export type ListWhatsAppInstancesResponse = z.infer<typeof listWhatsAppInstances
 
 export const createWhatsAppInstanceBodySchema = z.object({
   name: z.string().trim().min(2).max(80),
+  /**
+   * 🆕 Fase 4.B — OBRIGATÓRIO para toda instância NOVA (mesmo com a coluna
+   * `WhatsAppInstance.evolutionServerId` ainda nullable no banco durante a
+   * janela de bootstrap — ver comentário completo no schema Prisma). Toda
+   * instância criada a partir desta rodada em diante sabe, desde o
+   * nascimento, em qual `EvolutionServer` ela vive; o `null` que resta é só
+   * de linhas legadas (criadas ANTES desta feature existir).
+   */
+  evolutionServerId: idSchema,
   startWarmup: z.boolean().default(true),
 });
 export type CreateWhatsAppInstanceBody = z.infer<typeof createWhatsAppInstanceBodySchema>;

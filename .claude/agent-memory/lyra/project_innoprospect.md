@@ -261,6 +261,58 @@ compartilhado, só eu podia tocar `components/ui/table.tsx`) + `/leads`
   diretório com um dev server compartilhado vivo — usar só `pnpm
   typecheck`/`lint`/`test` (não tocam `.next`) como portão nesses casos.
 
+**Gestão de usuários, admin-only (2026-09-23, EM PARALELO com o Vega
+modelando servidores Evolution no mesmo repo):** `/configuracoes/usuarios`
+(`app/(dashboard)/configuracoes/usuarios/page.tsx`) — listar, criar, editar
+(nome/e-mail/papel/redefinir senha) e desativar/reativar usuários do
+sistema, contra `@inno/contracts#user.contract.ts` (já publicado pelo Vega,
+commit `37e91d8`, ver [[convention-check-contracts-before-mocking]]).
+Decisões:
+- **Onde mora:** dentro de Configurações, não um item novo na sidebar —
+  vira o hub administrativo do sistema (Opt-outs já morava lá; servidores
+  Evolution é a próxima peça confirmada pelo dono pro mesmo grid). Grid do
+  hub virou `lg:grid-cols-3` pensando nesse 4º card futuro.
+- **Gate real vs. cortesia:** primeiro uso de verdade de
+  `PermissionDeniedState` (existia desde a rodada de layout premium sem
+  nenhuma tela usar) — `usuarios/page.tsx` é Server Component, lê
+  `auth()`, nega quem não é `role==='admin'`. `configuracoes/page.tsx`
+  também ficou async só pra ESCONDER o card "Usuários" de operadores
+  (cortesia, nunca o gate — a API já recusa com 403 de qualquer jeito).
+- **Achado técnico reaproveitável:** Auth.js `strategy: 'jwt'` não
+  reconsulta o banco em requisições depois do login — Vega já documentou
+  isso pra `isActive`; confirmei que **o mesmo vale pra `role`** (rebaixar
+  um admin não derruba o acesso de admin de uma sessão já aberta). Ver
+  [[convention-jwt-role-staleness]] — usei a mesma frase curta e sem
+  alarmismo tanto no diálogo de desativar quanto no de trocar papel.
+- **Paginação:** cursor (`?cursor&limit`, "Carregar mais"), NÃO a
+  paginação numerada de Leads — o contrato de usuários usa
+  `paginationQuerySchema` comum, igual Opt-outs/Templates, ver
+  [[convention-numbered-pagination]] (só se aplica a Leads).
+- **Proteções do servidor, replicadas só como cortesia visual:**
+  `lib/user-access.ts` (módulo puro, testado em `user-access.test.ts`, 12
+  casos) calcula `canChangeRole`/`canDeactivate` a partir da lista JÁ
+  CARREGADA — cuidado deliberado: só confia na contagem de "último admin
+  ativo" quando `listComplete` (sem próxima página cursor E sem busca
+  ativa; uma busca que filtra pra 1 admin não pode ser lida como "é o
+  único admin do sistema"). Autoexclusão (não se autoexcluir/autorrebaixar)
+  não depende disso e vale sempre. Real gate fica 100% em
+  `lib/services/users.ts` (Vega) — se o servidor recusar por outro motivo
+  (corrida, sessão com papel desatualizado), `ApiRequestError` chega até
+  `ErrorState`/o erro inline do formulário normalmente.
+- **`ConfirmDialog` (`components/common/confirm-dialog.tsx`) ganhou
+  `description: ReactNode`** (era `string`) — mudança aditiva (string é um
+  `ReactNode` válido, os 4 usos existentes continuam batendo) pra caber
+  duas frases (desativar não é excluir + aviso de sessão já aberta) sem
+  inventar um novo componente.
+- **Não verificado ao vivo:** tentei mintar cookie de sessão de teste
+  ([[convention-test-session-cookie]]) contra o `next dev` compartilhado
+  pra confirmar geometria/fluxo real (skill `medir-antes-de-afirmar`) — o
+  `NEXTAUTH_SECRET` anotado numa rodada anterior não bateu mais (processo
+  provavelmente reiniciado por outra sessão). Ver
+  [[bug-shared-dev-secret-unknown-blocks-test-cookie]]. `pnpm typecheck`/
+  `lint`/`test` (arquivos meus) passam, mas a tela em si não foi vista
+  rodando — pendência explícita pra Íris.
+
 **Leads — origem da busca + "fora do nicho" + paginação numerada (2026-09-23,
 pedido do dono após buscar "escritório de arquitetura" e receber Magazine
 Luiza/Cartório/loja de informática/copiadora na lista):** `GET /leads`
@@ -283,3 +335,64 @@ atravessar página), selo "fora do nicho" só ícone/borda coloridos (ver
 [[feedback-dual-role-color-tokens]], mesmo bug do `Alert` evitado de novo).
 Paginação numerada + seletor de tamanho: ver
 [[convention-numbered-pagination]] (componente/lib novos, reusáveis).
+
+**Multi-servidor Evolution API (2026-09-23, contrato pronto pelo Vega em
+paralelo, minha parte destravou um `pnpm typecheck` quebrado):**
+`create-instance-dialog.tsx` parou de compilar porque
+`CreateWhatsAppInstanceBody`/`createInstance` passaram a exigir
+`evolutionServerId` — toda instância nova nasce em um `EvolutionServer`
+específico. Entregas:
+- **Seletor de servidor no diálogo de criar instância** — carrega os
+  servidores só quando o diálogo abre (não na montagem de `/whatsapp`),
+  filtra só `isActive`, e trata o caso "zero servidor ativo cadastrado"
+  (hoje é o estado de TODO MUNDO) sem travar num `<Select>` vazio: mostra um
+  `Alert` com link direto pra `/configuracoes/servidores-evolution` (fecha o
+  diálogo ao navegar).
+- **`/configuracoes/servidores-evolution`** (novo 4º card no hub, admin-only,
+  mesmo gate de cortesia de `usuarios/page.tsx`): listar, cadastrar, editar,
+  desativar/reativar. Estrutura em `components/evolution-servers/*` +
+  `hooks/useEvolutionServers.ts` (SEM paginação — `GET` do contrato devolve
+  `{ data: [] }` flat, lista pequena por natureza administrativa, diferente
+  de Usuários que usa cursor).
+- **Rotação de credencial é tratada como destrutiva e silenciosa** (pedido
+  do dono): preencher o campo de chave em edição dispara uma 2ª TELA dentro
+  do MESMO `Dialog` (nunca um `ConfirmDialog` aninhado por cima — risco de
+  overlay duplo que eu não tinha como testar ao vivo, ver adendo abaixo)
+  explicando a consequência e sugerindo testar a conexão depois. Campo de
+  chave em branco na edição = "manter a atual", nunca "apagar" — texto
+  explícito na tela, não só no código.
+- **`TestConnectionControl`** (`components/evolution-servers/test-connection-
+  control.tsx`) — botão + resultado inline (latência/motivo da falha),
+  reusado na tabela com destaque visual (`highlighted`) depois de qualquer
+  cadastro/edição salva com sucesso (não só rotação — qualquer mudança em
+  como o sistema alcança o servidor merece uma verificação).
+- **409 `SERVER_IN_USE` ao desativar**: a mensagem (mock E real, confirmei
+  lendo `lib/services/evolution-servers.ts` linha a linha) já vem com a
+  CONTAGEM de instâncias e o que fazer — exibida como veio, nunca
+  reescrita, mesmo padrão de `details[]`/`reason` de
+  [[convention-error-envelope-details-vs-meta]].
+- **Mocks acoplados em uma direção só** (`mocks/whatsapp.ts` →
+  `mocks/evolution-servers.ts`, nunca o contrário) — ver
+  [[convention-one-way-mock-module-coupling]]. `MockInstance` ganhou
+  `evolutionServerId` (fixtures existentes distribuídas entre os 2
+  servidores mock pra dar sinal visual real na contagem).
+- **Gate real do bloqueio `pnpm typecheck` do turbo**: o monorepo compartilha
+  um `next dev` que trava o rename do `query_engine-windows.dll.node` do
+  Prisma (`EPERM`) sempre que `turbo run typecheck/lint/test` tenta
+  `@inno/db#generate` de novo — ver
+  [[bug-turbo-generate-lock-blocks-typecheck]]. Rodei pacote a pacote
+  (`pnpm --filter <pkg> run typecheck/lint/test`) pra confirmar os 3 gates
+  verdes: typecheck limpo em todos os 7 pacotes, lint limpo (2 erros reais
+  encontrados e corrigidos: aspas não escapadas em JSX e um `no-unused-vars`
+  no destructure-pra-omitir de `mocks/evolution-servers.ts`, resolvido
+  listando os campos em vez de spread+destructure), 623/623 testes passando
+  (mesmo total documentado no pedido — nenhuma regressão).
+- **Não verificado ao vivo**: não consegui mintar cookie de sessão de teste
+  pra ver a tela renderizada de verdade — mesmo bloqueio de
+  [[bug-shared-dev-secret-unknown-blocks-test-cookie]] (o `next dev`
+  compartilhado está de pé, mas o `NEXTAUTH_SECRET` atual dele é
+  desconhecido). Confirmei só que as rotas novas não derrubam o servidor
+  (`curl` nas 4 rotas relevantes devolveu 307/200 esperados, sem 500).
+  Pendência explícita pra Íris: fluxo completo (diálogo sem servidor →
+  cadastrar → selecionar → criar instância; editar servidor com/sem
+  rotação; testar conexão sucesso/falha; desativar servidor em uso).

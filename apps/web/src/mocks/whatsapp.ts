@@ -7,11 +7,19 @@ import type {
   InstanceListItem,
   InstanceQrResponse,
 } from '@/types/whatsapp';
+import { mockNoteInstanceCreatedOnServer, mockNoteInstanceRemovedFromServer, mockRequireActiveEvolutionServer } from './evolution-servers';
 import { mockNotFound } from './utils';
 
 type MockInstance = InstanceListItem & {
   qrIssuedAtMs: number | null;
   qrPollCount: number;
+  /**
+   * 🆕 Fase 4.B — em qual `EvolutionServer` esta instância mock "vive" (ver
+   * `mocks/evolution-servers.ts`). Não sai por `mockListInstances` porque
+   * `InstanceListItem`/`WhatsAppInstanceItem` (contrato) ainda não expõe
+   * este campo à tela — mesma lacuna do backend real.
+   */
+  evolutionServerId: string;
 };
 
 let seq = 10;
@@ -34,6 +42,7 @@ function buildInstances(): MockInstance[] {
       activeCampaigns: 1,
       qrIssuedAtMs: null,
       qrPollCount: 0,
+      evolutionServerId: 'evo_1',
     },
     {
       id: 'wa_2',
@@ -49,6 +58,7 @@ function buildInstances(): MockInstance[] {
       activeCampaigns: 1,
       qrIssuedAtMs: null,
       qrPollCount: 0,
+      evolutionServerId: 'evo_1',
     },
     {
       id: 'wa_3',
@@ -64,6 +74,9 @@ function buildInstances(): MockInstance[] {
       activeCampaigns: 0,
       qrIssuedAtMs: null,
       qrPollCount: 0,
+      // Servidor secundário de propósito — dá pra ver a contagem de
+      // instâncias distribuída entre servidores diferentes na tela nova.
+      evolutionServerId: 'evo_2',
     },
     {
       id: 'wa_4',
@@ -79,6 +92,7 @@ function buildInstances(): MockInstance[] {
       activeCampaigns: 0,
       qrIssuedAtMs: null,
       qrPollCount: 0,
+      evolutionServerId: 'evo_1',
     },
   ];
 }
@@ -110,7 +124,15 @@ function findInstance(id: string): MockInstance {
   return instance;
 }
 
+/**
+ * 🆕 Fase 4.B — `evolutionServerId` é obrigatório no corpo (contrato). Espelha
+ * `lib/evolution.ts#requireActiveEvolutionServer`: 404 se o id não existir,
+ * 409 `SERVER_INACTIVE` se o servidor estiver desativado — nunca deixa criar
+ * contra um servidor que não existe/está fora de uso, igual ao backend real.
+ */
 export function mockCreateInstance(input: CreateInstanceRequest): CreateInstanceResponse {
+  mockRequireActiveEvolutionServer(input.evolutionServerId);
+
   const id = `wa_${seq++}`;
   const evolutionInstanceName = `inno-${id}`;
   const instance: MockInstance = {
@@ -127,8 +149,10 @@ export function mockCreateInstance(input: CreateInstanceRequest): CreateInstance
     activeCampaigns: 0,
     qrIssuedAtMs: Date.now(),
     qrPollCount: 0,
+    evolutionServerId: input.evolutionServerId,
   };
   getInstances().unshift(instance);
+  mockNoteInstanceCreatedOnServer(input.evolutionServerId);
   return { id, name: instance.name, status: 'qr_pending', evolutionInstanceName };
 }
 
@@ -236,4 +260,5 @@ export function mockDeleteInstance(id: string): void {
     });
   }
   all.splice(index, 1);
+  mockNoteInstanceRemovedFromServer(instance.evolutionServerId);
 }

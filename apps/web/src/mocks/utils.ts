@@ -16,6 +16,11 @@ export function mockNotFound(message: string, reason?: string): never {
   throw new ApiRequestError(404, { code: 'NOT_FOUND', reason, message, requestId: 'mock' });
 }
 
+/** Simula um `403 FORBIDDEN` — autoproteção (não se autoexcluir/autorrebaixar) e checagens de papel que o servidor recusa antes de tudo mais. */
+export function mockForbidden(message: string, reason?: string): never {
+  throw new ApiRequestError(403, { code: 'FORBIDDEN', reason, message, requestId: 'mock' });
+}
+
 /** Simula um `409 CONFLICT` com `reason` (ARQUITETURA §4.0 v1.1) e `details[]` opcional (campo OU meta pontual, ver `types/common.ts`). */
 export function mockConflict(
   reason: string,

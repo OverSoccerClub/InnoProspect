@@ -19,3 +19,7 @@
 - [Paginação numerada reutilizável (página+tamanho)](convention_numbered_pagination.md) — lib/pagination.ts + components/common/pagination.tsx; reusar antes de recriar
 - [Padrão pra barra de filtros com muitos campos](convention_filter_state_module.md) — módulo puro + `<details>` "Mais filtros" + chips removíveis; usado em /leads (6→13 filtros)
 - [Medir geometria sem cookie de sessão](convention_measure_via_public_route_content_width.md) — injetar no /login, mas calcular a largura de CONTEÚDO real (menos sidebar/padding), não o viewport bruto
+- [JWT do Auth.js não atualiza role/isActive de sessão já aberta](convention_jwt_role_staleness.md) — vale pra qualquer campo de autorização, avisar na UI onde a mudança é feita
+- [Cookie de teste falha silencioso se o NEXTAUTH_SECRET do dev compartilhado mudou](bug_shared_dev_secret_unknown_blocks_test_cookie.md) — redireciona pro /login, parece "esqueci o cookie" mas é secret desatualizado
+- [Dois mocks relacionados (whatsapp x evolution-servers) importam só numa direção](convention_one_way_mock_module_coupling.md) — evita ciclo ESM entre módulos com estado mutável
+- [turbo generate trava (EPERM) com next dev compartilhado de pé](bug_turbo_generate_lock_blocks_typecheck.md) — usar `pnpm --filter <pkg> run typecheck/lint/test` pacote a pacote, nunca matar o dev server

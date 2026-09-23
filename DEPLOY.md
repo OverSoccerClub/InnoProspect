@@ -162,9 +162,11 @@ variável do worker é runtime.
 | `PORT` | `3000` | |
 | `RUN_MIGRATIONS` | `true` | só mude para `false` se tiver certeza que outra réplica já migrou este release |
 | `ADMIN_EMAIL` / `ADMIN_NAME` / `ADMIN_PASSWORD` | seus valores | usados só quando você rodar o seed manualmente (§7) |
-| `EVOLUTION_API_URL` | `http://<serviço-evolution>:8080` | Fase 3, prepare já |
-| `EVOLUTION_API_KEY` | o mesmo valor usado em `AUTHENTICATION_API_KEY` da Evolution | tem que ser IGUAL nos dois lados |
+| `EVOLUTION_API_URL` | `http://<serviço-evolution>:8080` | 🆕 Fase 4.B: só FALLBACK (instância legada sem servidor) + entrada do bootstrap — ver §7.3. Depois do bootstrap, o cadastro de servidor de verdade é pela tela (admin), não por aqui. |
+| `EVOLUTION_API_KEY` | o mesmo valor usado em `AUTHENTICATION_API_KEY` da Evolution | idem — mesma ressalva do fallback/bootstrap |
 | `EVOLUTION_WEBHOOK_BASE_URL` | `https://<seu-domínio>/api/webhooks/evolution` | |
+| `EVOLUTION_MASTER_KEY` | gerar com `openssl rand -base64 32` | 🆕 Fase 4.B, **obrigatória antes do bootstrap**. Cifra a credencial de cada `EvolutionServer` em repouso (AES-256-GCM). Nunca entra no banco. Ver §7.3. |
+| `EVOLUTION_MASTER_KEY_VERSION` | opcional, default `1` | só importa no dia de rotacionar a chave-mestre (runbook em `evolution-server-crypto.ts`) |
 | `LOG_LEVEL` | `info` | |
 | `OPTOUT_TOKEN_SECRET` | gerar com `openssl rand -base64 32` | ⚠️ **obrigatória antes de enviar qualquer mensagem.** Assina o link de descadastro que vai em cada mensagem. Sem ela, a página pública `/descadastro/:token` recusa **todos** os links (fail-closed): a pessoa clica para sair da lista e recebe erro, o que quebra o mecanismo de LGPD. Trocar o valor invalida os links já enviados. |
 | `APP_COMPANY_NAME` | nome da sua empresa | Preenche `{{minha_empresa}}` nos templates. A primeira mensagem precisa identificar quem está falando (ARQUITETURA §7.4) |
@@ -284,6 +286,61 @@ node dist/selftest.js --ping   # leve — só Postgres + heartbeat (o que o HEAL
 Sai com código 0 em sucesso; em falha, nomeia o passo exato e a mensagem de
 erro (sem stack trace) — não precisa ler log de aplicação para saber o que
 quebrou.
+
+---
+
+## 7.3. Bootstrap do multi-servidor Evolution API (Fase 4.B, 2026-09-23)
+
+🆕 Roda **UMA VEZ**, depois do primeiro `prisma migrate deploy` que aplicar
+`20260923140000_evolution_servers` (automático, no boot do `web`) — mesmo
+padrão operacional do seed/admin (§7, passo 5): script em
+`packages/db/prisma/evolution-servers.ts`, executado via `tsx` **no
+container do `web`** (o `worker` não tem `tsx`, mesma regra do §7.2).
+
+**Pré-requisito:** `EVOLUTION_MASTER_KEY` definida no ambiente do `web`
+(`openssl rand -base64 32` — ver tabela de variáveis em §5). Sem ela, o
+bootstrap falha com uma mensagem clara (`EvolutionCryptoError`), nunca cifra
+com uma chave "quase certa".
+
+Terminal no container `web` (working dir `/app`, mesmo caminho de
+`node_modules/tsx/dist/cli.mjs` do §7):
+
+```sh
+node node_modules/tsx/dist/cli.mjs packages/db/prisma/evolution-servers.ts bootstrap
+```
+
+O que faz (idempotente — pode rodar de novo sem duplicar nada):
+1. Lê `EVOLUTION_API_URL`/`EVOLUTION_API_KEY` do ambiente (as que já
+   estavam configuradas desde a Fase 3).
+2. Cria o primeiro `EvolutionServer` com a API key CIFRADA em repouso
+   (ou reaproveita, se um servidor com a MESMA `baseUrl` já existir).
+3. Liga toda `WhatsAppInstance` com `evolutionServerId` nulo (legada) a
+   esse servidor — uma `UPDATE` só, tabela pequena.
+4. Imprime a conferência (mesmo efeito do comando `check` abaixo).
+
+Comando de conferência, a qualquer momento depois:
+
+```sh
+node node_modules/tsx/dist/cli.mjs packages/db/prisma/evolution-servers.ts check
+```
+
+Devolve quantos `EvolutionServer` existem e quantas `WhatsAppInstance` ainda
+têm `evolutionServerId IS NULL`. **Quando este número chegar a 0**, é seguro
+considerar `EVOLUTION_API_URL`/`EVOLUTION_API_KEY` REMOVÍVEIS do ambiente —
+todo o fallback em `lib/evolution.ts#getEvolutionClientForInstance` e
+`lib/services/webhook.ts#resolveExpectedWebhookApiKey` só existe para o caso
+`evolutionServerId IS NULL`; sem nenhuma linha nesse estado, o fallback nunca
+mais é exercitado (mas não faz mal deixá-lo, se preferir não remover agora).
+
+**Depois do bootstrap:** cadastre servidores ADICIONAIS (se precisar de mais
+de um) pela tela de administração — `POST /api/v1/evolution-servers`
+(admin-only) — e use o botão "testar conexão"
+(`POST /api/v1/evolution-servers/:id/test-connection`) antes de criar
+qualquer instância nova apontando para ele. `POST /api/v1/whatsapp/instances`
+passa a EXIGIR `evolutionServerId` no corpo a partir desta rodada (ver
+`whatsapp.contract.ts`) — a tela de criação de instância precisa de um
+seletor de servidor (pendência da Lyra, ver PARA O PRÓXIMO do handoff do
+Vega).
 
 ---
 

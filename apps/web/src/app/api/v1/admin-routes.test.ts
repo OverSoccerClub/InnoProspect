@@ -30,6 +30,41 @@ vi.mock('@/lib/services/scraper-health', () => ({
 vi.mock('@/lib/services/optouts', () => ({
   deleteOptOut: vi.fn(async () => undefined),
 }));
+vi.mock('@/lib/services/evolution-servers', () => ({
+  listEvolutionServers: vi.fn(async () => ({ data: [] })),
+  createEvolutionServer: vi.fn(async () => ({
+    id: 'srv-1',
+    name: 'Servidor 1',
+    baseUrl: 'https://evolution1.example.com',
+    isActive: true,
+    hasApiKey: true,
+    instancesCount: 0,
+    createdAt: 'x',
+    updatedAt: 'x',
+  })),
+  getEvolutionServerDetail: vi.fn(async () => ({
+    id: 'srv-1',
+    name: 'Servidor 1',
+    baseUrl: 'https://evolution1.example.com',
+    isActive: true,
+    hasApiKey: true,
+    instancesCount: 0,
+    createdAt: 'x',
+    updatedAt: 'x',
+  })),
+  updateEvolutionServer: vi.fn(async () => ({
+    id: 'srv-1',
+    name: 'Servidor renomeado',
+    baseUrl: 'https://evolution1.example.com',
+    isActive: true,
+    hasApiKey: true,
+    instancesCount: 0,
+    createdAt: 'x',
+    updatedAt: 'x',
+  })),
+  deactivateEvolutionServer: vi.fn(async () => undefined),
+  testEvolutionServerConnection: vi.fn(async () => ({ ok: true, latencyMs: 42, checkedAt: 'x', error: null })),
+}));
 vi.mock('@/lib/services/users', () => ({
   listUsers: vi.fn(async () => ({ data: [], page: { cursor: null, nextCursor: null, limit: 25, total: 0 } })),
   createUser: vi.fn(async () => ({ id: 'u1', email: 'novo@x.local', name: 'Novo', role: 'operator', isActive: true, createdAt: 'x', updatedAt: 'x' })),
@@ -116,7 +151,8 @@ describe('rotas admin-only — operador 403 / admin passa', () => {
     const { POST } = await import('./whatsapp/instances/route');
     await expectAdminOnly(
       POST,
-      () => jsonReq('https://x.local/api/v1/whatsapp/instances', 'POST', { name: 'Instância 1' }),
+      // 🆕 Fase 4.B — evolutionServerId é obrigatório no corpo (ver whatsapp.contract.ts).
+      () => jsonReq('https://x.local/api/v1/whatsapp/instances', 'POST', { name: 'Instância 1', evolutionServerId: 'ckzz1234567890abcdefghijk' }),
       {},
       201,
     );
@@ -165,5 +201,47 @@ describe('rotas admin-only — operador 403 / admin passa', () => {
   it('DELETE /api/v1/optouts/:id', async () => {
     const { DELETE } = await import('./optouts/[id]/route');
     await expectAdminOnly(DELETE, () => jsonReq('https://x.local/api/v1/optouts/o1', 'DELETE'), { id: 'ckzz1234567890abcdefghijk' }, 204);
+  });
+
+  // 🆕 Fase 4.B — servidores Evolution API (multi-servidor).
+  it('GET /api/v1/evolution-servers', async () => {
+    const { GET } = await import('./evolution-servers/route');
+    await expectAdminOnly(GET, () => jsonReq('https://x.local/api/v1/evolution-servers', 'GET'), {}, 200);
+  });
+
+  it('POST /api/v1/evolution-servers', async () => {
+    const { POST } = await import('./evolution-servers/route');
+    const body = { name: 'Servidor 1', baseUrl: 'https://evolution1.example.com', apiKey: 'chave-secreta-abc' };
+    await expectAdminOnly(POST, () => jsonReq('https://x.local/api/v1/evolution-servers', 'POST', body), {}, 201);
+  });
+
+  it('GET /api/v1/evolution-servers/:id', async () => {
+    const { GET } = await import('./evolution-servers/[id]/route');
+    await expectAdminOnly(GET, () => jsonReq('https://x.local/api/v1/evolution-servers/s1', 'GET'), { id: 'ckzz1234567890abcdefghijk' }, 200);
+  });
+
+  it('PATCH /api/v1/evolution-servers/:id', async () => {
+    const { PATCH } = await import('./evolution-servers/[id]/route');
+    await expectAdminOnly(
+      PATCH,
+      () => jsonReq('https://x.local/api/v1/evolution-servers/s1', 'PATCH', { name: 'Novo nome' }),
+      { id: 'ckzz1234567890abcdefghijk' },
+      200,
+    );
+  });
+
+  it('DELETE /api/v1/evolution-servers/:id', async () => {
+    const { DELETE } = await import('./evolution-servers/[id]/route');
+    await expectAdminOnly(DELETE, () => jsonReq('https://x.local/api/v1/evolution-servers/s1', 'DELETE'), { id: 'ckzz1234567890abcdefghijk' }, 204);
+  });
+
+  it('POST /api/v1/evolution-servers/:id/test-connection', async () => {
+    const { POST } = await import('./evolution-servers/[id]/test-connection/route');
+    await expectAdminOnly(
+      POST,
+      () => jsonReq('https://x.local/api/v1/evolution-servers/s1/test-connection', 'POST'),
+      { id: 'ckzz1234567890abcdefghijk' },
+      200,
+    );
   });
 });

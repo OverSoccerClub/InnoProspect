@@ -36,6 +36,8 @@ export const DEFAULT_WEBHOOK_EVENTS: EvolutionWebhookEventName[] = [
 
 /** Nomes/caminhos de endpoint — todos relativos a `EVOLUTION_API_URL`. */
 export const EVOLUTION_PATHS = {
+  /** Lista as instâncias do servidor — usado por `EvolutionClient.testConnection` (Fase 4.B) como checagem "URL alcançável + apikey válida" que não depende de nenhuma instância existir ainda. */
+  fetchInstances: () => '/instance/fetchInstances',
   createInstance: () => '/instance/create',
   connect: (instanceName: string) => `/instance/connect/${encodeURIComponent(instanceName)}`,
   connectionState: (instanceName: string) => `/instance/connectionState/${encodeURIComponent(instanceName)}`,

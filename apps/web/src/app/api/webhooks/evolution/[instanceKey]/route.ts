@@ -2,16 +2,31 @@
  * POST /api/webhooks/evolution/:instanceKey — ARQUITETURA §4.8. Rota PÚBLICA
  * (sem sessão de usuário — quem chama é a própria Evolution API), autenticada
  * por dois fatores: `:instanceKey` (segredo por instância, gerado por nós) +
- * header `apikey` (segredo global, `EVOLUTION_API_KEY`).
+ * header `apikey`.
+ *
+ * 🆕 Fase 4.B — MULTI-SERVIDOR: antes desta rodada, `apikey` era comparado
+ * contra UMA variável global (`EVOLUTION_API_KEY`) — um único servidor
+ * Evolution possível. Agora a chave esperada é resolvida pela cadeia
+ * `instanceKey → instância → EvolutionServer → chave` (decifrada,
+ * `lib/services/webhook.ts#resolveExpectedWebhookApiKey`) — cada servidor
+ * tem sua PRÓPRIA credencial, então o webhook de um servidor não pode ser
+ * aceito com a chave de outro. `evolutionServerId` NULO (instância legada,
+ * ANTES do bootstrap — ver `packages/db/prisma/evolution-servers.ts`) cai
+ * no fallback de `EVOLUTION_API_KEY` (env), MESMO comportamento
+ * pré-Fase-4.B — nunca derruba a atualização de status de mensagens de uma
+ * instância legada só porque ela ainda não foi migrada.
  *
  * Regras de contrato (não violar sem avisar Nova/Órion):
  *   1. `:instanceKey` que não bate com nenhuma instância → `404`, NUNCA
  *      `401` — não confirmar existência.
- *   2. `apikey` errado tem o MESMO tratamento (`404`) — ver comentário no
- *      handler: expor um status diferente aqui vazaria "o instanceKey
- *      existe, só a chave está errada", o mesmo oráculo que a regra 1 evita.
+ *   2. `apikey` errado (ou servidor sem credencial resolvível — inativo,
+ *      erro de decifra) tem o MESMO tratamento (`404`) — expor um status
+ *      diferente aqui vazaria "o instanceKey existe, só a chave está
+ *      errada", o mesmo oráculo que a regra 1 evita.
  *   3. Comparação de `apikey` em TEMPO CONSTANTE (`constantTimeEqual`,
- *      `@inno/messaging`) — nunca `===`.
+ *      `@inno/messaging`) — nunca `===`. Isto NÃO regrediu com o
+ *      multi-servidor: a chave agora vem decifrada em vez de lida direto da
+ *      env, mas a comparação final continua pelo mesmo helper.
  *   4. A partir daí, SEMPRE `200 { received: true }`, mesmo se o
  *      processamento falhar internamente — a Evolution reenvia em não-200 e
  *      pode entrar em loop; erro de processamento vira log, não resposta de erro.
@@ -29,7 +44,7 @@ import { z } from 'zod';
 import { prisma } from '@inno/db';
 import { constantTimeEqual } from '@inno/messaging';
 import { apiRoute, notFound } from '@/lib/api-handler';
-import { processEvolutionWebhookEvent } from '@/lib/services/webhook';
+import { processEvolutionWebhookEvent, resolveExpectedWebhookApiKey } from '@/lib/services/webhook';
 import { logger } from '@/lib/logger';
 
 const paramsSchema = z.object({ instanceKey: z.string().min(1) });
@@ -47,9 +62,9 @@ export const POST = apiRoute({
     const instance = await prisma.whatsAppInstance.findUnique({ where: { instanceKey: params.instanceKey } });
     if (!instance) notFound('Não encontrado.');
 
-    const expectedApiKey = process.env.EVOLUTION_API_KEY ?? '';
+    const expectedApiKey = await resolveExpectedWebhookApiKey(instance);
     const receivedApiKey = req.headers.get('apikey') ?? '';
-    if (expectedApiKey.length === 0 || !constantTimeEqual(receivedApiKey, expectedApiKey)) {
+    if (expectedApiKey === null || !constantTimeEqual(receivedApiKey, expectedApiKey)) {
       notFound('Não encontrado.');
     }
 

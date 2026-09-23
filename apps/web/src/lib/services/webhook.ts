@@ -2,9 +2,9 @@
  * lib/services/webhook.ts — processamento dos eventos do webhook Evolution
  * já normalizados por `@inno/messaging#parseEvolutionWebhookEvent`
  * (ARQUITETURA §4.8). A rota (`app/api/webhooks/evolution/[instanceKey]`) só
- * autentica (`instanceKey` + `apikey`) e chama `processEvolutionWebhookEvent`
- * dentro de um `try/catch` que NUNCA deixa o erro virar resposta não-200 —
- * ver comentário na rota.
+ * autentica (`instanceKey` + `apikey`, via `resolveExpectedWebhookApiKey`
+ * abaixo) e chama `processEvolutionWebhookEvent` dentro de um `try/catch` que
+ * NUNCA deixa o erro virar resposta não-200 — ver comentário na rota.
  */
 import { prisma, type Prisma, type WhatsAppInstance } from '@inno/db';
 import {
@@ -20,7 +20,46 @@ import {
   skipPendingCampaignTargetsForPhone,
 } from '@/lib/services/campaign-targets';
 import { sendAlert } from '@/lib/alerts';
+import { decryptEvolutionApiKey } from '@/lib/evolution-server-crypto';
 import { logger } from '@/lib/logger';
+
+/**
+ * 🆕 Fase 4.B — resolve a chave `apikey` ESPERADA para esta instância, pela
+ * cadeia `instância → EvolutionServer → chave decifrada`. Cai no fallback
+ * de `EVOLUTION_API_KEY` (env) SÓ enquanto `evolutionServerId` for `null`
+ * (instância legada, ANTES do bootstrap — `packages/db/prisma/
+ * evolution-servers.ts`) — mesma regra de `lib/evolution.ts#
+ * getEvolutionClientForInstance`.
+ *
+ * Devolve `null` (NUNCA lança) quando não há como resolver de forma segura
+ * — servidor inexistente/inativo, ou falha ao decifrar (chave-mestre
+ * errada/ausente). A ROTA trata `null` exatamente como "apikey não bate"
+ * (`404`, fail-closed): um erro de CONFIGURAÇÃO nunca pode relaxar a
+ * validação para "deixa passar mesmo assim" — o inverso (rejeitar tudo por
+ * engano) é grave (derruba a atualização de status de mensagens em
+ * produção), mas ainda assim menos grave que aceitar um webhook não
+ * autenticado.
+ */
+export async function resolveExpectedWebhookApiKey(instance: Pick<WhatsAppInstance, 'id' | 'evolutionServerId'>): Promise<string | null> {
+  if (!instance.evolutionServerId) {
+    const envKey = process.env.EVOLUTION_API_KEY ?? '';
+    return envKey.length > 0 ? envKey : null;
+  }
+
+  const server = await prisma.evolutionServer.findUnique({ where: { id: instance.evolutionServerId } });
+  if (!server || !server.isActive) return null;
+
+  try {
+    return decryptEvolutionApiKey(server);
+  } catch (err) {
+    logger.error('webhook evolution: falha ao decifrar a credencial do servidor', {
+      instanceId: instance.id,
+      evolutionServerId: instance.evolutionServerId,
+      err: err instanceof Error ? err : new Error(String(err)),
+    });
+    return null;
+  }
+}
 
 /** `remoteJid` da Evolution vem como `"5511987654321@s.whatsapp.net"` — a parte antes do `@` já é o telefone em dígitos (com DDI), então a MESMA normalização BR usada no scraping (`@inno/core/leads/phone.ts`) resolve para E.164 sem precisar de um parser de JID dedicado. */
 function jidToE164(jid: string): string | null {

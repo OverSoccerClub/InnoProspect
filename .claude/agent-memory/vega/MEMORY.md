@@ -19,3 +19,5 @@
 - [Convenção: cadência do disparo — jitter.ts + G9b/G9c no send-guard (Fase 4.B)](convention_cadencia_jitter_pace_lock.md) — drawLogNormalJitterMs/shouldTriggerMicroPause/advanceSendPace, facts opcionais p/ não tocar apps/web.
 - [Convenção: CRUD de usuários + requireRole (Onda 4)](convention_admin_role_and_user_crud.md) — mecanismo único em apiRoute, User.isActive (nunca excluir, FK Restrict comprovado), nunca-zero-admin com FOR UPDATE, limitação de JWT não revogar na hora.
 - [Convenção: cadência LIGADA no envio manual (Fase 4.C)](convention_cadencia_ligada_envio_manual.md) — ignorePaceLock sempre true no serviço, incremento atômico, details[nextSendAllowedAt/resetsAt] p/ Lyra.
+- [Convenção: servidores Evolution multi-servidor (Fase 4.B)](convention_evolution_servers_multiserver.md) — cifra AES-256-GCM, CRUD admin, teste de conexão, bootstrap, webhook por servidor, gotcha Buffer→Uint8Array<ArrayBuffer>, pendência que quebra 1 arquivo da Lyra.
+- [Bug: nextSendAllowedAt com SET cego recuava sob concorrência](bug_pace_lock_blind_set_regression.md) — achado do Órion; correção via UPDATE condicional no banco (monotonicidade), não em JS.

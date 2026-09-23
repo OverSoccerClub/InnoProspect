@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 
 import { Button, type ButtonProps } from '@/components/ui/button';
@@ -10,7 +10,8 @@ type ConfirmDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  description: string;
+  /** Normalmente uma frase; aceita `ReactNode` para descrições com mais de uma sentença/parágrafo (ex.: aviso de sessão já aberta em `UserRow`). */
+  description: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   confirmVariant?: ButtonProps['variant'];

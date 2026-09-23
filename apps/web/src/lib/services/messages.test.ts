@@ -105,6 +105,25 @@ function applyIncrementsOrSets(target: Record<string, unknown>, data: Record<str
 
 const prismaMock = vi.hoisted(() => ({
   $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prismaMock)),
+  // 🆕 Entrega 2 (correção do Órion, monotonicidade de `nextSendAllowedAt`):
+  // único uso de `$executeRaw` neste serviço — replica no fake a MESMA
+  // semântica da cláusula `WHERE` da UPDATE real ("só avança, NULL conta
+  // como -infinito"), para o teste provar a regra sem precisar de Postgres.
+  // Se o serviço algum dia fizer `SELECT` seguido de `if` em JS em vez desta
+  // UPDATE condicional, este mock deixa de refletir o código de produção —
+  // é o motivo de também haver uma asserção de que `$executeRaw` foi
+  // chamado (prova de que a comparação passou pelo banco, não por um
+  // `Math.max` em JavaScript).
+  $executeRaw: vi.fn(async (_strings: unknown, ...values: unknown[]) => {
+    const [candidate, instanceId] = values as [Date, string];
+    const found = store.instances.find((i) => i.id === instanceId);
+    if (!found) return 0;
+    if (found.nextSendAllowedAt === null || found.nextSendAllowedAt.getTime() < candidate.getTime()) {
+      found.nextSendAllowedAt = candidate;
+      return 1;
+    }
+    return 0;
+  }),
   lead: {
     findUnique: vi.fn(async ({ where }: { where: { id: string } }) => store.leads.find((l) => l.id === where.id) ?? null),
     update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
@@ -232,7 +251,9 @@ const sendAlertMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/alerts', () => ({ sendAlert: sendAlertMock }));
 
 const sendTextMock = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/evolution', () => ({ getEvolutionClient: () => ({ sendText: sendTextMock }) }));
+// 🆕 Fase 4.B — `sendLeadMessage` resolve o cliente por `getEvolutionClientForInstance`
+// (não mais um singleton de env); mock devolve sempre o mesmo fake client independente da instância.
+vi.mock('@/lib/evolution', () => ({ getEvolutionClientForInstance: vi.fn(async () => ({ sendText: sendTextMock })) }));
 
 const { sendLeadMessage } = await import('./messages');
 const { checkRateLimit } = await import('@/lib/rate-limit');
@@ -608,7 +629,10 @@ describe('sendLeadMessage — Fase 4.C: cadência ligada no envio unitário (ARQ
 
   it('resposta a conversa aberta BYPASSA o SEND_PACE_LOCKED (overrides.ignorePaceLock, honrado só porque isColdFirstContact é false) — avisa PACE_LOCK_BYPASSED_FOR_REPLY e avança o gate só pelo PISO do jitter, sem tocar sendsSinceMicroPause', async () => {
     store.leads.push(lead({ id: 'lead-1' }));
-    store.instances.push(instance({ id: 'inst-1', nextSendAllowedAt: new Date(NOW.getTime() + 60_000), sendsSinceMicroPause: 5 }));
+    // Gate atual (10s no futuro) é MENOR que o piso do modo 'floor' (45s) —
+    // este envio de fato AVANÇA o gate (não é o cenário de corrida/recuo,
+    // ver o teste de monotonicidade abaixo).
+    store.instances.push(instance({ id: 'inst-1', nextSendAllowedAt: new Date(NOW.getTime() + 10_000), sendsSinceMicroPause: 5 }));
     store.messages.push(outboundMessage({ id: 'msg-out', leadId: 'lead-1', instanceId: 'inst-1', createdAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) }));
     store.messages.push(inboundMessage({ id: 'msg-in', leadId: 'lead-1', instanceId: 'inst-1', createdAt: new Date(NOW.getTime() - 60 * 60 * 1000) }));
     sendTextMock.mockResolvedValue({ providerMessageId: 'evo-msg-2', remoteJid: 'x', rawStatus: null });
@@ -621,6 +645,45 @@ describe('sendLeadMessage — Fase 4.C: cadência ligada no envio unitário (ARQ
     // Modo 'floor': só o piso do jitter (45s default), determinístico — sem sorteio.
     expect(updatedInstance?.nextSendAllowedAt?.toISOString()).toBe(new Date(NOW.getTime() + 45_000).toISOString());
     expect(updatedInstance?.sendsSinceMicroPause).toBe(5); // NÃO tocado (decisão da Fase 4.B) — nem incrementado, nem zerado
+  });
+
+  it('🆕 Entrega 2 (achado do Órion) — nextSendAllowedAt NUNCA RECUA: um gate já mais no futuro (gravado por outro envio concorrente) NÃO é sobrescrito por um valor menor deste envio', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    // Simula a corrida real: outro envio concorrente (ex.: uma micro-pausa
+    // que caiu bem nesta instância) já comitou um gate BEM mais no futuro
+    // (10min) do que o piso do jitter que ESTE envio (modo 'floor', bypass de
+    // resposta) vai calcular (45s). ANTES da correção, o `SET` cego deste
+    // envio sobrescrevia o valor maior já gravado — a trava anti-banimento
+    // recuava de 10min para 45s, sem erro e sem alarme.
+    const farFutureGate = new Date(NOW.getTime() + 10 * 60 * 1000);
+    store.instances.push(instance({ id: 'inst-1', nextSendAllowedAt: farFutureGate, sendsSinceMicroPause: 5 }));
+    store.messages.push(outboundMessage({ id: 'msg-out', leadId: 'lead-1', instanceId: 'inst-1', createdAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) }));
+    store.messages.push(inboundMessage({ id: 'msg-in', leadId: 'lead-1', instanceId: 'inst-1', createdAt: new Date(NOW.getTime() - 60 * 60 * 1000) }));
+    sendTextMock.mockResolvedValue({ providerMessageId: 'evo-msg-race', remoteJid: 'x', rawStatus: null });
+
+    const result = await sendLeadMessage('lead-1', body(), ACTOR);
+
+    expect(result.message.status).toBe('sent'); // a correção não bloqueia o envio, só protege a coluna
+    const updatedInstance = store.instances.find((i) => i.id === 'inst-1');
+    // O candidato deste envio (NOW + 45s) é MENOR que o gate já gravado
+    // (NOW + 10min) — o valor MAIOR persiste, não é sobrescrito.
+    expect(updatedInstance?.nextSendAllowedAt?.toISOString()).toBe(farFutureGate.toISOString());
+    // Prova de que quem decidiu "não sobrescrever" foi a cláusula WHERE da
+    // UPDATE (banco), não um `if` no serviço: `$executeRaw` foi chamado com
+    // o candidato menor mesmo assim, e ainda assim o valor maior persistiu.
+    expect(prismaMock.$executeRaw).toHaveBeenCalled();
+  });
+
+  it('🆕 Entrega 2 (achado do Órion) — nextSendAllowedAt AVANÇA normalmente quando o candidato deste envio é de fato maior que o gate já gravado', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    store.instances.push(instance({ id: 'inst-1', nextSendAllowedAt: null, sendsSinceMicroPause: 5 }));
+    sendTextMock.mockResolvedValue({ providerMessageId: 'evo-msg-advance', remoteJid: 'x', rawStatus: null });
+
+    await sendLeadMessage('lead-1', body(), ACTOR);
+
+    const updatedInstance = store.instances.find((i) => i.id === 'inst-1');
+    expect(updatedInstance?.nextSendAllowedAt).not.toBeNull();
+    expect(updatedInstance!.nextSendAllowedAt!.getTime()).toBeGreaterThan(NOW.getTime());
   });
 
   it('1º contato frio NÃO bypassa mesmo com o serviço sempre pedindo ignorePaceLock — a trava é do NÚMERO e o guard anula o override para contato frio (ARQUITETURA A24)', async () => {

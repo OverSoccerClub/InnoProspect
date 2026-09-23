@@ -118,6 +118,20 @@ completo, o que não ficou provado, e a colisão de timestamp de migração com 
 Cronos (mesmo `schema.prisma`, mesma janela) em
 [[convention-admin-role-and-user-crud]].
 
+**Meu escopo entregue (servidores Evolution multi-servidor + correção da
+monotonicidade do freio de envio, 2026-09-23, pedido direto do dono +
+achado do Órion, mesma rodada):** cifra AES-256-GCM da credencial de cada
+`EvolutionServer` (`lib/evolution-server-crypto.ts`), CRUD admin-only
+(`/api/v1/evolution-servers/**`) + teste de conexão, bootstrap
+(`packages/db/prisma/evolution-servers.ts`), religação do
+`EvolutionClient`/webhook para resolver por servidor em vez de env global
+(com fallback documentado). Detalhe completo em
+[[convention-evolution-servers-multiserver]] — inclui uma PENDÊNCIA que
+quebra `pnpm typecheck` em 1 arquivo da Lyra (contrato ficou mais estrito,
+decisão do Cronos, não editei território dela). No mesmo commit, corrigi o
+bug do Órion em `messages.ts` (`nextSendAllowedAt` gravado com `SET` cego —
+podia recuar sob concorrência): [[bug-pace-lock-blind-set-regression]].
+
 **Como aplicar:** antes de tocar em `apps/web/src/app/api/**`, `lib/api-handler.ts`, `lib/auth*.ts`,
 `middleware.ts` ou `apps/worker/**`, ler este arquivo + [[convention-api-routes-fase1]] +
 [[bug-nextauth-edge-prisma-split]] + [[bug-nextjs-workspace-ts-source-imports]] antes de reabrir

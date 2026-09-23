@@ -20,7 +20,14 @@ import type {
   WhatsAppInstanceItem,
 } from '@inno/contracts';
 import { conflict, notFound, upstreamError } from '@/lib/api-handler';
-import { buildWebhookUrl, generateEvolutionInstanceName, generateInstanceKey, getEvolutionClient } from '@/lib/evolution';
+import {
+  buildWebhookUrl,
+  generateEvolutionInstanceName,
+  generateInstanceKey,
+  getEvolutionClientForInstance,
+  getEvolutionClientForServer,
+  requireActiveEvolutionServer,
+} from '@/lib/evolution';
 import { haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
 import { sendAlert } from '@/lib/alerts';
 import { logger } from '@/lib/logger';
@@ -106,12 +113,20 @@ export async function createWhatsAppInstance(
   body: CreateWhatsAppInstanceBody,
   createdById: string,
 ): Promise<CreateWhatsAppInstanceResponse> {
+  // 🆕 Fase 4.B — `evolutionServerId` é OBRIGATÓRIO na camada de aplicação
+  // para toda instância NOVA (mesmo com a coluna ainda nullable no banco,
+  // durante a janela de bootstrap — ver comentário completo em
+  // `packages/db/prisma/schema.prisma#WhatsAppInstance.evolutionServerId`).
+  // `requireActiveEvolutionServer` devolve 404/409 (erro do OPERADOR: id
+  // inexistente ou servidor desativado), nunca deixa criar contra um
+  // servidor que não existe/está fora de uso.
+  const server = await requireActiveEvolutionServer(body.evolutionServerId);
   const evolutionInstanceName = generateEvolutionInstanceName(body.name);
   const instanceKey = generateInstanceKey();
+  const client = getEvolutionClientForServer(server);
 
   let created: WhatsAppInstance;
   try {
-    const client = getEvolutionClient();
     await client.createInstance({ instanceName: evolutionInstanceName });
     await client.setWebhook(evolutionInstanceName, { url: buildWebhookUrl(instanceKey) });
   } catch (err) {
@@ -124,6 +139,7 @@ export async function createWhatsAppInstance(
         name: body.name,
         evolutionInstanceName,
         instanceKey,
+        evolutionServerId: server.id,
         status: 'qr_pending',
         warmupStartedAt: body.startWarmup ? new Date() : null,
         createdById,
@@ -135,7 +151,7 @@ export async function createWhatsAppInstance(
     // ambos gerados aleatoriamente — praticamente impossível, mas
     // best-effort de limpeza para não deixar lixo órfão na Evolution).
     try {
-      await getEvolutionClient().deleteInstance(evolutionInstanceName);
+      await client.deleteInstance(evolutionInstanceName);
     } catch (cleanupErr) {
       logger.error('falha ao limpar instância órfã na Evolution após erro de banco', {
         evolutionInstanceName,
@@ -194,7 +210,8 @@ export async function getWhatsAppInstanceQr(id: string): Promise<GetQrCodeRespon
 
   let result: ConnectResult;
   try {
-    result = await getEvolutionClient().connect(instance.evolutionInstanceName);
+    const client = await getEvolutionClientForInstance(instance);
+    result = await client.connect(instance.evolutionInstanceName);
   } catch (err) {
     rethrowAsUpstream(err, 'obter o QR code');
   }
@@ -225,7 +242,8 @@ export async function connectWhatsAppInstance(id: string): Promise<ConnectInstan
   const instance = await findInstanceOrNotFound(id);
 
   try {
-    await getEvolutionClient().connect(instance.evolutionInstanceName);
+    const client = await getEvolutionClientForInstance(instance);
+    await client.connect(instance.evolutionInstanceName);
   } catch (err) {
     rethrowAsUpstream(err, 'conectar a instância');
   }
@@ -239,7 +257,8 @@ export async function disconnectWhatsAppInstance(id: string): Promise<Disconnect
   const instance = await findInstanceOrNotFound(id);
 
   try {
-    await getEvolutionClient().disconnect(instance.evolutionInstanceName);
+    const client = await getEvolutionClientForInstance(instance);
+    await client.disconnect(instance.evolutionInstanceName);
   } catch (err) {
     rethrowAsUpstream(err, 'desconectar a instância');
   }
@@ -265,7 +284,8 @@ export async function deleteWhatsAppInstance(id: string): Promise<void> {
   }
 
   try {
-    await getEvolutionClient().deleteInstance(instance.evolutionInstanceName);
+    const client = await getEvolutionClientForInstance(instance);
+    await client.deleteInstance(instance.evolutionInstanceName);
   } catch (err) {
     // Best-effort: se a Evolution já não tiver a instância (ou estiver fora
     // do ar), ainda assim removemos nosso registro — Postgres é a fonte da

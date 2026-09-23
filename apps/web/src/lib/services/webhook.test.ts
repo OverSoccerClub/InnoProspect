@@ -7,9 +7,10 @@
  * exatamente a "cadeia de duas idempotências distintas que ninguém testou
  * juntas" citada em §2.2.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import type { WhatsAppInstance } from '@inno/db';
-import { getFakeDbState, resetFakeDb, type FakeCampaign, type FakeCampaignTarget, type FakeLead } from '@/test/fake-db';
+import { getFakeDbState, resetFakeDb, type FakeCampaign, type FakeCampaignTarget, type FakeEvolutionServer, type FakeLead } from '@/test/fake-db';
 
 // Factory ASSÍNCRONA com `import()` dinâmico DENTRO dela — de propósito, não
 // estilo. `vi.mock` é hoisted para o topo do arquivo pelo Vitest, ANTES dos
@@ -34,7 +35,8 @@ vi.mock('@/lib/alerts', () => ({ sendAlert: sendAlertMock }));
 // `webhook.ts` só é avaliado depois dos mocks de `@inno/db`/`lib/logger`
 // estarem registrados (o `vi.mock` já é hoisted para o topo do arquivo pelo
 // Vitest, mas isso deixa a ordem de dependência óbvia na leitura).
-const { processEvolutionWebhookEvent } = await import('./webhook');
+const { processEvolutionWebhookEvent, resolveExpectedWebhookApiKey } = await import('./webhook');
+const { encryptEvolutionApiKey } = await import('@/lib/evolution-server-crypto');
 
 const instance = { id: 'inst-1' } as WhatsAppInstance;
 
@@ -49,6 +51,23 @@ function lead(overrides: Partial<FakeLead> & Pick<FakeLead, 'id' | 'phoneE164' |
 function target(overrides: Partial<FakeCampaignTarget> & Pick<FakeCampaignTarget, 'id' | 'campaignId' | 'leadId' | 'phoneE164' | 'status'>): FakeCampaignTarget {
   return { skipReason: null, sentAt: null, updatedAt: new Date(), ...overrides };
 }
+function evolutionServer(overrides: Partial<FakeEvolutionServer> & Pick<FakeEvolutionServer, 'id'>): FakeEvolutionServer {
+  const now = new Date();
+  return {
+    name: 'Servidor 1',
+    baseUrl: 'https://evolution1.example.com',
+    isActive: true,
+    apiKeyCiphertext: Buffer.from(''),
+    apiKeyIv: Buffer.from(''),
+    apiKeyAuthTag: Buffer.from(''),
+    apiKeyKeyVersion: 1,
+    createdById: 'user-1',
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
 function campaign(overrides: Partial<FakeCampaign> & Pick<FakeCampaign, 'id'>): FakeCampaign {
   return {
     status: 'running',
@@ -316,5 +335,122 @@ describe('processEvolutionWebhookEvent — connection_update (kill switch)', () 
     );
 
     expect(sendAlertMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveExpectedWebhookApiKey — 🆕 Fase 4.B (multi-servidor, achado que substitui EVOLUTION_API_KEY global)', () => {
+  const MASTER_KEY = randomBytes(32).toString('base64');
+
+  beforeEach(() => {
+    resetFakeDb();
+    process.env.EVOLUTION_MASTER_KEY = MASTER_KEY;
+    delete process.env.EVOLUTION_MASTER_KEY_VERSION;
+  });
+
+  afterEach(() => {
+    delete process.env.EVOLUTION_MASTER_KEY;
+    delete process.env.EVOLUTION_API_KEY;
+  });
+
+  it('instância COM evolutionServerId — decifra a credencial do servidor e devolve a chave em texto puro', async () => {
+    const encrypted = encryptEvolutionApiKey('chave-secreta-do-servidor-1');
+    resetFakeDb({
+      evolutionServers: [
+        evolutionServer({
+          id: 'srv-1',
+          apiKeyCiphertext: encrypted.ciphertext,
+          apiKeyIv: encrypted.iv,
+          apiKeyAuthTag: encrypted.authTag,
+          apiKeyKeyVersion: encrypted.keyVersion,
+        }),
+      ],
+    });
+
+    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' } as WhatsAppInstance);
+
+    expect(result).toBe('chave-secreta-do-servidor-1');
+  });
+
+  it('instância SEM evolutionServerId (legada) — cai no fallback EVOLUTION_API_KEY (env), mesmo comportamento pré-Fase-4.B', async () => {
+    process.env.EVOLUTION_API_KEY = 'chave-global-legada';
+
+    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: null } as WhatsAppInstance);
+
+    expect(result).toBe('chave-global-legada');
+  });
+
+  it('instância SEM evolutionServerId e SEM EVOLUTION_API_KEY configurada — devolve null (fail-closed, nunca deixa passar por falta de configuração)', async () => {
+    delete process.env.EVOLUTION_API_KEY;
+
+    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: null } as WhatsAppInstance);
+
+    expect(result).toBeNull();
+  });
+
+  it('servidor referenciado está DESATIVADO — devolve null (mesmo com a credencial existindo e sendo decifrável)', async () => {
+    const encrypted = encryptEvolutionApiKey('chave-servidor-desativado');
+    resetFakeDb({
+      evolutionServers: [
+        evolutionServer({
+          id: 'srv-1',
+          isActive: false,
+          apiKeyCiphertext: encrypted.ciphertext,
+          apiKeyIv: encrypted.iv,
+          apiKeyAuthTag: encrypted.authTag,
+          apiKeyKeyVersion: encrypted.keyVersion,
+        }),
+      ],
+    });
+
+    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' } as WhatsAppInstance);
+
+    expect(result).toBeNull();
+  });
+
+  it('evolutionServerId aponta para um servidor que não existe (inconsistência de dados) — devolve null, não lança', async () => {
+    resetFakeDb({ evolutionServers: [] });
+
+    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-inexistente' } as WhatsAppInstance);
+
+    expect(result).toBeNull();
+  });
+
+  it('chave-mestre ERRADA (rotação mal feita) — decifra falha, devolve null em vez de lançar (a rota trata como apikey não bate, 404 fail-closed)', async () => {
+    const encrypted = encryptEvolutionApiKey('chave-qualquer');
+    resetFakeDb({
+      evolutionServers: [
+        evolutionServer({
+          id: 'srv-1',
+          apiKeyCiphertext: encrypted.ciphertext,
+          apiKeyIv: encrypted.iv,
+          apiKeyAuthTag: encrypted.authTag,
+          apiKeyKeyVersion: encrypted.keyVersion,
+        }),
+      ],
+    });
+    // Troca a chave-mestre DEPOIS de cifrar — simula "EVOLUTION_MASTER_KEY errada no ambiente".
+    process.env.EVOLUTION_MASTER_KEY = randomBytes(32).toString('base64');
+
+    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' } as WhatsAppInstance);
+
+    expect(result).toBeNull();
+  });
+
+  it('dois servidores DIFERENTES têm chaves DIFERENTES — a chave de um nunca resolve para outro (webhook de um servidor não pode ser aceito com a chave de outro)', async () => {
+    const encrypted1 = encryptEvolutionApiKey('chave-servidor-1');
+    const encrypted2 = encryptEvolutionApiKey('chave-servidor-2');
+    resetFakeDb({
+      evolutionServers: [
+        evolutionServer({ id: 'srv-1', apiKeyCiphertext: encrypted1.ciphertext, apiKeyIv: encrypted1.iv, apiKeyAuthTag: encrypted1.authTag, apiKeyKeyVersion: encrypted1.keyVersion }),
+        evolutionServer({ id: 'srv-2', baseUrl: 'https://evolution2.example.com', apiKeyCiphertext: encrypted2.ciphertext, apiKeyIv: encrypted2.iv, apiKeyAuthTag: encrypted2.authTag, apiKeyKeyVersion: encrypted2.keyVersion }),
+      ],
+    });
+
+    const key1 = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' } as WhatsAppInstance);
+    const key2 = await resolveExpectedWebhookApiKey({ id: 'inst-2', evolutionServerId: 'srv-2' } as WhatsAppInstance);
+
+    expect(key1).toBe('chave-servidor-1');
+    expect(key2).toBe('chave-servidor-2');
+    expect(key1).not.toBe(key2);
   });
 });

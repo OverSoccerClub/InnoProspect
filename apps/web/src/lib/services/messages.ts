@@ -50,7 +50,7 @@ import {
 import type { SendLeadMessageBody, SendLeadMessageResponse, SendLeadMessageWarning } from '@inno/contracts';
 import { badRequest, conflict, notFound, rateLimited, upstreamError } from '@/lib/api-handler';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { getEvolutionClient } from '@/lib/evolution';
+import { getEvolutionClientForInstance } from '@/lib/evolution';
 import { haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
 import { sendAlert } from '@/lib/alerts';
 import { logger } from '@/lib/logger';
@@ -156,36 +156,81 @@ function microPauseConfigFromEnv(): MicroPauseConfig {
 }
 
 /**
- * Campos de `WhatsAppInstance` que TODO envio (sucesso, falha confirmada OU
+ * `sendsSinceMicroPause` que TODO envio (sucesso, falha confirmada OU
  * incerto — ARQUITETURA §6.8.7 "depois de TODO envio") escreve para avançar a
- * cadência, computados PURAMENTE a partir do `AdvanceSendPaceResult`
+ * cadência, computado PURAMENTE a partir do `AdvanceSendPaceResult`
  * (`@inno/core`), sem 2ª leitura de banco.
  *
- * ⚠️ `sendsSinceMicroPause` usa `{ increment: 1 }` — NUNCA o valor absoluto
- * que `advanceSendPace` calculou — para o incremento em si continuar atômico
- * no Postgres mesmo se a leitura que alimentou `advanceSendPace` (feita ao
- * resolver a instância, antes do `sendText`) já estivesse um passo atrás de
- * outra escrita concorrente (ver memória do Cronos,
- * `gate-nullable-e-contadores-concorrentes`: "sempre incremento atômico em
- * SQL, nunca read-modify-write em JS"). Só a DECISÃO de disparar a
- * micro-pausa (o sorteio em `shouldTriggerMicroPause`) pode ficar levemente
- * desatualizada sob concorrência real — nunca o contador persistido, que
- * nunca perde um incremento. Reset para `0` (micro-pausa disparou) é SET
- * incondicional, sem essa janela.
+ * ⚠️ Usa `{ increment: 1 }` — NUNCA o valor absoluto que `advanceSendPace`
+ * calculou — para o incremento em si continuar atômico no Postgres mesmo se
+ * a leitura que alimentou `advanceSendPace` (feita ao resolver a instância,
+ * antes do `sendText`) já estivesse um passo atrás de outra escrita
+ * concorrente (ver memória do Cronos, `gate-nullable-e-contadores-
+ * concorrentes`: "sempre incremento atômico em SQL, nunca read-modify-write
+ * em JS"). Só a DECISÃO de disparar a micro-pausa (o sorteio em
+ * `shouldTriggerMicroPause`) pode ficar levemente desatualizada sob
+ * concorrência real — nunca o contador persistido, que nunca perde um
+ * incremento. Reset para `0` (micro-pausa disparou) é SET incondicional, sem
+ * essa janela.
+ *
+ * `nextSendAllowedAt` NÃO está mais aqui de propósito — ver
+ * `advanceNextSendAllowedAt` abaixo (correção do Órion, monotonicidade).
  */
 function paceFieldsForUpdate(
   mode: PaceAdvanceMode,
   result: AdvanceSendPaceResult,
-): Pick<Prisma.WhatsAppInstanceUpdateInput, 'nextSendAllowedAt' | 'sendsSinceMicroPause'> {
+): Pick<Prisma.WhatsAppInstanceUpdateInput, 'sendsSinceMicroPause'> {
   if (mode === 'floor') {
     // Resposta a conversa aberta (`ignorePaceLock` honrado) não toca o
     // contador de micro-pausa — decisão da Fase 4.B, `packages/core/whatsapp/jitter.ts`.
-    return { nextSendAllowedAt: result.nextSendAllowedAt };
+    return {};
   }
   return {
-    nextSendAllowedAt: result.nextSendAllowedAt,
     sendsSinceMicroPause: result.microPauseTriggered ? 0 : { increment: 1 },
   };
+}
+
+/**
+ * Avança `WhatsAppInstance.nextSendAllowedAt` de forma MONOTÔNICA — o campo
+ * só pode ANDAR PARA A FRENTE, nunca recuar (achado do Órion, revisão de
+ * 2026-09-23).
+ *
+ * CAUSA RAIZ do bug: até esta correção, `nextSendAllowedAt` era só mais um
+ * campo dentro do objeto `data` de `tx.whatsAppInstance.update(...)` — um
+ * `SET` CEGO, calculado inteiramente em JS (`advanceSendPace`) a partir do
+ * estado da instância lido ANTES da transação. Com dois envios CONCORRENTES
+ * na MESMA instância (ex.: duas abas, ou um envio manual correndo junto do
+ * futuro `dispatch-tick`), o `UPDATE` que COMITA por último vence, mesmo que
+ * o valor dele seja MENOR que o que já estava gravado — ex.: envio A sorteia
+ * um jitter/micro-pausa longa (gate 10min no futuro) e comita ANTES de envio
+ * B, que sorteou um jitter curto (gate 45s no futuro); o commit de B
+ * sobrescreve o de A sem erro, sem alarme, e a trava anti-banimento RECUA.
+ *
+ * CORREÇÃO: a comparação "só avança" acontece NO PRÓPRIO POSTGRES (cláusula
+ * `WHERE` da mesma `UPDATE`), nunca em duas etapas no processo Node (ler o
+ * valor atual, decidir em JS, escrever) — um "ler antes de escrever" teria
+ * EXATAMENTE a mesma corrida que esta correção elimina, só que mais difícil
+ * de notar. `nextSendAllowedAt IS NULL` conta como "-infinito" (toda
+ * instância nasce com o campo nulo, ARQUITETURA §4.9.10 — precisa aceitar o
+ * primeiro valor sem comparação, senão NENHUM envio jamais setaria o gate).
+ * `$executeRaw` (não `$queryRaw`) porque não há linha para ler de volta.
+ *
+ * Roda DENTRO da mesma transação que o resto do envio (2a sucesso / 2b falha
+ * confirmada / 2b incerto) — participa do mesmo commit atômico; não é uma
+ * transação própria.
+ *
+ * COMO EVITAR DE NOVO: qualquer campo que representa um "gate"/"teto" lido
+ * por MÚLTIPLOS escritores concorrentes (não um contador simples, que já
+ * usa `{ increment }`) precisa da mesma técnica — comparar e escrever no
+ * banco, nunca no processo.
+ */
+async function advanceNextSendAllowedAt(tx: Prisma.TransactionClient, instanceId: string, candidate: Date): Promise<void> {
+  await tx.$executeRaw`
+    UPDATE "whatsapp_instances"
+    SET "nextSendAllowedAt" = ${candidate}
+    WHERE "id" = ${instanceId}
+      AND ("nextSendAllowedAt" IS NULL OR "nextSendAllowedAt" < ${candidate})
+  `;
 }
 
 /** Mesma granularidade de `InstanceDailyStat.date` (`@db.Date`, fuso `APP_TIMEZONE`). Duplicado de propósito de `lib/services/whatsapp-instances.ts#todayDateKey` — mesma regra de "duplicar em vez de importar entre módulos de serviço não relacionados" já usada no monorepo (ver `convention-api-routes-fase1`, regra 4). */
@@ -392,10 +437,11 @@ async function recordSendFailure(
     errorMessage: string;
     previousStatus: string;
     /** 🆕 Fase 4.C — a cadência avança mesmo em falha CONFIRMADA (§6.8.7: "depois de TODO envio"). */
-    paceUpdate: Pick<Prisma.WhatsAppInstanceUpdateInput, 'nextSendAllowedAt' | 'sendsSinceMicroPause'>;
+    paceMode: PaceAdvanceMode;
+    paceResult: AdvanceSendPaceResult;
   },
 ): Promise<void> {
-  const { messageId, instanceId, instanceName, instanceDate, effect, errorMessage, previousStatus, paceUpdate } = params;
+  const { messageId, instanceId, instanceName, instanceDate, effect, errorMessage, previousStatus, paceMode, paceResult } = params;
 
   await tx.message.update({
     where: { id: messageId },
@@ -408,19 +454,22 @@ async function recordSendFailure(
   });
 
   // ⚠️ Este `update` roda SEMPRE agora (antes só rodava quando a falha
-  // afetava `consecutiveFailures`/`status`) — a cadência (`paceUpdate`)
+  // afetava `consecutiveFailures`/`status`) — a cadência (`sendsSinceMicroPause`)
   // precisa avançar em toda falha confirmada, não só nas que punem a
   // instância. `consecutiveFailures`/desconexão continuam condicionais.
+  // `nextSendAllowedAt` é avançado SEPARADAMENTE, de forma monotônica —
+  // ver `advanceNextSendAllowedAt`.
   const updated = await tx.whatsAppInstance.update({
     where: { id: instanceId },
     data: {
-      ...paceUpdate,
+      ...paceFieldsForUpdate(paceMode, paceResult),
       ...(effect.incrementConsecutiveFailures ? { consecutiveFailures: { increment: 1 } } : {}),
       ...(effect.disconnectInstance
         ? { status: 'disconnected', lastErrorAt: new Date(), lastErrorMessage: errorMessage }
         : {}),
     },
   });
+  await advanceNextSendAllowedAt(tx, instanceId, paceResult.nextSendAllowedAt);
 
   if (effect.incrementConsecutiveFailures || effect.disconnectInstance) {
     if (effect.incrementConsecutiveFailures && updated.consecutiveFailures >= CONSECUTIVE_FAILURE_DEGRADE_THRESHOLD && !updated.isDegraded) {
@@ -487,10 +536,11 @@ async function recordSendUncertain(
     effect: EvolutionErrorEffect;
     errorMessage: string;
     /** 🆕 Fase 4.C — a cadência avança mesmo em resultado incerto (§6.8.7: "depois de TODO envio", é o caso mais importante — a mensagem pode ter saído). */
-    paceUpdate: Pick<Prisma.WhatsAppInstanceUpdateInput, 'nextSendAllowedAt' | 'sendsSinceMicroPause'>;
+    paceMode: PaceAdvanceMode;
+    paceResult: AdvanceSendPaceResult;
   },
 ): Promise<void> {
-  const { messageId, instanceId, effect, errorMessage, paceUpdate } = params;
+  const { messageId, instanceId, effect, errorMessage, paceMode, paceResult } = params;
   const humanMessage = `Resultado incerto — a mensagem PODE ter sido entregue antes da falha de comunicação. Verifique a conversa antes de reenviar. (${errorMessage})`;
 
   await tx.message.update({
@@ -500,13 +550,15 @@ async function recordSendUncertain(
 
   // 🆕 Fase 4.C — `consecutiveUncertain` (distinto de `consecutiveFailures`,
   // ver comentário do campo no schema) sobe em incerto e só zera em SUCESSO
-  // confirmado — nunca em falha confirmada normal. Junto com `paceUpdate`
-  // porque os dois são o mesmo `update` na mesma linha (Cronos: "incremento
-  // atômico, nunca read-modify-write em JS").
+  // confirmado — nunca em falha confirmada normal. Junto com
+  // `sendsSinceMicroPause` porque os dois são o mesmo `update` na mesma
+  // linha (Cronos: "incremento atômico, nunca read-modify-write em JS").
+  // `nextSendAllowedAt` é avançado SEPARADAMENTE, de forma monotônica.
   await tx.whatsAppInstance.update({
     where: { id: instanceId },
-    data: { ...paceUpdate, consecutiveUncertain: { increment: 1 } },
+    data: { ...paceFieldsForUpdate(paceMode, paceResult), consecutiveUncertain: { increment: 1 } },
   });
+  await advanceNextSendAllowedAt(tx, instanceId, paceResult.nextSendAllowedAt);
 
   const message = await tx.message.findUnique({ where: { id: messageId } });
   if (message) {
@@ -608,6 +660,17 @@ export async function sendLeadMessage(
   const phoneType = lead.phoneType;
   const candidate = await resolveInstanceForSend(lead.id, input.instanceId);
   const { instance } = candidate;
+
+  // 🆕 Fase 4.B — resolve o cliente Evolution do SERVIDOR desta instância
+  // (`evolutionServerId`) AQUI, antes do write-ahead e de qualquer leitura
+  // relacionada ao guard — nunca dentro do bloco `try`/`sendText` abaixo:
+  // colocar ali violaria o invariante que o Órion audita ("entre o guard e
+  // `sendText` só existe a transação de write-ahead", ver comentário no topo
+  // do arquivo) ao introduzir uma 2ª leitura de banco (`EvolutionServer`)
+  // nessa janela. Resolver aqui também evita reservar cota
+  // (`InstanceDailyStat.sentCount`) para um envio que nem vai conseguir
+  // achar QUAL servidor chamar — falha rápido, sem gastar write-ahead.
+  const evolutionClient = await getEvolutionClientForInstance(instance);
 
   // G9 — última mensagem de saída (qualquer instância) + G10 — 1º contato
   // frio + 🆕 Fase 4.C — última mensagem de ENTRADA (G9b/`lastInboundAt`).
@@ -736,7 +799,8 @@ export async function sendLeadMessage(
   try {
     // ⚠️ ÚNICO call site de produção de `sendText` para mensagem de lead
     // (ARQUITETURA §4.9.9 item 5 — Órion audita com `grep -rn "sendText(" apps/ packages/`).
-    const sendResult = await getEvolutionClient().sendText(instance.evolutionInstanceName, { to: phoneE164, text: finalText });
+    // `evolutionClient` já resolvido ANTES do write-ahead (ver comentário acima).
+    const sendResult = await evolutionClient.sendText(instance.evolutionInstanceName, { to: phoneE164, text: finalText });
     providerMessageId = sendResult.providerMessageId;
     sentAt = new Date();
   } catch (err) {
@@ -757,7 +821,8 @@ export async function sendLeadMessage(
       instanceName: instance.name,
       instanceDate: today,
       previousStatus: instance.status,
-      paceUpdate: paceFieldsForUpdate(paceMode, paceResult),
+      paceMode,
+      paceResult,
     });
     throw mapSendErrorToApiError(err);
   }
@@ -779,9 +844,11 @@ export async function sendLeadMessage(
       where: { id: instance.id },
       // `consecutiveUncertain: 0` — zerado por SUCESSO confirmado (comentário
       // do campo no schema); `consecutiveFailures: 0` já existia antes desta
-      // rodada.
+      // rodada. `nextSendAllowedAt` NÃO entra aqui — avançado separadamente,
+      // de forma monotônica, abaixo.
       data: { consecutiveFailures: 0, consecutiveUncertain: 0, ...paceFieldsForUpdate(paceMode, paceResult) },
     });
+    await advanceNextSendAllowedAt(tx, instance.id, paceResult.nextSendAllowedAt);
     await advanceLeadToContacted(tx, lead.id, lead.status);
     await tx.leadActivity.create({
       data: {
@@ -908,7 +975,8 @@ async function handleSendFailure(
     instanceDate: Date;
     previousStatus: string;
     /** 🆕 Fase 4.C */
-    paceUpdate: Pick<Prisma.WhatsAppInstanceUpdateInput, 'nextSendAllowedAt' | 'sendsSinceMicroPause'>;
+    paceMode: PaceAdvanceMode;
+    paceResult: AdvanceSendPaceResult;
   },
 ): Promise<void> {
   const messagingError = err instanceof MessagingError ? err : null;
@@ -934,7 +1002,7 @@ async function handleSendFailure(
 
   if (effect.outcome === 'uncertain') {
     await prisma.$transaction((tx) =>
-      recordSendUncertain(tx, { messageId: ctx.messageId, instanceId: ctx.instanceId, effect, errorMessage, paceUpdate: ctx.paceUpdate }),
+      recordSendUncertain(tx, { messageId: ctx.messageId, instanceId: ctx.instanceId, effect, errorMessage, paceMode: ctx.paceMode, paceResult: ctx.paceResult }),
     );
     return;
   }
@@ -947,7 +1015,8 @@ async function handleSendFailure(
       previousStatus: ctx.previousStatus,
       effect,
       errorMessage,
-      paceUpdate: ctx.paceUpdate,
+      paceMode: ctx.paceMode,
+      paceResult: ctx.paceResult,
     }),
   );
 }

@@ -84,6 +84,24 @@ export interface FakeWhatsAppInstance {
   lastConnectionAt: Date | null;
   lastErrorAt: Date | null;
   lastErrorMessage: string | null;
+  /** 🆕 Fase 4.B — `lib/services/webhook.ts#resolveExpectedWebhookApiKey`/`lib/services/evolution-servers.ts`. Opcional/`null` = comportamento pré-Fase-4.B (nenhum teste existente antes desta rodada seta este campo). */
+  evolutionServerId?: string | null;
+  isActive?: boolean;
+}
+
+/** 🆕 Fase 4.B — `lib/services/evolution-servers.ts` (CRUD de servidores Evolution API) e `lib/services/webhook.ts` (resolução do apikey esperado por instância). */
+export interface FakeEvolutionServer {
+  id: string;
+  name: string;
+  baseUrl: string;
+  isActive: boolean;
+  apiKeyCiphertext: Buffer;
+  apiKeyIv: Buffer;
+  apiKeyAuthTag: Buffer;
+  apiKeyKeyVersion: number;
+  createdById: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface FakeLeadActivity {
@@ -116,6 +134,7 @@ export interface FakeDbSeed {
   optOuts?: FakeOptOut[];
   whatsAppInstances?: FakeWhatsAppInstance[];
   users?: FakeUser[];
+  evolutionServers?: FakeEvolutionServer[];
 }
 
 const store = {
@@ -127,6 +146,7 @@ const store = {
   whatsAppInstances: [] as FakeWhatsAppInstance[],
   leadActivities: [] as FakeLeadActivity[],
   users: [] as FakeUser[],
+  evolutionServers: [] as FakeEvolutionServer[],
 };
 
 let nextId = 1;
@@ -144,6 +164,7 @@ export function resetFakeDb(seed: FakeDbSeed = {}): void {
   store.whatsAppInstances = seed.whatsAppInstances ? [...seed.whatsAppInstances] : [];
   store.leadActivities = [];
   store.users = seed.users ? [...seed.users] : [];
+  store.evolutionServers = seed.evolutionServers ? [...seed.evolutionServers] : [];
   nextId = 1;
 }
 
@@ -342,11 +363,67 @@ export const fakePrismaClient = {
   },
 
   whatsAppInstance: {
+    findUnique: vi.fn(async ({ where }: { where: { id?: string; instanceKey?: string } }) => {
+      if (where.instanceKey !== undefined) return store.whatsAppInstances.find((i) => (i as unknown as { instanceKey?: string }).instanceKey === where.instanceKey) ?? null;
+      return store.whatsAppInstances.find((i) => i.id === where.id) ?? null;
+    }),
+    count: vi.fn(async ({ where }: { where?: { evolutionServerId?: string | { in: string[] }; isActive?: boolean } } = {}) => {
+      let rows = store.whatsAppInstances;
+      if (where?.evolutionServerId !== undefined) {
+        rows =
+          typeof where.evolutionServerId === 'string'
+            ? rows.filter((i) => i.evolutionServerId === where.evolutionServerId)
+            : rows.filter((i) => (where.evolutionServerId as { in: string[] }).in.includes(i.evolutionServerId ?? ''));
+      }
+      if (where?.isActive !== undefined) rows = rows.filter((i) => (i.isActive ?? true) === where.isActive);
+      return rows.length;
+    }),
+    updateMany: vi.fn(async ({ where, data }: { where?: { evolutionServerId?: null }; data: Record<string, unknown> }) => {
+      const rows = where?.evolutionServerId === null ? store.whatsAppInstances.filter((i) => !i.evolutionServerId) : store.whatsAppInstances;
+      for (const row of rows) Object.assign(row, data);
+      return { count: rows.length };
+    }),
     update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
       const instance = store.whatsAppInstances.find((i) => i.id === where.id);
       if (!instance) throwNotFoundInFake('whatsAppInstance');
       Object.assign(instance, data);
       return { ...instance };
+    }),
+  },
+
+  evolutionServer: {
+    findUnique: vi.fn(async ({ where }: { where: { id?: string; baseUrl?: string } }) => {
+      if (where.baseUrl !== undefined) return store.evolutionServers.find((s) => s.baseUrl === where.baseUrl) ?? null;
+      return store.evolutionServers.find((s) => s.id === where.id) ?? null;
+    }),
+    findMany: vi.fn(async () => [...store.evolutionServers].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())),
+    count: vi.fn(async () => store.evolutionServers.length),
+    create: vi.fn(async ({ data }: { data: Partial<FakeEvolutionServer> & { baseUrl: string; createdById: string } }) => {
+      if (store.evolutionServers.some((s) => s.baseUrl === data.baseUrl)) throwUniqueViolation();
+      const now = new Date();
+      const created: FakeEvolutionServer = {
+        id: genId('evoserver'),
+        name: 'Servidor',
+        isActive: true,
+        apiKeyCiphertext: Buffer.from(''),
+        apiKeyIv: Buffer.from(''),
+        apiKeyAuthTag: Buffer.from(''),
+        apiKeyKeyVersion: 1,
+        createdAt: now,
+        updatedAt: now,
+        ...data,
+      };
+      store.evolutionServers.push(created);
+      return { ...created };
+    }),
+    update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+      const server = store.evolutionServers.find((s) => s.id === where.id);
+      if (!server) throwNotFoundInFake('evolutionServer');
+      if (typeof data.baseUrl === 'string' && store.evolutionServers.some((s) => s.id !== where.id && s.baseUrl === data.baseUrl)) {
+        throwUniqueViolation();
+      }
+      Object.assign(server, data, { updatedAt: new Date() });
+      return { ...server };
     }),
   },
 

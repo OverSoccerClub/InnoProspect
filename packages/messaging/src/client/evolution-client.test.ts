@@ -222,6 +222,38 @@ describe('EvolutionClient — retry de transporte continua ativo em chamadas IDE
   });
 });
 
+describe('EvolutionClient.testConnection', () => {
+  it('GET /instance/fetchInstances com o apikey do servidor — sucesso não lança', async () => {
+    const { fetchImpl, calls } = fakeFetch([jsonResponse(200, [])]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+
+    await expect(client.testConnection()).resolves.toBeUndefined();
+
+    expect(calls[0]?.url).toBe('https://evolution.example.com/instance/fetchInstances');
+    expect(calls[0]?.init?.method).toBe('GET');
+    expect((calls[0]?.init?.headers as Record<string, string>).apikey).toBe('test-key');
+  });
+
+  it('apikey errado (401) lança AUTH_ERROR SEM retry', async () => {
+    const { fetchImpl, calls } = fakeFetch([jsonResponse(401, { message: 'Unauthorized' })]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+
+    await expect(client.testConnection()).rejects.toMatchObject({ code: 'AUTH_ERROR' });
+    expect(calls.length).toBe(1); // retryable:false — nunca tenta 2ª vez
+  });
+
+  it('timeout de rede lança TIMEOUT SEM retry (retryable:false, mesmo sendo um erro de transporte)', async () => {
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+    }) as typeof fetch;
+    const client = new EvolutionClient({ ...config, fetchImpl, timeoutMs: 5 });
+
+    await expect(client.testConnection()).rejects.toMatchObject({ code: 'TIMEOUT' });
+  });
+});
+
 describe('EvolutionClient.getConnectionState / connect', () => {
   it('mapeia state=open para connected', async () => {
     const { fetchImpl } = fakeFetch([jsonResponse(200, { instance: { instanceName: 'vendas-01', state: 'open' } })]);
