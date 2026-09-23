@@ -34,9 +34,22 @@ export default async function DashboardLayout({ children }: { children: React.Re
         */}
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
           <Topbar user={session?.user} />
-          <main className="flex-1 overflow-x-hidden p-4 md:p-8">
-            <div className="mx-auto w-full max-w-6xl">{children}</div>
-          </main>
+          {/*
+            Sem `max-w` e sem `mx-auto`: o conteúdo ocupa a largura toda
+            disponível ao lado da sidebar. Antes havia `max-w-6xl` (1152px),
+            que num monitor de 1849px deixava ~700px de faixa morta à direita
+            — pedido do dono em 23/09/2026, olhando o painel numa tela larga.
+            Isto é um painel de dados (tabelas de leads, grades de KPI), não
+            um texto corrido: aqui largura vira coluna visível, não linha
+            longa demais para ler. A landing (`components/marketing/*`) mantém
+            o `max-w-6xl` de propósito, pelo motivo oposto — lá é leitura.
+
+            O `min-w-0` do flex acima continua sendo o que impede o estouro
+            horizontal; tirar o teto de largura não o reintroduz (medido em
+            1440px e 1280px depois da mudança: `scrollWidth` == `clientWidth`).
+            O respiro lateral fica por conta do padding do `main`.
+          */}
+          <main className="w-full flex-1 overflow-x-hidden p-4 md:p-6 lg:p-8">{children}</main>
         </div>
       </div>
     </AuthGuard>
