@@ -35,7 +35,7 @@ vi.mock('@/lib/alerts', () => ({ sendAlert: sendAlertMock }));
 // `webhook.ts` só é avaliado depois dos mocks de `@inno/db`/`lib/logger`
 // estarem registrados (o `vi.mock` já é hoisted para o topo do arquivo pelo
 // Vitest, mas isso deixa a ordem de dependência óbvia na leitura).
-const { processEvolutionWebhookEvent, resolveExpectedWebhookApiKeys, isWebhookApiKeyAccepted } = await import('./webhook');
+const { processEvolutionWebhookEvent, resolveExpectedWebhookApiKeys, isWebhookApiKeyAccepted, extractApiKeyFromBody } = await import('./webhook');
 const { encryptEvolutionApiKey } = await import('@/lib/evolution-server-crypto');
 
 const instance = { id: 'inst-1' } as WhatsAppInstance;
@@ -508,7 +508,7 @@ describe('isWebhookApiKeyAccepted — decisão real que a rota usa (@inno/messag
     });
     const instance = instanceWithOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' }, 'chave-da-instancia');
 
-    await expect(isWebhookApiKeyAccepted(instance, 'chave-da-instancia')).resolves.toBe(true);
+    await expect(isWebhookApiKeyAccepted(instance, ['chave-da-instancia'])).resolves.toBe(true);
   });
 
   it('webhook ACEITO com a chave GLOBAL do servidor (instância sem credencial própria — legada)', async () => {
@@ -520,7 +520,7 @@ describe('isWebhookApiKeyAccepted — decisão real que a rota usa (@inno/messag
     });
     const instance = instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' });
 
-    await expect(isWebhookApiKeyAccepted(instance, 'chave-do-servidor')).resolves.toBe(true);
+    await expect(isWebhookApiKeyAccepted(instance, ['chave-do-servidor'])).resolves.toBe(true);
   });
 
   it('webhook RECUSADO com chave ERRADA (não bate com a própria nem com a do servidor)', async () => {
@@ -532,13 +532,65 @@ describe('isWebhookApiKeyAccepted — decisão real que a rota usa (@inno/messag
     });
     const instance = instanceWithOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' }, 'chave-da-instancia');
 
-    await expect(isWebhookApiKeyAccepted(instance, 'chave-completamente-errada')).resolves.toBe(false);
+    await expect(isWebhookApiKeyAccepted(instance, ['chave-completamente-errada'])).resolves.toBe(false);
   });
 
   it('instância LEGADA sem chave própria guardada continua funcionando pela chave global (env, evolutionServerId null)', async () => {
     process.env.EVOLUTION_API_KEY = 'chave-global-legada-env';
     const instance = instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: null });
 
-    await expect(isWebhookApiKeyAccepted(instance, 'chave-global-legada-env')).resolves.toBe(true);
+    await expect(isWebhookApiKeyAccepted(instance, ['chave-global-legada-env'])).resolves.toBe(true);
+  });
+
+  it('nenhuma candidata recebida (nem cabeçalho nem corpo) — RECUSADO, fail-closed, sem lançar', async () => {
+    process.env.EVOLUTION_API_KEY = 'chave-global-legada-env';
+    const instance = instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: null });
+
+    await expect(isWebhookApiKeyAccepted(instance, [])).resolves.toBe(false);
+  });
+
+  it('🆕 incidente #2 (2026-09-23): ACEITO quando a chave vem só no CORPO (cabeçalho ausente/errado) — a Evolution v2.3.7 pode assinar assim', async () => {
+    process.env.EVOLUTION_API_KEY = 'chave-global-legada-env';
+    const instance = instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: null });
+
+    // simula a rota: header não bateu (vazio/errado), só a candidata do corpo é passada.
+    await expect(isWebhookApiKeyAccepted(instance, ['chave-global-legada-env'])).resolves.toBe(true);
+  });
+
+  it('ACEITO quando a chave vem só no CABEÇALHO e a do CORPO está errada — as duas fontes são candidatas independentes', async () => {
+    process.env.EVOLUTION_API_KEY = 'chave-global-legada-env';
+    const instance = instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: null });
+
+    await expect(isWebhookApiKeyAccepted(instance, ['chave-global-legada-env', 'chave-do-corpo-errada'])).resolves.toBe(true);
+  });
+
+  it('RECUSADO quando NENHUMA das duas candidatas (cabeçalho e corpo) bate', async () => {
+    process.env.EVOLUTION_API_KEY = 'chave-global-legada-env';
+    const instance = instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: null });
+
+    await expect(isWebhookApiKeyAccepted(instance, ['chave-errada-do-header', 'chave-errada-do-corpo'])).resolves.toBe(false);
+  });
+});
+
+describe('extractApiKeyFromBody — leitura defensiva da apikey no CORPO do webhook (🆕 incidente #2, 2026-09-23)', () => {
+  it('extrai a apikey quando presente no corpo, junto dos outros campos do evento', () => {
+    expect(extractApiKeyFromBody({ apikey: 'chave-do-corpo', event: 'messages.upsert', instance: 'vendas-01', data: {} })).toBe('chave-do-corpo');
+  });
+
+  it('devolve null quando o campo apikey não existe no corpo', () => {
+    expect(extractApiKeyFromBody({ event: 'messages.upsert', instance: 'vendas-01', data: {} })).toBeNull();
+  });
+
+  it('devolve null quando apikey não é string (payload malformado) — nunca lança', () => {
+    expect(extractApiKeyFromBody({ apikey: 12345 })).toBeNull();
+    expect(extractApiKeyFromBody({ apikey: null })).toBeNull();
+    expect(extractApiKeyFromBody({ apikey: '' })).toBeNull();
+  });
+
+  it('devolve null para corpo não-objeto (string, número, null, array) — nunca lança', () => {
+    expect(extractApiKeyFromBody('string qualquer')).toBeNull();
+    expect(extractApiKeyFromBody(123)).toBeNull();
+    expect(extractApiKeyFromBody(null)).toBeNull();
+    expect(extractApiKeyFromBody(undefined)).toBeNull();
   });
 });

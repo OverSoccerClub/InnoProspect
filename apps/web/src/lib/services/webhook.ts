@@ -99,22 +99,49 @@ export async function resolveExpectedWebhookApiKeys(instance: WebhookAuthInstanc
 }
 
 /**
- * Decide se `receivedApiKey` (header `apikey` do webhook) bate com QUALQUER
- * uma das chaves aceitáveis desta instância (`resolveExpectedWebhookApiKeys`
- * acima) — chamada única da rota (`app/api/webhooks/evolution/
- * [instanceKey]/route.ts`), mantém a rota fina (convenção #2 de
- * `convention-api-routes-fase1`).
+ * Decide se ALGUMA das `receivedApiKeys` (candidatas recebidas — hoje: header
+ * `apikey` e/ou campo `apikey` do CORPO do webhook, ver `extractApiKeyFromBody`
+ * abaixo) bate com QUALQUER uma das chaves aceitáveis desta instância
+ * (`resolveExpectedWebhookApiKeys` acima) — chamada única da rota
+ * (`app/api/webhooks/evolution/[instanceKey]/route.ts`), mantém a rota fina
+ * (convenção #2 de `convention-api-routes-fase1`).
  *
- * Comparação em TEMPO CONSTANTE contra CADA candidata, SEM short-circuit
- * que revele qual bateu: `Array.prototype.map` sempre avalia a comparação
- * para TODAS as chaves antes do `.some` decidir — não há `||`/`return`
- * antecipado no meio do array que pare na primeira igual e vaze timing de
- * "qual fonte é a certa" para quem está medindo o servidor.
+ * 🆕 Correção do incidente 2026-09-23 #2 (webhook ainda mudo depois de aceitar
+ * a chave PRÓPRIA da instância — ver comentário grande acima e o log novo
+ * "apikey sem correspondência"): a Evolution v2.3.7 pode assinar o webhook
+ * com `apikey` no CORPO do JSON em vez do (ou além do) cabeçalho — o payload
+ * documentado da v2 inclui esse campo solto junto de `event`/`instance`/
+ * `data`. `receivedApiKeys` já chega aqui como a lista de TODAS as fontes
+ * onde encontramos uma candidata (0, 1 ou 2 itens) — esta função só decide
+ * "bate com alguma coisa", não sabe (nem precisa saber) de onde cada uma
+ * veio.
+ *
+ * Comparação em TEMPO CONSTANTE contra CADA combinação (candidata × chave
+ * aceita), SEM short-circuit que revele qual bateu: `flatMap`/`map` sempre
+ * avaliam TODAS as comparações antes do `.some` decidir — não há `||`/
+ * `return` antecipado no meio que pare na primeira igual e vaze timing de
+ * "qual fonte/qual chave é a certa" para quem está medindo o servidor.
  */
-export async function isWebhookApiKeyAccepted(instance: WebhookAuthInstance, receivedApiKey: string): Promise<boolean> {
+export async function isWebhookApiKeyAccepted(instance: WebhookAuthInstance, receivedApiKeys: readonly string[]): Promise<boolean> {
   const expectedApiKeys = await resolveExpectedWebhookApiKeys(instance);
-  const matches = expectedApiKeys.map((key) => constantTimeEqual(receivedApiKey, key));
+  const matches = receivedApiKeys.flatMap((received) => expectedApiKeys.map((expected) => constantTimeEqual(received, expected)));
   return matches.some(Boolean);
+}
+
+/**
+ * Extrai a `apikey` do CORPO do webhook (`{ apikey, event, instance, data,
+ * ... }` — ver comentário de `isWebhookApiKeyAccepted` acima), quando
+ * presente. Puramente defensivo e usado SÓ para autenticação — nunca lança,
+ * nunca assume o shape do corpo: `evolutionWebhookEventSchema`
+ * (`@inno/contracts`) não declara este campo (ele não faz parte do evento
+ * NORMALIZADO), então `parseEvolutionWebhookEvent` o descarta silenciosamente
+ * — por isso a leitura precisa ser feita aqui, direto no `rawBody`, ANTES da
+ * validação do evento.
+ */
+export function extractApiKeyFromBody(rawBody: unknown): string | null {
+  if (rawBody === null || typeof rawBody !== 'object') return null;
+  const value = (rawBody as Record<string, unknown>).apikey;
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 /** `remoteJid` da Evolution vem como `"5511987654321@s.whatsapp.net"` — a parte antes do `@` já é o telefone em dígitos (com DDI), então a MESMA normalização BR usada no scraping (`@inno/core/leads/phone.ts`) resolve para E.164 sem precisar de um parser de JID dedicado. */

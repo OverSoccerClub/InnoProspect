@@ -1,9 +1,55 @@
 ---
 name: bug-webhook-apikey-instance-vs-global
-description: Webhook da Evolution mudo em produção (nenhum retorno aceito) — validação só contra a chave GLOBAL do servidor, mas a v2 dá uma apikey PRÓPRIA por instância; corrigido aceitando as duas
+description: Webhook da Evolution mudo em produção (nenhum retorno aceito) — 2 causas em sequência no MESMO incidente: (1) só validava a apikey GLOBAL do servidor, a v2 tem uma PRÓPRIA por instância; (2) a apikey só era lida do HEADER, a v2.3.7 manda também/só no CORPO do JSON
 metadata:
   type: project
 ---
+
+**🆕 Atualização 2026-09-23, incidente #2 (CONFIRMADO, não mais hipótese) —
+mesma sessão, depois da correção #1 abaixo já estar em produção:** o log novo
+(`webhook evolution: apikey sem correspondência...`) provou que `instanceKey`
+resolvia (`instanceId` aparecia) mas a `apikey` recebida não batia com
+NENHUMA das duas candidatas já aceitas (própria da instância + do servidor).
+Causa raiz real, confirmada lendo o código (não infra): a rota
+(`app/api/webhooks/evolution/[instanceKey]/route.ts`) só lia
+`req.headers.get('apikey')` — o CORPO do webhook nunca era olhado para
+autenticação, e o schema Zod do evento (`evolutionWebhookEventSchema`,
+`packages/contracts/src/webhook.contract.ts`) nem declara um campo `apikey`
+(ele descreve só `event`/`instance`/`data`), então mesmo que a Evolution
+mandasse `apikey` dentro do JSON, `safeParse` o descartaria em silêncio antes
+de qualquer comparação. A Evolution v2.3.7 pode assinar levando a `apikey` no
+CORPO (`{ apikey, event, instance, data, ... }`) em vez do (ou além do)
+cabeçalho — sem log específico, "não veio candidata alguma" e "veio mas não
+bateu" produziam o MESMO warn, cegando o diagnóstico de novo.
+
+**Correção #2:** `extractApiKeyFromBody` (`lib/services/webhook.ts`) lê
+`apikey` direto do `rawBody` (ANTES/À PARTE de `parseEvolutionWebhookEvent`,
+que só normaliza o evento e nunca veria esse campo). `isWebhookApiKeyAccepted`
+mudou de assinatura — recebe agora `receivedApiKeys: readonly string[]` (0 a
+2 candidatas: header e/ou corpo) em vez de uma string única, e compara CADA
+candidata contra CADA credencial aceita via `flatMap`/`map` sem
+short-circuit (mesma garantia de tempo constante de antes, agora estendida
+ao produto cruzado). A rota loga `apiKeySource` (`'cabeçalho'` /
+`'corpo'` / `'cabeçalho e corpo'` / `'nenhum (ausente...)'`) — NUNCA o valor —
+na recusa, para a distinção que faltou no incidente #1 não faltar de novo. A
+resposta HTTP continua sempre `404` genérico nos dois casos (não virar
+oráculo). 8 testes novos em `webhook.test.ts` (aceito só por header, só por
+corpo, ambas erradas, nenhuma presente, + 4 de `extractApiKeyFromBody`
+isolado). `pnpm typecheck`/`lint`/`test` verdes (667 testes).
+
+**Como evitar de novo (generalização, some-se à de baixo):** quando um
+provedor externo pode transportar a MESMA credencial em mais de um
+"canal" de transporte (aqui: header HTTP OU corpo JSON), a mesma lógica de
+"aceitar todas as fontes conhecidas em paralelo" (já aplicada aos NÍVEIS da
+credencial no incidente #1) também vale para os CANAIS de transporte dela —
+não é o mesmo bug reaparecendo, é o mesmo princípio de projeto que ainda não
+tinha sido aplicado à segunda dimensão do problema (fonte × canal). Continua
+sem confirmação contra servidor real qual canal a v2.3.7 usa de fato — a
+correção é robusta a qualquer um.
+
+---
+
+**Sintoma original (2026-09-23, incidente #1):**
 
 **Sintoma (2026-09-23, bloqueava o dono em produção, 1ª mensagem real
 enviada):** status trava em "Enviada" (nunca "Entregue"), resposta do lead
