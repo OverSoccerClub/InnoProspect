@@ -15,6 +15,7 @@
  * de nenhuma mudança aqui.
  */
 import type { CampaignTargetStatus, Prisma } from '@inno/db';
+import { sendAlert } from '@/lib/alerts';
 
 /**
  * Ordem real do funil "feliz" (ARQUITETURA §3, comentário de
@@ -140,10 +141,22 @@ export async function skipPendingCampaignTargetsForPhone(
 /**
  * Kill switch (ARQUITETURA §6.6): quando uma instância desconecta/é banida,
  * TODAS as campanhas que usam SÓ ELA (nenhuma outra instância ativa) viram
- * `halted`. Compartilhado entre o webhook (`connection.update`) e o endpoint
- * manual `POST /whatsapp/instances/:id/disconnect`. Só afeta campanhas em
- * `running`/`scheduled` — `draft`/`paused`/`completed`/`cancelled`/`halted`
- * não mudam (nada a proteger: já não estão enviando, ou já estão paradas).
+ * `halted`. Compartilhado entre o webhook (`connection.update`), o endpoint
+ * manual `POST /whatsapp/instances/:id/disconnect` e a falha de envio
+ * (`lib/services/messages.ts`). Só afeta campanhas em `running`/`scheduled`
+ * — `draft`/`paused`/`completed`/`cancelled`/`halted` não mudam (nada a
+ * proteger: já não estão enviando, ou já estão paradas).
+ *
+ * Dispara o alerta `campaign_halted` sempre que `affected.length > 0` — essa
+ * condição JÁ É a checagem de transição (nada muda numa 2ª chamada com a
+ * mesma instância: as campanhas já estão `halted`, saem do filtro
+ * `running`/`scheduled`), então não precisa de dedupe aqui. Decisão: alerta
+ * mesmo quando o disparo foi o disconnect MANUAL do operador — diferente da
+ * retomada manual de fila do worker (que não alerta porque quem clicou já
+ * sabe o que fez), aqui o operador sabe que desconectou a instância, mas não
+ * necessariamente sabe DE CABEÇA quais campanhas dependiam só dela; a
+ * resposta da rota já devolve `pausedCampaigns`, mas o alerta é a rede de
+ * segurança para quem não está olhando a tela naquele momento.
  */
 export async function haltCampaignsSoleInstanceDisconnected(
   tx: Prisma.TransactionClient,
@@ -163,5 +176,13 @@ export async function haltCampaignsSoleInstanceDisconnected(
     where: { id: { in: affected.map((c) => c.id) } },
     data: { status: 'halted', haltReason },
   });
-  return affected.map((c) => c.id);
+
+  const campaignIds = affected.map((c) => c.id);
+  // Alerta com um texto PRÓPRIO e genérico, nunca `haltReason` cru — em um
+  // dos 3 call sites (`messages.ts`, falha de envio) `haltReason` incorpora a
+  // mensagem de erro da Evolution, que pode ecoar dado da requisição (ver
+  // regra 4 em `lib/alerts.ts`). O `haltReason` detalhado continua gravado
+  // normalmente em `Campaign.haltReason` (Postgres, não um webhook externo).
+  void sendAlert({ kind: 'campaign_halted', campaignIds, instanceId });
+  return campaignIds;
 }

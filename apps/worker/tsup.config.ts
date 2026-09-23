@@ -27,7 +27,12 @@ export default defineConfig({
   // reprocessamento): ele entra AQUI, e a instrução de uso é
   // `node dist/<nome>.js` — nunca `pnpm run <script>`, que pressupõe um
   // ambiente de desenvolvimento que a imagem de produção não tem.
-  entry: ['src/index.ts', 'src/scripts/backfill-off-niche.ts'],
+  // `src/selftest.ts` (Vulcano, 2026-09-23) segue a MESMA regra do backfill
+  // acima: `node dist/selftest.js`/`node dist/selftest.js --ping` precisam
+  // rodar na imagem final (CI e `HEALTHCHECK` do Dockerfile), que não tem
+  // `pnpm`/`tsx`/`src/`. Ver o cabeçalho de `selftest.ts` para o que cada
+  // modo verifica e por quê os dois custam diferente de propósito.
+  entry: ['src/index.ts', 'src/scripts/backfill-off-niche.ts', 'src/selftest.ts'],
   format: ['esm'],
   target: 'node20',
   clean: true,

@@ -118,6 +118,20 @@ que falta, e só então o ranking por UF.
 Validar antes de construir: uma busca escolhida pelo Trends contra uma escolhida
 no escuro, comparando fechamento.
 
+### Bloco 6 — Abordagem gerada por IA (Fase 6, `ARQUITETURA.md §8.10`)
+Ideia do dono (23/09). Correção de premissa registrada lá: **IA não reduz
+banimento por si** — variação de texto é a alavanca mais fraca das três, e o
+spintax já cobre. O ganho é indireto e maior: mensagem ancorada no dado do lead
+é respondida, e conversa respondida é o oposto de spam.
+
+O risco que domina a fase é **alucinação**, não estilo: detalhe inventado numa
+abordagem fria é pior que mensagem genérica. Mitigação estrutural — só campos
+coletados na entrada, validadores duros na saída.
+
+Invariantes: **IA é conselho, nunca engrenagem** (falhou, cai no spintax) e
+geração **na montagem da campanha, nunca no envio** (auditoria antes de sair).
+Começa pelo assistente na ficha do lead, não pelo lote.
+
 ### Depois
 `DELETE /leads/:id` · configurações re-escopadas para diagnóstico operacional ·
 testes de `searches.ts` e da camada HTTP.

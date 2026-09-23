@@ -9,8 +9,10 @@
  * `haltCampaignsSoleInstanceDisconnected` recebem `tx` como PARÂMETRO — fake
  * object manual (REVISAO-QA.md §3), sem dependência nova.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Prisma } from '@inno/db';
+const sendAlertMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/alerts', () => ({ sendAlert: sendAlertMock }));
 import {
   advanceCampaignTargetStatus,
   haltCampaignsSoleInstanceDisconnected,
@@ -41,6 +43,7 @@ function campaign(overrides: Partial<FakeCampaign> & Pick<FakeCampaign, 'id'>): 
 
 beforeEach(() => {
   resetFakeDb();
+  sendAlertMock.mockClear();
 });
 
 describe('advanceCampaignTargetStatus', () => {
@@ -181,15 +184,21 @@ describe('haltCampaignsSoleInstanceDisconnected', () => {
     const state = getFakeDbState();
     expect(state.campaigns[0]!.status).toBe('halted');
     expect(state.campaigns[0]!.haltReason).toBe('Instância desconectada.');
+    // Alerta é a rede de segurança para "campanha parada" ficar silenciosa
+    // (achado do dono, 2026-09-23) — dispara com um texto PRÓPRIO, nunca o
+    // `haltReason` cru (que em outro call site, `messages.ts`, pode
+    // incorporar texto vindo da Evolution).
+    expect(sendAlertMock).toHaveBeenCalledWith({ kind: 'campaign_halted', campaignIds: ['camp-1'], instanceId: 'inst-1' });
   });
 
-  it('campanha com 2 instâncias, só 1 desconecta, NÃO é halted', async () => {
+  it('campanha com 2 instâncias, só 1 desconecta, NÃO é halted, e NÃO alerta (nada mudou)', async () => {
     resetFakeDb({ campaigns: [campaign({ id: 'camp-1', status: 'running', instanceIds: ['inst-1', 'inst-2'] })] });
 
     const affected = await haltCampaignsSoleInstanceDisconnected(tx, 'inst-1', 'Instância desconectada.');
 
     expect(affected).toEqual([]);
     expect(getFakeDbState().campaigns[0]!.status).toBe('running');
+    expect(sendAlertMock).not.toHaveBeenCalled();
   });
 
   it('campanha SEM nenhuma instância associada NÃO é halted (guarda contra o every vacuosamente verdadeiro do Prisma, REVISAO-QA §2.6)', async () => {
@@ -231,5 +240,20 @@ describe('haltCampaignsSoleInstanceDisconnected', () => {
 
     expect(affected.sort()).toEqual(['camp-1', 'camp-2']);
     expect(getFakeDbState().campaigns.find((c) => c.id === 'camp-3')?.status).toBe('running');
+    expect(sendAlertMock).toHaveBeenCalledTimes(1);
+    expect(sendAlertMock).toHaveBeenCalledWith(expect.objectContaining({ kind: 'campaign_halted', instanceId: 'inst-1' }));
+    const call = sendAlertMock.mock.calls[0]![0] as { campaignIds: string[] };
+    expect(call.campaignIds.sort()).toEqual(['camp-1', 'camp-2']);
+  });
+
+  it('chamar de novo para a MESMA instância já halted não re-halta nem realerta (idempotente sob reenvio/retry do chamador)', async () => {
+    resetFakeDb({ campaigns: [campaign({ id: 'camp-1', status: 'running', instanceIds: ['inst-1'] })] });
+
+    await haltCampaignsSoleInstanceDisconnected(tx, 'inst-1', 'Instância desconectada.');
+    sendAlertMock.mockClear();
+    const affected = await haltCampaignsSoleInstanceDisconnected(tx, 'inst-1', 'Instância desconectada.');
+
+    expect(affected).toEqual([]); // já halted, saiu do filtro running/scheduled
+    expect(sendAlertMock).not.toHaveBeenCalled();
   });
 });

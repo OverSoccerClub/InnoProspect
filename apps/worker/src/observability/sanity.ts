@@ -1,8 +1,15 @@
 /**
- * observability/sanity.ts — liga as assertions A1-A4 (`@inno/scraper/sanity`,
- * escritas e testadas, mas com zero chamadores até esta rodada — REVISAO-
+ * observability/sanity.ts — liga as assertions A1-A5 (`@inno/scraper/sanity`,
+ * escritas e testadas, mas com zero chamadores até a Onda 1 — REVISAO-
  * ARQUITETURA §5.7/Onda 1 item 1.1: "o modo de falha mais perigoso do projeto
  * é o sucesso silencioso") ao banco real e à fila `scrape-search`.
+ *
+ * A5 (`checkEnrichmentFillRate`) acrescentada em 2026-09-23: ~260 leads
+ * chegaram coletados só com o nome (endereço/telefone/categoria/site TODOS
+ * vazios) e nenhuma das A1-A4 disparou — elas medem quantidade (A1),
+ * ausência de UM campo isolado (A2 nome, A3 telefone) ou FORMATO (A4), nunca
+ * "quão preenchido, no total, um lead ficou". Ver comentário completo em
+ * `@inno/scraper/sanity/assertions.ts#checkEnrichmentFillRate`.
  *
  * Chamado ao fim de CADA `SearchTask` bem-sucedida (`jobs/scrape-search.job.ts`)
  * — as janelas das assertions são GLOBAIS (últimas N tasks/leads do sistema
@@ -24,6 +31,7 @@ import {
   checkNameFillRate,
   checkPhoneFillRate,
   checkDataShape,
+  checkEnrichmentFillRate,
   type SanityCheckResult,
 } from '@inno/scraper';
 import { persistQueuePause } from '../lib/queue-state.js';
@@ -32,7 +40,13 @@ import { sendAlert } from './alerts.js';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
-const EVENT_TYPES: ScraperHealthEventType[] = ['zero_streak', 'fill_rate_name', 'fill_rate_phone', 'data_shape'];
+const EVENT_TYPES: ScraperHealthEventType[] = [
+  'zero_streak',
+  'fill_rate_name',
+  'fill_rate_phone',
+  'data_shape',
+  'fill_rate_enrichment',
+];
 
 async function gatherSanityInput() {
   const now = new Date();
@@ -48,7 +62,7 @@ async function gatherSanityInput() {
     prisma.lead.findMany({
       orderBy: { collectedAt: 'desc' },
       take: 50,
-      select: { name: true, rating: true, phoneRaw: true, phoneE164: true },
+      select: { name: true, rating: true, phoneRaw: true, phoneE164: true, address: true, category: true, website: true },
     }),
     prisma.lead.count({ where: { collectedAt: { gte: sevenDaysAgo } } }),
     prisma.lead.count({ where: { collectedAt: { gte: sevenDaysAgo }, phoneE164: { not: null } } }),
@@ -71,6 +85,15 @@ async function gatherSanityInput() {
     // falha de normalização, é ausência (não é isto que A4 mede).
     phoneNormalizationFailed: Boolean(l.phoneRaw) && !l.phoneE164,
   }));
+  // A5 — `hasPhone` conta RAW OU E.164 (o que importa aqui é "a Evolution/o
+  // Maps devolveu ALGUM telefone", não se ele normalizou — normalização
+  // falhando é o problema que A4/`dataShapeSamples` já cobre acima).
+  const enrichmentSamples = recentLeadsChrono.map((l) => ({
+    hasAddress: Boolean(l.address && l.address.trim().length > 0),
+    hasPhone: Boolean(l.phoneRaw || l.phoneE164),
+    hasCategory: Boolean(l.category && l.category.trim().length > 0),
+    hasWebsite: Boolean(l.website && l.website.trim().length > 0),
+  }));
 
   const currentWithPhone = recentLeadsDesc.filter((l) => l.phoneE164).length;
   const currentFillRate = recentLeadsDesc.length > 0 ? currentWithPhone / recentLeadsDesc.length : 0;
@@ -80,6 +103,7 @@ async function gatherSanityInput() {
     recentTasks,
     recentLeadNames,
     dataShapeSamples,
+    enrichmentSamples,
     phoneFillRate: {
       current: currentFillRate,
       // Tamanho da MESMA janela usada para `current` (últimos até 50 leads)
@@ -101,6 +125,8 @@ function windowDescriptionFor(type: ScraperHealthEventType): string {
       return 'últimos 50 leads capturados — piso absoluto de 20% (amostra >= 20) OU vs. média móvel de 7 dias';
     case 'data_shape':
       return 'últimos 50 leads capturados';
+    case 'fill_rate_enrichment':
+      return 'últimos 50 leads capturados — piso de 30% de leads "só com o nome" (amostra >= 20)';
   }
 }
 
@@ -151,6 +177,7 @@ export async function evaluateAndRecordSanity(scrapeQueue: Queue): Promise<void>
       input.phoneFillRate.sevenDayAverage,
     ),
     data_shape: checkDataShape(input.dataShapeSamples),
+    fill_rate_enrichment: checkEnrichmentFillRate(input.enrichmentSamples),
   };
 
   let newPausingResult: Extract<SanityCheckResult, { triggered: true }> | null = null;

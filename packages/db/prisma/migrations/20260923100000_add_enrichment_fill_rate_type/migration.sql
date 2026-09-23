@@ -1,0 +1,27 @@
+-- InnoProspect — acrescenta `fill_rate_enrichment` ao vocabulário fechado de
+-- `ScraperHealthEventType` (ver comentário completo no enum, em
+-- `packages/db/prisma/schema.prisma`, e em `packages/scraper/src/sanity/
+-- assertions.ts#checkEnrichmentFillRate`, A5).
+--
+-- MOTIVO (achado do dono, 2026-09-23): ~260 leads chegaram coletados só com
+-- o nome (endereço/telefone/categoria/site todos vazios ao mesmo tempo) e
+-- NENHUMA assertion disparou — A1-A4 medem "quantos leads vieram" e "um
+-- campo isolado preenchido", nunca "quão preenchido, no total, um lead
+-- ficou". A5 fecha esse ponto cego.
+--
+-- Gerada com `prisma migrate diff --from-schema-datamodel <snapshot do
+-- schema ANTES desta mudança> --to-schema-datamodel prisma/schema.prisma
+-- --script` — sem Postgres disponível nesta máquina de desenvolvimento (ver
+-- `innoprospect-bloqueio-docker` na memória do Cronos/Vega). ⚠️ NÃO foi
+-- aplicada contra um banco vivo. Roda no boot via `prisma migrate deploy`
+-- (entrypoint fail-fast).
+--
+-- 100% ADITIVA e SEGURA: `ALTER TYPE ... ADD VALUE` não reescreve nenhuma
+-- linha existente (só estende o vocabulário do enum). Postgres 12+ permite
+-- isto dentro de uma transação (o wrapper padrão do Prisma) desde que o
+-- valor novo não seja usado na MESMA transação — não é o caso aqui (o
+-- worker só grava `fill_rate_enrichment` em código, numa conexão/transação
+-- separada, bem depois desta migração já ter comitado).
+
+-- AlterEnum
+ALTER TYPE "ScraperHealthEventType" ADD VALUE 'fill_rate_enrichment';

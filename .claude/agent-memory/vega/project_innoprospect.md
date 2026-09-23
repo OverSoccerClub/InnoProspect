@@ -88,12 +88,27 @@ média móvel de 7 dias, que é 0 num sistema novo e nunca disparava. Detalhe co
 e o que NÃO ficou provado (o caso específico do lead "Botocenter" 100% vazio não foi reproduzido ao
 vivo) em [[bug-maps-card-selectors-drift-2026-09]].
 
+**Meu escopo entregue (Onda 3, 2026-09-23 — alertas no web + A5 + remoção de RawCapture):** estendi
+`sendAlert` para `apps/web` (`lib/alerts.ts`, duplicado do worker — [[convention-web-alerts]]) nos 4
+eventos que eram silenciosos: instância caindo, instância degradada, campanha parada (kill switch) e
+Evolution API com erro (dedupe por código, 15min). Nova assertion A5 (`checkEnrichmentFillRate`,
+`@inno/scraper`) pega leads "só com o nome" (todos os campos de enriquecimento vazios ao mesmo tempo)
+que A1-A4 nunca cobriam — [[convention-sanity-a5-enrichment]], mesmo arquivo cobre a remoção do model
+`RawCapture` (decisão do dono, verificado zero uso antes de apagar, migração destrutiva documentada).
+**Não pude validar:** as duas migrações novas não rodaram contra Postgres real (mesma limitação de
+sempre); `pnpm typecheck` na raiz (via turbo) fica bloqueado por um lock de arquivo do Windows
+(`next dev` rodando em paralelo trava a rename do binário nativo do Prisma) — confirmei tipos corretos
+rodando cada pacote individualmente. `ARQUITETURA.md §7.5`/`§2.6` ainda citam `RawCapture` — não
+editei (território da Nova), fica pendente.
+
 **Como aplicar:** antes de tocar em `apps/web/src/app/api/**`, `lib/api-handler.ts`, `lib/auth*.ts`,
 `middleware.ts` ou `apps/worker/**`, ler este arquivo + [[convention-api-routes-fase1]] +
 [[bug-nextauth-edge-prisma-split]] + [[bug-nextjs-workspace-ts-source-imports]] antes de reabrir
 decisão já tomada. Nunca criar/editar nada em `app/(dashboard)/**`, `app/(auth)/**`, `components/**`
-nem `mocks/**` (território da Lyra) nem em `packages/db/prisma/schema.prisma` (território do Cronos) —
-se precisar mudar algo lá, relatar no handoff em vez de editar.
+nem `mocks/**` (território da Lyra). `packages/db/prisma/schema.prisma` é território do Cronos por
+padrão — só editei em 2026-09-23 porque o Atlas delegou explicitamente a remoção do `RawCapture` e a
+extensão do enum `ScraperHealthEventType` nesta rodada; fora de uma delegação explícita como essa,
+relatar no handoff em vez de editar.
 
 Ver também [[convention-api-routes-fase1]] (padrões de rota/serviço estabelecidos),
 [[convention-messaging-evolution-api]] (cliente Evolution API + webhook parser) e

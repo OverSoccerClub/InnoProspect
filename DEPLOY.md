@@ -168,6 +168,7 @@ variável do worker é runtime.
 | `LOG_LEVEL` | `info` | |
 | `OPTOUT_TOKEN_SECRET` | gerar com `openssl rand -base64 32` | ⚠️ **obrigatória antes de enviar qualquer mensagem.** Assina o link de descadastro que vai em cada mensagem. Sem ela, a página pública `/descadastro/:token` recusa **todos** os links (fail-closed): a pessoa clica para sair da lista e recebe erro, o que quebra o mecanismo de LGPD. Trocar o valor invalida os links já enviados. |
 | `APP_COMPANY_NAME` | nome da sua empresa | Preenche `{{minha_empresa}}` nos templates. A primeira mensagem precisa identificar quem está falando (ARQUITETURA §7.4) |
+| `ALERT_WEBHOOK_URL` | opcional: MESMA URL configurada no `worker` (§6) | Onda 3 (2026-09-23): o `web` também alerta — instância de WhatsApp caindo, instância degradada por falhas consecutivas, campanha parada (kill switch) e erro da Evolution API. Ver detalhe completo na nota de alertas do `worker`, abaixo — os dois processos compartilham a env, cada um com seu próprio módulo. |
 
 ⚠️ **`NEXT_PUBLIC_USE_MOCKS` e `NEXT_PUBLIC_API_BASE_URL` NÃO vão nesta tabela** — são embutidas no bundle JavaScript do navegador **durante o `docker build`**, não lidas em runtime. O `apps/web/Dockerfile` já builda com `NEXT_PUBLIC_USE_MOCKS=false` por padrão (produção real, sem mock) — não precisa (e não adianta) definir isso como env do serviço no EasyPanel depois do build pronto. Ver a subseção "Build-time vs runtime" acima para a tabela completa de quem é build-arg e quem é runtime — **todas as variáveis da tabela acima são runtime**, nenhuma delas deve ir no campo de "Build" do EasyPanel.
 
@@ -179,7 +180,9 @@ variável do worker é runtime.
 
 - **Build method: Dockerfile. Build context/path: a RAIZ do repositório. Dockerfile Path: `apps/worker/Dockerfile`.**
 - **Sem porta exposta, sem domínio** — é um processo de fila, não um servidor HTTP.
-- **Sem health check HTTP** — configure o EasyPanel para reiniciar automaticamente (`restart: always`) se o processo cair; a saúde de verdade dele (scraper quebrado, instância banida) é medida por `ScraperHealthEvent` dentro da aplicação (Fase 2/5.6, ainda não implementado).
+- Configure o EasyPanel para reiniciar automaticamente (`restart: always`) se o processo cair — a saúde de negócio (scraper quebrado, instância banida) continua medida por `ScraperHealthEvent` dentro da aplicação, não por isto.
+- **Health check agora existe, mas não é HTTP** (2026-09-23): o `Dockerfile` declara um `HEALTHCHECK` que roda `node dist/selftest.js --ping` a cada 30s dentro do próprio container — confirma Postgres (`SELECT 1`) e o heartbeat que o processo principal grava no Redis (prova que o laço do worker está de fato vivo, não só que o processo Node não morreu). Se o campo "Health Check" do EasyPanel para apps do tipo *Dockerfile* aceitar um comando (em vez de só uma URL HTTP, que é o que o `web` usa), configure o mesmo; se a UI só tiver campo de URL, o `HEALTHCHECK` da imagem ainda funciona por conta própria (é o Docker/containerd que o executa, não o EasyPanel) — **não confirmado nesta sessão se o painel do EasyPanel EXIBE esse status para apps sem porta**; primeiro sinal real: `docker inspect --format='{{json .State.Health}}' <container>` (ou terminal do serviço no painel) mostrando `"Status":"healthy"`.
+- **Auto-teste completo no BOOT, antes de qualquer job.** Desde 2026-09-23 o processo (`index.ts`) roda `node dist/selftest.js` (módulos internos, Postgres, as 3 filas do BullMQ contra o Redis real, Chromium) ANTES de subir qualquer `Worker`; se algo falhar, o processo sai com código 1 e loga exatamente qual passo falhou, em vez de subir "pela metade" ou entrar num crash-loop sem explicação. Some com `restart: always` acima: o log do boot que falhou é sempre o último antes do restart.
 
 ### Variáveis de ambiente do `worker`
 
@@ -196,7 +199,7 @@ Mesmas de `DATABASE_URL`, `REDIS_URL`, `LOG_LEVEL`, `EVOLUTION_API_URL`, `EVOLUT
 | `PROXY_PROVIDER` | `noop` |
 | `ALERT_WEBHOOK_URL` | opcional: URL de webhook de entrada do Slack ou do Google Chat |
 
-**Alertas (`ALERT_WEBHOOK_URL`, no serviço `worker`, não no `web`).** O worker envia um aviso quando abre um incidente de sanidade do scraper, quando a fila pausa por erro de coleta e quando uma pausa temporizada é retomada. Só na mudança de estado, nunca a cada ciclo. Para Slack: crie um *Incoming Webhook* no canal e cole a URL. Para Google Chat: *Webhooks de entrada* no espaço. Sem a variável, o worker funciona normalmente e registra no log de boot que os alertas estão desligados. Retomadas manuais pelo painel não geram aviso, porque quem clicou já sabe.
+**Alertas (`ALERT_WEBHOOK_URL`, MESMA URL nos dois serviços, `worker` E `web` desde a Onda 3 de 2026-09-23).** O worker envia um aviso quando abre um incidente de sanidade do scraper (A1-A5), quando a fila pausa por erro de coleta e quando uma pausa temporizada é retomada. O web avisa quando uma instância de WhatsApp cai (webhook ou falha de envio — não no disconnect manual, que já tem resposta na tela), quando uma instância degrada por falhas consecutivas, quando uma campanha para sozinha (kill switch) e quando a Evolution API responde com erro (deduplicado por código numa janela de 15min, para não virar 1 alerta por requisição enquanto ela estiver fora do ar). Sempre só na mudança de estado, nunca a cada ciclo/requisição. Para Slack: crie um *Incoming Webhook* no canal e cole a URL. Para Google Chat: *Webhooks de entrada* no espaço. Sem a variável, os dois processos funcionam normalmente e registram no log que os alertas estão desligados. Retomadas/ações MANUAIS pelo painel/API não geram aviso, porque quem clicou já sabe o que fez.
 
 `worker` **não** roda `prisma migrate deploy` (só o `web` faz isso, uma vez) — mas gera seu próprio Prisma Client no build (mesmo schema).
 
@@ -265,6 +268,23 @@ introduziu `Lead.offNiche` (leads coletados antes disso ficam com o valor
 padrão, "dentro do nicho", sem terem sido avaliados), e de novo sempre que o
 critério em `packages/core/src/leads/niche.ts` mudar. É idempotente.
 
+**`node dist/selftest.js` (2026-09-23) é a mesma família de comando** — mesma
+regra do backfill, entrada do tsup, roda com Node puro no shell do container.
+Diferença de propósito: já roda por conta própria no boot (`index.ts`) e como
+`HEALTHCHECK` do `Dockerfile` (`--ping`) — rodar manualmente no shell é útil
+só para investigar um incidente sem esperar o próximo restart, ou para
+confirmar Postgres/Redis/Chromium um por um antes de suspeitar de outra
+coisa:
+
+```sh
+node dist/selftest.js          # completo — módulos, Postgres, filas BullMQ, Chromium
+node dist/selftest.js --ping   # leve — só Postgres + heartbeat (o que o HEALTHCHECK roda)
+```
+
+Sai com código 0 em sucesso; em falha, nomeia o passo exato e a mensagem de
+erro (sem stack trace) — não precisa ler log de aplicação para saber o que
+quebrou.
+
 ---
 
 ## 7.5. Backup do Postgres — obrigatório antes de dado de cliente real
@@ -287,10 +307,82 @@ uso está listado no topo de cada script e no checklist final do README.
 
 - **Rotação de segredos.** `NEXTAUTH_SECRET` e `EVOLUTION_API_KEY` não têm processo de rotação definido. Trocar hoje invalida todas as sessões ativas (aceitável) e quebra a conexão da Evolution API até você atualizar o valor nos dois lados (web/worker E Evolution) ao mesmo tempo. Território do Órion (revisão de 2026-08-03, P10) — cito e sigo.
 - **`requeue-orphans` no boot do worker** (mencionado em `ARQUITETURA.md §9.1` R10) — se o Redis cair e perder a fila, nada reenfileira automaticamente as `SearchTask`/`CampaignTarget` presas em `pending`/`running`. Território do Vega, não meu.
-- **Monitoramento pós-deploy real** (métricas de erro/latência, alertas). Hoje só existe o health check de boot — não há dashboard nem alerta contínuo. Desde 2026-09-22 o worker envia alertas de fila e scraper por `ALERT_WEBHOOK_URL` (ver §6), e `infra/backup/pg-dump.sh` dispara nela quando o backup falha. Ainda não há alerta para o `web` fora do ar nem métricas de erro e latência.
+- **Monitoramento pós-deploy real** (métricas de erro/latência, alertas). Hoje só existe o health check de boot — não há dashboard nem alerta contínuo. Desde 2026-09-22 o worker envia alertas de fila e scraper por `ALERT_WEBHOOK_URL` (ver §6), e `infra/backup/pg-dump.sh` dispara nela quando o backup falha. Desde 2026-09-23 o `web` também alerta na mesma env: instância de WhatsApp caindo, instância degradada, campanha parada e erro da Evolution API (ver §5). O que AINDA não existe: alerta para o **processo `web` fora do ar** (isso continua sendo só o health check de boot + o que o EasyPanel monitorar por fora) nem métricas de erro e latência agregadas.
+- **`worker` ganhou auto-teste e `HEALTHCHECK` em 2026-09-23** (ver §6/§7.2) — o processo falha rápido no boot (Postgres/Redis/filas/Chromium reais) e o Docker sabe dizer "unhealthy" a cada 30s. O que isto NÃO resolve: se o container entrar em crash-loop (boot falhando repetidamente) ou ficar `unhealthy` por horas, **ninguém é avisado** — não há `ALERT_WEBHOOK_URL` disparando nesse caso especificamente (os alertas existentes do worker são de negócio: fila pausada, sanidade do scraper). Alertar sobre o PRÓPRIO processo estar reiniciando/não-saudável é território do EasyPanel (se ele expuser isso) ou de um monitor externo (mesma pendência do próximo bullet do `web`) — não decidido ainda.
 - **Monitoramento do próprio backup** (§7.5) — se o job agendado do EasyPanel parar de rodar silenciosamente, hoje ninguém é avisado automaticamente; é preciso abrir o Backups Log na mão. Ver `infra/backup/README.md §5`.
 - **Nenhum dos Dockerfiles/compose foi validado com `docker build`/`docker compose up` de verdade** — sem Docker nesta máquina de desenvolvimento. O primeiro build no EasyPanel é o primeiro teste real (ver aviso no topo deste documento).
 - **Headers de segurança (`next.config.ts`) validados só até onde esta máquina permite.** `pnpm --filter web run build` passou pela geração de todas as páginas com o novo `headers()` sem erro de compilação — mas o build falha depois disso por um limite conhecido do Windows sem modo desenvolvedor (`EPERM` ao criar symlink do `.next/standalone`, o mesmo problema já registrado na entrega anterior, não relacionado ao CSP). Isso prova que o CSP não quebra o *build*; **não prova que nada quebra no navegador** — no primeiro deploy real, abra o Console do navegador em cada tela (login, dashboard, `/descadastro/:token`, modal de QR do WhatsApp) e procure por erros `Refused to ... because it violates the following Content Security Policy directive`. Se aparecer, é a CSP bloqueando algo legítimo que esta revisão não previu — ajuste a diretiva específica em `next.config.ts` e documente o porquê ali, não remova a CSP inteira.
+- **`X-Forwarded-For` não confirmado contra o proxy real do EasyPanel** (achado do Órion, `apps/web/src/lib/rate-limit.ts:109-144`) — ver o procedimento de verificação em **§8.1**, abaixo. Sem Postgres/produção nesta máquina, isto não é algo que eu (Vulcano) tenha como confirmar sozinho; é uma checagem de 10 minutos que só quem tem acesso ao domínio real em produção pode rodar.
+
+### 8.1. Como confirmar que o proxy do EasyPanel sobrescreve `X-Forwarded-For`
+
+**O risco, em uma frase:** `clientIp()`/`clientIpFromRequest()`
+(`apps/web/src/lib/rate-limit.ts`) leem o PRIMEIRO valor de
+`X-Forwarded-For` e confiam nele como o IP do cliente. Isso só é seguro se o
+proxy da EasyPanel **substituir** (não **anexar**) esse cabeçalho antes de
+repassar a requisição ao container — a maioria dos proxies reversos (Nginx/
+Traefik) por padrão ANEXA o IP real como o ÚLTIMO valor da lista, deixando o
+PRIMEIRO valor livre para qualquer atacante forjar. Se for esse o caso aqui,
+um atacante manda um `X-Forwarded-For` diferente em cada requisição e ganha
+um contador novo por tentativa — **esvazia ao mesmo tempo o rate limit do
+login (`LOGIN_RATE_LIMIT_MAX_PER_IP`, `apps/web/src/lib/auth.ts`) e o das
+rotas públicas** (`/api/v1/public/optout`, webhook da Evolution).
+
+**Procedimento (10 minutos, depois do primeiro deploy do `web`, de uma
+máquina QUALQUER fora da VPS — celular com dados móveis serve, o importante
+é não ser a própria VPS nem estar atrás do mesmo NAT):**
+
+1. Dispare 10 requisições (o limite de `/api/v1/public/optout`,
+   `PUBLIC_OPTOUT_RATE_LIMIT_PER_MIN`) SEM forjar nenhum cabeçalho, para
+   estabelecer a baseline:
+   ```sh
+   for i in $(seq 1 10); do
+     curl -s -o /dev/null -w "%{http_code}\n" \
+       -X POST https://<seu-domínio>/api/v1/public/optout \
+       -H "Content-Type: application/json" \
+       -d '{"token":"sonda-nao-existe","confirm":true}'
+   done
+   ```
+   As 10 respostas devem ser `404`/`400` (token inválido — o corpo é lixo de
+   propósito, não importa: o rate limit é o PRIMEIRO passo de `apiRoute`,
+   antes de validar o corpo).
+2. Dispare a **11ª** requisição, também sem forjar nada:
+   ```sh
+   curl -s https://<seu-domínio>/api/v1/public/optout \
+     -X POST -H "Content-Type: application/json" \
+     -d '{"token":"sonda-nao-existe","confirm":true}'
+   ```
+   O corpo da resposta deve conter `"code":"RATE_LIMITED"` — se NÃO conter,
+   pare aqui: o rate limit em si não está funcionando (problema mais grave
+   que o do `X-Forwarded-For`, investigue `apiRoute`/`checkRateLimit`
+   primeiro).
+3. **O teste decisivo** — na SEQUÊNCIA (ainda dentro do mesmo minuto), mande
+   mais uma requisição, agora COM um `X-Forwarded-For` forjado:
+   ```sh
+   curl -s https://<seu-domínio>/api/v1/public/optout \
+     -X POST -H "Content-Type: application/json" \
+     -H "X-Forwarded-For: 203.0.113.99" \
+     -d '{"token":"sonda-nao-existe","confirm":true}'
+   ```
+   - Se a resposta AINDA tiver `"code":"RATE_LIMITED"` → o proxy do
+     EasyPanel está sobrescrevendo/ignorando o cabeçalho forjado — **defesa
+     confirmada, nada a corrigir**. Pode remover o comentário de "não
+     confirmado" em `rate-limit.ts` (ou trocar por "confirmado em
+     AAAA-MM-DD").
+   - Se a resposta NÃO tiver `RATE_LIMITED` (voltou a validar o token
+     normalmente) → o cabeçalho forjado foi aceito como um IP novo —
+     **vulnerabilidade confirmada**. Correção (fora do meu escopo de
+     arquivos, é `apps/web/src/lib/rate-limit.ts`): trocar
+     `forwarded.split(',')[0]` (primeiro valor, o mais fácil de forjar) por
+     `forwarded.split(',').pop()` (último valor, o que o proxy mais próximo
+     de fato escreveu) — ou, melhor ainda, configurar o proxy do EasyPanel
+     para SEMPRE substituir o cabeçalho de entrada em vez de confiar em
+     qual posição da lista ler.
+
+Repita o mesmo teste (ajustando `LOGIN_RATE_LIMIT_MAX_PER_IP`, hoje `20` por
+15 minutos) contra o login se quiser confirmar os dois caminhos — o
+`/api/v1/public/optout` é só o mais rápido de testar (limite menor, sem
+sessão, sem risco de travar sua própria conta de admin).
 
 ### Resolvido nesta entrega (2026-08-03)
 - **Backup do Postgres com restore testável** — `infra/backup/` criado (ver §7.5). "Testável" ≠ "testado": o teste de restore em si ainda precisa ser executado pelo menos uma vez por alguém com acesso ao EasyPanel — não é algo que eu (Vulcano) tenha como fazer sem Postgres/Docker nesta máquina.
@@ -314,9 +406,12 @@ A Nova perguntou (revisão de arquitetura, 2026-08-03) se este arquivo deveria s
 
 Workflow em `.github/workflows/ci.yml`, dispara em todo `push` e `pull
 request` para `main`. Node 22 + pnpm 9.12.0 — as mesmas versões que
-`apps/web/Dockerfile` e `apps/worker/Dockerfile` usam em produção.
+`apps/web/Dockerfile` e `apps/worker/Dockerfile` usam em produção. Dois
+jobs, o segundo depende do primeiro (`needs: build-and-test`).
 
-**O que ele VALIDA:**
+### Job 1 — `build-and-test`
+
+**O que VALIDA:**
 - `pnpm install --frozen-lockfile` — o lockfile está íntegro e reprodutível
   (falha se alguém commitou um `package.json` sem atualizar o
   `pnpm-lock.yaml`).
@@ -327,35 +422,65 @@ request` para `main`. Node 22 + pnpm 9.12.0 — as mesmas versões que
   Dockerfiles) só para o `prisma generate` resolver o schema — os testes em
   si usam banco falso em memória (`apps/web/src/test/fake-db.ts` e
   equivalentes), nenhuma conexão real é aberta.
-- Se isto passa aqui (Ubuntu limpo) e falha no build do EasyPanel, o
-  problema é ambiental (SO, versão de imagem base, algo específico do
-  Docker) — não é o código Node em si, que já foi validado num ambiente
-  limpo antes de chegar lá.
 
-**O que ele NÃO valida (declarado, não escondido):**
-- **Que `prisma migrate deploy` aplica de verdade.** O `DATABASE_URL` é um
-  placeholder só de formato — nunca conecta em nenhum Postgres. A migração
-  real só é testada no primeiro boot do `web` em produção (§7), contra o
-  banco de verdade.
-- **Qualquer coisa que dependa de rede/serviço externo** — Evolution API
-  respondendo, worker conectando num Redis real, etc.
-- **Que os `Dockerfile`s buildam.** O CI não roda `docker build`. Nem roda
-  `next build` — de propósito: exigiria segredos de produção (ou
-  placeholders que não provam nada sobre o build real do EasyPanel) só
-  para gerar um artefato que este workflow não usa para nada. O primeiro
-  build real continua sendo o do EasyPanel (ver aviso no topo deste
-  documento) — trate-o como ensaio, não como formalidade.
+**O que NÃO valida:** nenhum I/O real — nem Postgres, nem Redis, nem
+Chromium. É exatamente esse ponto cego que o Job 2 existe para cobrir (foi
+esse mesmo ponto cego que deixou passar os 5 incidentes de produção de
+22-23/09 — ver PROGRESSO.md, "Armadilhas já pagas").
+
+### Job 2 — `worker-selftest` (2026-09-23)
+
+Builda o worker de verdade (`pnpm --filter worker run build`, o MESMO `tsup`
+que o `apps/worker/Dockerfile` roda) e executa
+`node apps/worker/dist/selftest.js` — o auto-teste COMPLETO (ver
+`apps/worker/src/selftest-checks.ts`) — contra:
+- um Postgres efêmero (`services: postgres`, `postgres:16-alpine`, vazio,
+  sem nenhuma migração aplicada — de propósito, a checagem usa `SELECT 1`,
+  não exige schema);
+- um Redis efêmero (`services: redis`, `redis:7-alpine`);
+- um Chromium instalado via `playwright install --with-deps chromium`, na
+  MESMA versão que `packages/scraper/package.json` já tem pinada (o comando
+  usa o binário do `playwright` já resolvido pelo `pnpm install`, nunca um
+  número de versão digitado à mão no workflow — bump o pin lá e este passo
+  segue sozinho).
+
+**O que isto PROVA que o Job 1 não prova:** que o artefato `dist/*.js` — não
+o TypeScript fonte — carrega os pacotes internos que já quebraram por
+empacotamento, conecta e consulta um Postgres de verdade, instancia as 3
+filas do BullMQ contra um Redis de verdade (pegaria o nome de fila com `:`,
+incidente real de 22/09), e abre+fecha um Chromium de verdade (pegaria a
+divergência de versão do Playwright, outro incidente real do mesmo dia).
+
+**O que mesmo assim NÃO valida:**
+- **Que `prisma migrate deploy` aplica de verdade contra dado real.** O
+  Postgres deste job é uma casca vazia. A migração real só é testada no
+  primeiro boot do `web` em produção (§7), contra o banco de verdade.
+- **Que a Evolution API responde.**
+- **Que os `Dockerfile`s buildam.** Nenhum job roda `docker build` — o Job 2
+  builda com `tsup` puro e instala o Chromium via `playwright install`, não
+  via a imagem base `mcr.microsoft.com/playwright:*` do Dockerfile (embora
+  seja a MESMA versão do pacote `playwright`). O `HEALTHCHECK`/`pwuser`/
+  `PLAYWRIGHT_BROWSERS_PATH` do Dockerfile continuam só validados pelo
+  primeiro build real no EasyPanel (ver aviso no topo do
+  `apps/worker/Dockerfile`).
+- Nem `next build` roda em nenhum job — de propósito: exigiria segredos de
+  produção (ou placeholders que não provam nada sobre o build real do
+  EasyPanel) só para gerar um artefato que este workflow não usa para nada.
+  O primeiro build real continua sendo o do EasyPanel (ver aviso no topo
+  deste documento) — trate-o como ensaio, não como formalidade.
 - **Segurança do código** (auditoria OWASP — território do Órion,
   `/revisar`) e **auditoria de dependências de terceiros** (`pnpm audit` —
   feita manualmente por enquanto; não está automatizada neste workflow. Ver
   achados na memória do Vulcano e no handoff da entrega que criou este CI).
 
-**Como interpretar uma falha:** o job tem um só, com passos sequenciais
-(instalar → gerar Prisma Client → typecheck → lint → test). O nome do passo
-que ficou vermelho no log do GitHub já diz qual dos quatro quebrou — não
-precisa adivinhar. Falha em `typecheck`/`lint` costuma ser um erro real de
-tipo ou uma regra de lint violada (não ambiental); falha em `pnpm install
---frozen-lockfile` quase sempre significa que alguém editou um
+**Como interpretar uma falha:** cada job tem passos sequenciais — o nome do
+passo que ficou vermelho no log do GitHub já diz o que quebrou, não precisa
+adivinhar. No Job 2 especificamente, a saída do PRÓPRIO `node dist/
+selftest.js` já nomeia o passo que falhou (`modulos-internos`/`postgres`/
+`redis-filas`/`chromium`) e a mensagem de erro correspondente — não é
+preciso ler stack trace nenhuma. Falha em `typecheck`/`lint` costuma ser um
+erro real de tipo ou uma regra de lint violada (não ambiental); falha em
+`pnpm install --frozen-lockfile` quase sempre significa que alguém editou um
 `package.json` sem rodar `pnpm install` de novo antes de commitar (o
 lockfile ficou desatualizado).
 

@@ -27,6 +27,8 @@ vi.mock('@/lib/logger', async () => {
   const { loggerMockFactory } = await import('@/test/logger-mock');
   return loggerMockFactory();
 });
+const sendAlertMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/alerts', () => ({ sendAlert: sendAlertMock }));
 
 // Import dinâmico DEPOIS dos `vi.mock` acima — deixa explícito que
 // `webhook.ts` só é avaliado depois dos mocks de `@inno/db`/`lib/logger`
@@ -35,6 +37,11 @@ vi.mock('@/lib/logger', async () => {
 const { processEvolutionWebhookEvent } = await import('./webhook');
 
 const instance = { id: 'inst-1' } as WhatsAppInstance;
+
+/** Igual a `instance` acima, mas com `status` — as duas checagens NOVAS de `handleConnectionUpdate` (transição/dedupe de alerta) leem `instance.status`. */
+function instanceWithStatus(status: string, overrides: Partial<WhatsAppInstance> = {}): WhatsAppInstance {
+  return { id: 'inst-1', name: 'Vendas SP', status, ...overrides } as WhatsAppInstance;
+}
 
 function lead(overrides: Partial<FakeLead> & Pick<FakeLead, 'id' | 'phoneE164' | 'status'>): FakeLead {
   return { lastSeenAt: new Date(), ...overrides };
@@ -75,9 +82,13 @@ function messagesUpdatePayload(keyId: string, status: 'PENDING' | 'SERVER_ACK' |
 function connectionUpdateBannedPayload() {
   return { event: 'connection.update', instance: 'vendas-01', data: { state: 'close', statusReason: 401 } };
 }
+function connectionUpdateGenericClosePayload() {
+  return { event: 'connection.update', instance: 'vendas-01', data: { state: 'close', statusReason: 428 } };
+}
 
 beforeEach(() => {
   resetFakeDb();
+  sendAlertMock.mockClear();
 });
 
 describe('processEvolutionWebhookEvent — message_received', () => {
@@ -250,5 +261,60 @@ describe('processEvolutionWebhookEvent — connection_update (kill switch)', () 
     expect(state.whatsAppInstances[0]!.status).toBe('banned');
     expect(state.campaigns.find((c) => c.id === 'camp-sole')?.status).toBe('halted');
     expect(state.campaigns.find((c) => c.id === 'camp-shared')?.status).toBe('running');
+  });
+
+  it('alerta instance_disconnected na transição connected → banned (achado do dono, 2026-09-23: instância cair era silencioso)', async () => {
+    resetFakeDb({
+      whatsAppInstances: [
+        { id: 'inst-1', status: 'connected', isDegraded: false, consecutiveFailures: 0, lastConnectionAt: new Date(), lastErrorAt: null, lastErrorMessage: null },
+      ],
+    });
+
+    await processEvolutionWebhookEvent(instanceWithStatus('connected'), connectionUpdateBannedPayload());
+
+    expect(sendAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'instance_disconnected', instanceId: 'inst-1', reason: 'banned' }),
+    );
+  });
+
+  it('alerta instance_disconnected na transição connected → disconnected (fechamento genérico)', async () => {
+    resetFakeDb({
+      whatsAppInstances: [
+        { id: 'inst-1', status: 'connected', isDegraded: false, consecutiveFailures: 0, lastConnectionAt: new Date(), lastErrorAt: null, lastErrorMessage: null },
+      ],
+    });
+
+    await processEvolutionWebhookEvent(instanceWithStatus('connected'), connectionUpdateGenericClosePayload());
+
+    expect(sendAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'instance_disconnected', instanceId: 'inst-1', reason: 'disconnected' }),
+    );
+  });
+
+  it('NÃO realerta quando a Evolution reenvia connection.update com o MESMO estado (instância já estava banned) — evita 1 alerta por evento redundante', async () => {
+    resetFakeDb({
+      whatsAppInstances: [
+        { id: 'inst-1', status: 'banned', isDegraded: false, consecutiveFailures: 0, lastConnectionAt: null, lastErrorAt: new Date(), lastErrorMessage: 'já banida' },
+      ],
+    });
+
+    await processEvolutionWebhookEvent(instanceWithStatus('banned'), connectionUpdateBannedPayload());
+
+    expect(sendAlertMock).not.toHaveBeenCalled();
+  });
+
+  it('NÃO alerta quando a conexão fica "connecting" (não é uma queda)', async () => {
+    resetFakeDb({
+      whatsAppInstances: [
+        { id: 'inst-1', status: 'qr_pending', isDegraded: false, consecutiveFailures: 0, lastConnectionAt: null, lastErrorAt: null, lastErrorMessage: null },
+      ],
+    });
+
+    await processEvolutionWebhookEvent(
+      instanceWithStatus('qr_pending'),
+      { event: 'connection.update', instance: 'vendas-01', data: { state: 'connecting', statusReason: null } },
+    );
+
+    expect(sendAlertMock).not.toHaveBeenCalled();
   });
 });

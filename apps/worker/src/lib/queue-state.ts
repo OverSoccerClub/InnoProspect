@@ -69,5 +69,25 @@ export async function clearQueuePauseMeta(scrapeQueue: Queue): Promise<void> {
 
 export async function recordHeartbeat(scrapeQueue: Queue): Promise<void> {
   const client = await scrapeQueue.client;
-  await client.set(WORKER_HEARTBEAT_KEY, new Date().toISOString(), { EX: HEARTBEAT_TTL_SECONDS });
+  // ⚠️ `'EX', <segundos>` POSICIONAL — nunca `{ EX: ... }`, que era como
+  // estava até 2026-09-23 (achado do Vulcano durante o auto-teste da imagem).
+  //
+  // O tipo `IRedisClient` do BullMQ declara `set(key, value, { EX })` porque
+  // ele também aceita `node-redis`, onde essa é a forma correta. Mas o cliente
+  // que existe AQUI em runtime é `ioredis` — é o que
+  // `bullmq/classes/redis-connection.js` instancia a partir de
+  // `connection: { url }` — e nenhuma das 36 sobrecargas de `set` do ioredis
+  // 5.11.1 aceita objeto: ele serializaria o argumento e o Redis responderia
+  // erro de sintaxe. Resultado: heartbeat nunca gravado, `/api/v1/health`
+  // nunca enxergando o worker vivo, e como único rastro um erro repetido a
+  // cada 15s que o log de produção afoga.
+  //
+  // O cast é a forma honesta de dizer "o tipo declarado é mais largo que o
+  // cliente real": mantemos a promessa do BullMQ fora daqui e assumimos
+  // ioredis só nesta linha. Se um dia o projeto trocar para node-redis, este
+  // é o ponto que quebra — de propósito, alto e claro.
+  const clienteIoredis = client as unknown as {
+    set(chave: string, valor: string, modo: 'EX', segundos: number): Promise<unknown>;
+  };
+  await clienteIoredis.set(WORKER_HEARTBEAT_KEY, new Date().toISOString(), 'EX', HEARTBEAT_TTL_SECONDS);
 }

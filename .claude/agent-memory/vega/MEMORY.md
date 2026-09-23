@@ -14,3 +14,5 @@
 - [Convenção: leads/export (CSV streaming) e leads/bulk (ações em massa)](convention_leads_export_bulk.md) — separador `;`, escape de fórmula, expectedCount, chunking, contrato-rascunho revisado.
 - [Bug: navigate.ts LAYOUT_CHANGED falso-positivo — isVisible({timeout}) não espera de verdade](bug_navigate_isvisible_no_real_wait.md) — causa raiz comprovada ao vivo, fix é polling explícito + evidência no erro + /sorry vira CAPTCHA/RATE_LIMITED.
 - [Bug: seletores do card da lista do Maps quebrados/errados (endereço/categoria), 2026-09-22](bug_maps_card_selectors_drift_2026_09.md) — evidência ao vivo (7 cards reais), telefone sai da lista sem abrir ficha, fixtures reescritas com HTML real.
+- [Convenção: alertas webhook do web (alerts.ts, Onda 3)](convention_web_alerts.md) — instância caindo/degradada, campanha parada, Evolution API com erro; dedupe só em evolution_api_error, nunca repassa mensagem crua.
+- [Convenção: sanidade A5 (enriquecimento) + remoção do RawCapture](convention_sanity_a5_enrichment.md) — pega leads "só com o nome", migrações offline, gotcha de lock do Prisma no Windows.

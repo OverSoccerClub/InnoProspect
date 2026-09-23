@@ -5,7 +5,9 @@
 // Migração 20260801120000_fases_2_3_4 acrescenta, de forma 100% ADITIVA
 // (nenhuma coluna de tabela existente foi alterada — só tabelas e enums
 // novos), os models de:
-//   Fase 2 — ScraperHealthEvent, RawCapture
+//   Fase 2 — ScraperHealthEvent, RawCapture (RawCapture removido em
+//     20260923120000_drop_raw_capture — nunca teve escritor nem leitor de
+//     produção; ver comentário na migração)
 //   Fase 3 — WhatsAppInstance, InstanceDailyStat, MessageTemplate, Message, OptOut
 //   Fase 4 — Campaign, CampaignInstance (join), CampaignTarget
 // Enums novos (Campaign*, Message*, WhatsAppInstance*, OptOutSource) espelham
@@ -167,16 +169,22 @@ enum OptOutSource {
   request
 }
 
-/// Vocabulário fechado das 4 assertions de sanidade do scraper (ARQUITETURA
-/// §5.7, A1-A4). NÃO é CONTRATO de API — packages/contracts ainda não expõe
-/// isto em Zod (GET /api/v1/health devolve o evento como está, sem schema
-/// próprio publicado). Se Vega vier a publicar um contrato para isto, os
-/// valores aqui têm que bater 1:1, igual aos enums acima.
+/// Vocabulário fechado das assertions de sanidade do scraper (ARQUITETURA
+/// §5.7, A1-A5 — `fill_rate_enrichment` (A5) acrescentado em 2026-09-23, ver
+/// comentário completo em `packages/scraper/src/sanity/assertions.ts#
+/// checkEnrichmentFillRate`: ~260 leads chegaram coletados só com o nome —
+/// A1-A4 nunca dispararam porque nenhuma media "quão preenchido" um lead
+/// ficou, só quantidade/nome/telefone isolados). NÃO é CONTRATO de API —
+/// packages/contracts ainda não expõe isto em Zod (GET /api/v1/health
+/// devolve o evento como está, sem schema próprio publicado). Se Vega vier a
+/// publicar um contrato para isto, os valores aqui têm que bater 1:1, igual
+/// aos enums acima.
 enum ScraperHealthEventType {
   zero_streak
   fill_rate_name
   fill_rate_phone
   data_shape
+  fill_rate_enrichment
 }
 
 /// Só 2 valores hoje porque é só isso que a tabela de assertions A1-A4 usa
@@ -362,8 +370,7 @@ model SearchTask {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  leads       Lead[]
-  rawCaptures RawCapture[]
+  leads Lead[]
 
   // 1 job nunca gera 2 tasks para o mesmo município.
   @@unique([searchJobId, cityId])
@@ -505,7 +512,6 @@ model Lead {
   campaignTargets CampaignTarget[]
   messages        Message[]
   optOuts         OptOut[]
-  rawCaptures     RawCapture[]
 
   // Unicidade da dedupe key — a garantia mais importante deste model.
   // (@unique acima já cria o índice; listado aqui só como documentação.)
@@ -573,10 +579,10 @@ model LeadActivity {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FASE 2 — SAÚDE DO SCRAPER E EVIDÊNCIA BRUTA (ARQUITETURA §5.7, §7.5)
+// FASE 2 — SAÚDE DO SCRAPER (ARQUITETURA §5.7)
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Registro das assertions de sanidade A1-A4 (ARQUITETURA §5.7) — o que
+/// Registro das assertions de sanidade A1-A5 (ARQUITETURA §5.7) — o que
 /// alimenta o banner vermelho da UI e `GET /api/v1/health`. Nasce quando uma
 /// assertion dispara; `resolvedAt` é preenchido quando a condição volta ao
 /// normal (health-check.job decide isso, não é automático por tempo).
@@ -608,40 +614,15 @@ model ScraperHealthEvent {
   @@map("scraper_health_events")
 }
 
-/// Evidência bruta de 1 captura de scraping (RawBusiness/ScrapedBusiness tal
-/// como veio do extrator, ANTES de normalize()) — existe para depurar o
-/// extractor sem precisar refazer o scraping contra o Maps. EFÊMERO por
-/// desenho: `retention.job` apaga fisicamente após 7 dias (ARQUITETURA §7.5).
-/// Por isso NÃO tem `updatedAt` (nunca é editado, só criado e depois apagado).
-model RawCapture {
-  id String @id @default(cuid(2))
-
-  searchTaskId String
-  searchTask   SearchTask @relation(fields: [searchTaskId], references: [id], onDelete: Cascade)
-
-  /// Preenchido só quando a captura resultou de fato num Lead upsertado —
-  /// nem toda captura bruta vira Lead válido (ex.: falha de normalização,
-  /// nome vazio). Null não é erro, é "não virou lead".
-  leadId String?
-  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
-
-  /// Snapshot do objeto bruto capturado. Json (não colunas tipadas) de
-  /// propósito: é debug de curtíssima vida, não dado de domínio consultável.
-  rawData Json
-
-  sourceUrl String
-  engineId  String
-
-  createdAt DateTime @default(now())
-
-  @@index([searchTaskId])
-  @@index([leadId])
-  // Suporta o retention.job: `DELETE FROM raw_captures WHERE "createdAt" <
-  // now() - interval '7 days'` — sem este índice essa varredura diária vira
-  // sequential scan numa tabela que cresce a cada card capturado.
-  @@index([createdAt])
-  @@map("raw_captures")
-}
+// `RawCapture` ("evidência bruta de 1 captura de scraping, EFÊMERA por
+// desenho — `retention.job` apagaria após 7 dias") foi REMOVIDO em
+// 2026-09-23 (migração 20260923120000_drop_raw_capture). Nunca teve
+// escritor: nenhum código de `packages/scraper`/`apps/worker` jamais criou
+// uma linha aqui, e o `retention.job` citado no comentário original nunca
+// foi implementado (nenhum arquivo `*retention*` existe no repo). Verificado
+// com `grep -rln "rawCapture|RawCapture|raw_captures" apps/ packages/`
+// (excluindo `/generated/` e `/migrations/`) antes de apagar — zero
+// resultado fora deste próprio schema. Ver comentário completo na migração.
 
 // ═══════════════════════════════════════════════════════════════════════
 // FASE 3 — WHATSAPP: INSTÂNCIAS, TEMPLATES, MENSAGENS, OPT-OUT

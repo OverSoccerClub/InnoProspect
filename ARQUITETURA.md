@@ -2887,6 +2887,69 @@ dentro do Brasil primeiro.
 
 ---
 
+### 8.10 🆕 Fase 6 — Abordagem gerada por IA, ancorada no dado do lead
+
+**Origem:** ideia do dono, 23/09/2026 — usar IA para gerar a mensagem de
+abordagem já com as informações do lead, buscando mais credibilidade e menos
+risco de banimento.
+
+**A correção de premissa que precisa vir antes do desenho.** Reduzir banimento
+e aumentar taxa de resposta são alavancas diferentes. O que dispara banimento,
+em ordem de peso: (1) **denúncia do destinatário**, o sinal dominante;
+(2) **comportamento do número** — número novo, volume alto, cadência rápida e
+**baixa taxa de resposta**; (3) **conteúdo idêntico repetido**. Variação de
+texto é o item 3, o mais fraco — e o spintax já cobre. **IA não é, por si, um
+redutor de banimento.** Ela ataca os itens 1 e 2 por outro caminho: mensagem
+específica é respondida, e conversa respondida é o oposto de spam aos olhos da
+plataforma.
+
+**Âncora obrigatória: só o que foi coletado.** O gerador recebe apenas os campos
+que o scraping trouxe (`name`, `category`, `city`, `uf`, `rating`,
+`reviewCount`, `website`, `offNiche`) e é **proibido de introduzir fato novo**.
+
+**O risco que domina esta fase é alucinação, não estilo.** Um modelo instruído a
+"ser persuasivo" inventa ("vi que vocês atendem desde 2015"). Numa abordagem
+fria, um detalhe inventado é **pior que uma mensagem genérica**: a pessoa
+percebe, e o efeito é exatamente a denúncia que a fase existe para evitar. A
+mitigação é estrutural, não é pedir ao modelo que não invente — campos fechados
+na entrada, e validadores duros na saída:
+- tamanho máximo;
+- nenhuma variável de template não substituída;
+- frase de descadastro presente;
+- nome da empresa remetente presente (regra G10, já em produção);
+- sem URL não intencional.
+
+**Invariante da fase — idêntica à da Fase 5: a IA é conselho, nunca
+engrenagem.** Se a API falhar, o envio cai no template com spintax e a campanha
+segue. Nada neste sistema pode depender de serviço externo para funcionar.
+
+**Momento da geração: na materialização dos alvos, nunca no envio.** Três
+razões, e a terceira decide: latência (centenas de gerações no meio do disparo
+atrasam a cadência), falha (API fora do ar trava a campanha em andamento) e —
+a que manda — **auditoria**: gerando antes, as mensagens ficam revisáveis antes
+de sair e guardadas depois, então é possível saber exatamente o que foi enviado
+para quem. O texto gerado é persistido no alvo, não recalculado.
+
+**Ordem de entrega:**
+1. **Assistente na ficha do lead** — botão "gerar abordagem", o operador lê,
+   ajusta e envia. Risco zero e valor imediato; é assim que se descobre o que é
+   uma boa mensagem **antes** de automatizar quinhentas.
+2. Geração em lote na montagem da campanha, com revisão de amostra antes do
+   `start`.
+3. Medição por variante — **taxa de resposta e taxa de descadastro**, template
+   fixo contra gerado. Sem isso, a fase é fé: o sistema já registra `Message` e
+   `OptOut`, então consegue responder.
+
+**Regra de conteúdo que vale mais que engenharia de prompt:** a primeira
+mensagem **não vende** — faz uma pergunta que a pessoa responde em cinco
+segundos. Conversa iniciada protege o número; proposta não solicitada o queima.
+
+**Dependências novas que a fase traz:** chave de API e custo por geração, e o
+envio de dado de lead a um provedor externo (dado comercial público, risco
+baixo, mas é decisão a registrar).
+
+---
+
 ## 9. Riscos, mitigações e dívidas conscientes
 
 ### 9.1 Riscos

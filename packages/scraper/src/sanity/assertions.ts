@@ -180,6 +180,93 @@ export function checkPhoneFillRate(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// A5 — Fill-rate de ENRIQUECIMENTO (todos os campos vazios ao mesmo tempo)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Um lead conta como "só com o nome" quando NENHUM destes 4 campos veio
+ * preenchido. Deliberadamente NÃO inclui `rating`/`reviewCount`/coordenadas:
+ * um estabelecimento novo sem avaliação nenhuma é normal (o Maps mostra
+ * `rating: null` o tempo todo para negócios recém-cadastrados), então
+ * incluir esses campos geraria alarme falso num cenário saudável. Endereço e
+ * categoria, ao contrário, são praticamente universais em qualquer card do
+ * Google Maps — é o que sustenta o piso baixo do `maxNameOnlyRate` abaixo
+ * sem soar alarme falso.
+ */
+export type LeadEnrichmentSample = {
+  hasAddress: boolean;
+  hasPhone: boolean;
+  hasCategory: boolean;
+  hasWebsite: boolean;
+};
+
+export type EnrichmentFillRateOptions = {
+  /**
+   * Mesma razão de `PhoneFillRateOptions.minSampleSize` (A3): poucos leads é
+   * ruído, não incidente. 20, mesmo valor de A3 — não há motivo para janelas
+   * de tamanho diferente medindo o mesmo lote de leads recém-coletados.
+   */
+  minSampleSize: number;
+  /**
+   * Piso ACIMA de zero, não um teto rígido em 0% — dá margem para um card
+   * genuinamente anômalo do Maps (ex.: um pin sem ficha completa) sem
+   * disparar por 1 lead ruim em 50. 30% é conservador na direção oposta:
+   * o incidente relatado (2026-09-23, ~260 leads só com o nome) foi
+   * essencialmente 100% de `nameOnlyRate` na janela — MUITO acima deste
+   * piso. A referência de "quase todo card tem endereço+categoria" vem da
+   * mesma amostra real usada para justificar o piso de telefone da A3 (ver
+   * `DEFAULT_PHONE_FILL_RATE_OPTIONS`): 7/7 negócios de "material de
+   * construção" tinham endereço E categoria capturados, então mesmo um
+   * nicho que legitimamente não publica telefone/site ainda teria
+   * `nameOnlyRate` próximo de 0% por esta métrica (ela só conta como
+   * "vazio" quando address, phone, category E website falham TODOS ao
+   * mesmo tempo — não é o caso de um nicho sem site/telefone, que ainda tem
+   * endereço+categoria). Ajustável com mais dados reais de produção.
+   */
+  maxNameOnlyRate: number;
+};
+
+export const DEFAULT_ENRICHMENT_FILL_RATE_OPTIONS: EnrichmentFillRateOptions = {
+  minSampleSize: 20,
+  maxNameOnlyRate: 0.3,
+};
+
+/**
+ * A5 — em janela de leads capturados, mede a fração que é "só nome": nem
+ * endereço, nem telefone, nem categoria, nem site vieram preenchidos. É o
+ * caso que A1-A4 nunca cobriram (2026-09-23: ~260 leads assim, nenhuma
+ * assertion disparou) — A2 mede só `name` vazio (o INVERSO: aqui o nome
+ * SEMPRE veio, só o resto que faltou), A3 mede só telefone isoladamente, A4
+ * mede FORMATO (rating fora de faixa / telefone que falhou normalização),
+ * não AUSÊNCIA. PAUSA a fila (`pauseQueue: true`) — diferente de A3/A4
+ * (que não pausam porque podem refletir característica legítima de nicho):
+ * um lead com TODOS os 4 campos vazios ao mesmo tempo não tem explicação de
+ * nicho plausível (endereço e categoria são universais no Maps, ver
+ * comentário do type acima) — é sinal de seletor quebrado em massa, o mesmo
+ * tipo de falha estrutural que A1/A2 cobrem.
+ */
+export function checkEnrichmentFillRate(
+  samples: readonly LeadEnrichmentSample[],
+  options: EnrichmentFillRateOptions = DEFAULT_ENRICHMENT_FILL_RATE_OPTIONS,
+): SanityCheckResult {
+  if (samples.length < options.minSampleSize) return NOT_TRIGGERED;
+
+  const nameOnly = samples.filter((s) => !s.hasAddress && !s.hasPhone && !s.hasCategory && !s.hasWebsite).length;
+  const nameOnlyRate = nameOnly / samples.length;
+  if (nameOnlyRate <= options.maxNameOnlyRate) return NOT_TRIGGERED;
+
+  return {
+    triggered: true,
+    code: 'ENRICHMENT_FILL_RATE_LOW',
+    severity: 'critical',
+    message: `${(nameOnlyRate * 100).toFixed(1)}% dos leads capturados vieram só com o nome (endereço, telefone, categoria e site TODOS vazios) — acima do piso de ${(options.maxNameOnlyRate * 100).toFixed(0)}%. Scraper provavelmente quebrado (seletores de enriquecimento).`,
+    metric: nameOnlyRate,
+    threshold: options.maxNameOnlyRate,
+    pauseQueue: true,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // A4 — Forma dos dados
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -220,12 +307,13 @@ export function checkDataShape(samples: readonly LeadShapeSample[]): SanityCheck
   return NOT_TRIGGERED;
 }
 
-/** Roda A1-A4 e devolve só os que dispararam — conveniência para o chamador (worker). */
+/** Roda A1-A5 e devolve só os que dispararam — conveniência para o chamador (worker). */
 export function evaluateSanity(input: {
   recentTasks: readonly TaskResultForZeroStreak[];
   recentLeadNames: readonly (string | null | undefined)[];
   phoneFillRate: { current: number; currentSampleSize: number; sevenDayAverage: number };
   dataShapeSamples: readonly LeadShapeSample[];
+  enrichmentSamples: readonly LeadEnrichmentSample[];
 }): SanityCheckResult[] {
   const results = [
     checkZeroStreak(input.recentTasks),
@@ -235,6 +323,7 @@ export function evaluateSanity(input: {
       input.phoneFillRate.sevenDayAverage,
     ),
     checkDataShape(input.dataShapeSamples),
+    checkEnrichmentFillRate(input.enrichmentSamples),
   ];
   return results.filter((r): r is Extract<SanityCheckResult, { triggered: true }> => r.triggered);
 }

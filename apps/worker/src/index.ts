@@ -3,6 +3,7 @@ import { logger } from './observability/logger.js';
 import { logAlertingStatusOnce } from './observability/alerts.js';
 import { startWorkers } from './scheduler.js';
 import { requeueOrphanTasks } from './jobs/requeue-orphans.js';
+import { runSelfTest } from './selftest-checks.js';
 
 async function main(): Promise<void> {
   // Onda 2: diz já no boot se ALERT_WEBHOOK_URL está configurada ou não —
@@ -10,11 +11,30 @@ async function main(): Promise<void> {
   // acontece e ninguém é avisado (o próprio motivo desta rodada existir).
   logAlertingStatusOnce();
 
-  // Falha rápido e com mensagem clara se o processo subir sem banco
-  // configurado — melhor que um erro genérico de conexão minutos depois,
-  // no meio do processamento de uma SearchTask.
-  await prisma.$connect();
-  logger.info('conectado ao Postgres');
+  // Auto-teste COMPLETO antes de subir qualquer Worker/Queue de verdade — ver
+  // `selftest.ts` para o porquê (5 incidentes de 22-23/09 que passaram por
+  // typecheck/lint/testes/build e só apareceram no boot do container real:
+  // nome de fila inválido, `.ts` fonte no bundle, Chromium divergente da
+  // imagem base, `require` de CommonJS em ESM, script operacional impossível
+  // de rodar). Substitui o antigo `prisma.$connect()` isolado — a checagem
+  // `postgres` do selftest já faz um `SELECT 1` real — e estende o mesmo
+  // fail-fast para Redis/filas e Chromium: se algo aqui quebrar, o processo
+  // encerra ANTES de aceitar qualquer job, com o passo exato que falhou no
+  // log, em vez de crash-loop silencioso ou sucesso aparente sem conseguir
+  // trabalhar.
+  const selftest = await runSelfTest('full');
+  for (const step of selftest.steps) {
+    if (step.ok) {
+      logger.info({ step: step.name, durationMs: step.durationMs, detail: step.detail }, 'selftest: passo OK');
+    } else {
+      logger.fatal({ step: step.name, durationMs: step.durationMs, error: step.error }, 'selftest: passo FALHOU');
+    }
+  }
+  if (!selftest.ok) {
+    logger.fatal('selftest falhou no boot — worker não vai subir Workers/Queues; ver os passos acima');
+    process.exit(1);
+  }
+  logger.info('selftest ok — módulos internos, Postgres, Redis/filas e Chromium confirmados de verdade');
 
   const workers = startWorkers();
   logger.info('worker up');

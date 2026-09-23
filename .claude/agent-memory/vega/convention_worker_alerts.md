@@ -42,4 +42,6 @@ entrada de teste direto sem precisar montar toda a `createScrapeSearchProcessor`
 `passWithNoTests: true` em `vitest.config.ts` ainda está lá (não é meu arquivo, deixei pra Íris tirar
 quando quiser; não bloqueia nada, os testes correm normalmente com a flag presente).
 
-Ver também [[convention-worker-redis-state]] (pause-meta/heartbeat) e [[project-innoprospect]].
+Ver também [[convention-worker-redis-state]] (pause-meta/heartbeat), [[project-innoprospect]] e
+[[convention-web-alerts]] (o gêmeo do lado `apps/web`, Onda 3 de 2026-09-23 — instância caindo,
+degradada, campanha parada e Evolution API com erro).

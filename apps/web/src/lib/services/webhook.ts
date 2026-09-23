@@ -19,6 +19,7 @@ import {
   haltCampaignsSoleInstanceDisconnected,
   skipPendingCampaignTargetsForPhone,
 } from '@/lib/services/campaign-targets';
+import { sendAlert } from '@/lib/alerts';
 import { logger } from '@/lib/logger';
 
 /** `remoteJid` da Evolution vem como `"5511987654321@s.whatsapp.net"` — a parte antes do `@` já é o telefone em dígitos (com DDI), então a MESMA normalização BR usada no scraping (`@inno/core/leads/phone.ts`) resolve para E.164 sem precisar de um parser de JID dedicado. */
@@ -153,6 +154,15 @@ async function handleMessageStatus(instance: WhatsAppInstance, event: MessageSta
 async function handleConnectionUpdate(instance: WhatsAppInstance, event: ConnectionUpdateEvent): Promise<void> {
   const nextStatus = event.banned ? 'banned' : event.state === 'connected' ? 'connected' : event.state === 'connecting' ? 'connecting' : 'disconnected';
 
+  // Transição real (não repete a cada evento redundante que a Evolution
+  // mande com o mesmo estado, ex.: tentativas de reconexão que falham
+  // repetidamente) — `instance` é o estado carregado ANTES deste webhook
+  // (`app/api/webhooks/evolution/[instanceKey]/route.ts`), então
+  // `instance.status` aqui é o status PRÉVIO, nunca o que este evento acabou
+  // de escrever.
+  const wasAlreadyDown = instance.status === 'disconnected' || instance.status === 'banned';
+  const isGoingDown = nextStatus === 'disconnected' || nextStatus === 'banned';
+
   await prisma.$transaction(async (tx) => {
     await tx.whatsAppInstance.update({
       where: { id: instance.id },
@@ -179,6 +189,24 @@ async function handleConnectionUpdate(instance: WhatsAppInstance, event: Connect
       await haltCampaignsSoleInstanceDisconnected(tx, instance.id, haltReason);
     }
   });
+
+  // Alerta só na TRANSIÇÃO (`!wasAlreadyDown`) — sem isto, a Evolution
+  // reenviando o mesmo `connection.update` (tentativas de reconexão que
+  // continuam falhando) geraria um alerta por evento. `event.statusReason` é
+  // sempre numérico ou `null` (nunca texto livre da Evolution, ver
+  // `packages/messaging/src/webhook/types.ts`) — seguro de embutir na
+  // mensagem própria abaixo.
+  if (isGoingDown && !wasAlreadyDown) {
+    void sendAlert({
+      kind: 'instance_disconnected',
+      instanceId: instance.id,
+      instanceName: instance.name ?? null,
+      reason: nextStatus === 'banned' ? 'banned' : 'disconnected',
+      message: event.banned
+        ? 'Instância banida — conexão encerrada pelo provedor (statusReason 401).'
+        : `Conexão encerrada (statusReason ${event.statusReason ?? 'desconhecido'}).`,
+    });
+  }
 
   logger.info('webhook evolution: connection.update processado', { instanceId: instance.id, nextStatus, banned: event.banned });
 }

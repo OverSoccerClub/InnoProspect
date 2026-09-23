@@ -1,0 +1,63 @@
+-- InnoProspect — remove o model `RawCapture` (tabela `raw_captures`) por
+-- completo. DECISÃO DO DONO, já tomada antes de eu mandar esta migração —
+-- este comentário existe para quem ler isto daqui a 6 meses saber que não
+-- foi descuido.
+--
+-- ⚠️ ESTA MIGRAÇÃO É DESTRUTIVA E IRREVERSÍVEL. `DROP TABLE` apaga
+-- fisicamente todas as linhas que existirem em `raw_captures` no banco onde
+-- isto rodar, sem backup automático. Não há downgrade — reverter exigiria
+-- recriar a tabela vazia (a `rawData` original, se existir em produção, NÃO
+-- volta).
+--
+-- O QUE FOI VERIFICADO ANTES DE ESCREVER ISTO (não é suposição):
+--   1. `grep -rln "rawCapture|RawCapture|raw_captures" apps/ packages/`
+--      (excluindo `packages/db/src/generated/**`, que é código GERADO do
+--      client Prisma, e `packages/db/prisma/migrations/**`) devolve
+--      exatamente 1 resultado: o próprio `schema.prisma`. Nenhum arquivo em
+--      `apps/worker`, `apps/web`, `packages/scraper`, `packages/core` ou
+--      `packages/contracts` cria, lê, atualiza ou apaga uma linha de
+--      `RawCapture`.
+--   2. O `retention.job` citado no comentário original do model ("EFÊMERO
+--      por desenho: retention.job apaga fisicamente após 7 dias") NUNCA foi
+--      implementado — `find . -iname "*retention*"` no repo inteiro não
+--      acha nenhum arquivo. A tabela não tinha nem escritor nem o job de
+--      limpeza que o próprio design previa.
+--   3. Houve divergência entre dois pareceres anteriores sobre se
+--      `RawCapture` estava em uso — o dono confirmou pessoalmente com a
+--      verificação acima antes de autorizar esta migração. Não reabrir sem
+--      re-verificar com o mesmo grep.
+--
+-- ⚠️ O QUE ESTA MIGRAÇÃO NÃO SABE: se este banco (produção ou qualquer
+-- ambiente que já tenha rodado por um tempo) tem linhas em `raw_captures`
+-- hoje, elas serão apagadas. Nenhuma ferramenta nesta máquina de
+-- desenvolvimento tem acesso ao Postgres de produção (ver
+-- `innoprospect-bloqueio-docker` na memória) para confirmar a contagem antes
+-- do deploy. Recomendação registrada no handoff: rodar
+-- `SELECT count(*) FROM raw_captures;` direto no banco de produção ANTES de
+-- aplicar esta migração, só para o dono ter o número exato do que está
+-- prestes a ser descartado (esperado: baixo ou zero, já que nada nunca
+-- escreveu nela — mas "esperado" não é "confirmado").
+--
+-- Gerada com `prisma migrate diff --from-schema-datamodel <snapshot do
+-- schema ANTES desta mudança> --to-schema-datamodel prisma/schema.prisma
+-- --script` — sem Postgres disponível nesta máquina (mesma ressalva das
+-- migrações anteriores). NÃO foi aplicada contra um banco vivo.
+--
+-- Efeito nas duas relações que apontavam para `RawCapture` (ambas já
+-- removidas do lado de `SearchTask.rawCaptures`/`Lead.rawCaptures` no
+-- schema, sem efeito colateral: `SearchTask`/`Lead` continuam intactos, só
+-- perderam um relacionamento que nada usava):
+--   - `raw_captures.searchTaskId` → `search_tasks.id` (Cascade)
+--   - `raw_captures.leadId` → `leads.id` (SetNull)
+-- Nenhuma das duas tinha `onDelete` que dependesse de `raw_captures` (é
+-- sempre `raw_captures` como lado dependente) — apagar a tabela não afeta
+-- `search_tasks` nem `leads` de nenhuma forma.
+
+-- DropForeignKey
+ALTER TABLE "raw_captures" DROP CONSTRAINT "raw_captures_searchTaskId_fkey";
+
+-- DropForeignKey
+ALTER TABLE "raw_captures" DROP CONSTRAINT "raw_captures_leadId_fkey";
+
+-- DropTable
+DROP TABLE "raw_captures";

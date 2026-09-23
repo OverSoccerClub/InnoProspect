@@ -51,9 +51,11 @@ export {
   checkNameFillRate,
   checkPhoneFillRate,
   checkDataShape,
+  checkEnrichmentFillRate,
   evaluateSanity,
   DEFAULT_ZERO_STREAK_OPTIONS,
   DEFAULT_NAME_FILL_RATE_OPTIONS,
+  DEFAULT_ENRICHMENT_FILL_RATE_OPTIONS,
 } from './sanity/assertions.js';
 export type {
   SanityCheckResult,
@@ -62,6 +64,8 @@ export type {
   ZeroStreakOptions,
   NameFillRateOptions,
   LeadShapeSample,
+  LeadEnrichmentSample,
+  EnrichmentFillRateOptions,
 } from './sanity/assertions.js';
 export { captureIncident } from './sanity/incident.js';
 export type { IncidentCapture } from './sanity/incident.js';

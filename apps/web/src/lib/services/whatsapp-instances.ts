@@ -22,6 +22,7 @@ import type {
 import { conflict, notFound, upstreamError } from '@/lib/api-handler';
 import { buildWebhookUrl, generateEvolutionInstanceName, generateInstanceKey, getEvolutionClient } from '@/lib/evolution';
 import { haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
+import { sendAlert } from '@/lib/alerts';
 import { logger } from '@/lib/logger';
 
 /** Chave do dia corrente (00:00 UTC do dia civil em `APP_TIMEZONE`) — mesma granularidade de `InstanceDailyStat.date` (`@db.Date`). */
@@ -82,10 +83,20 @@ export async function listWhatsAppInstances(): Promise<ListWhatsAppInstancesResp
   return { data };
 }
 
-/** Traduz `MessagingError` (`@inno/messaging`) para o envelope de erro da API — a Evolution é um upstream, nunca `500` nosso. */
+/**
+ * Traduz `MessagingError` (`@inno/messaging`) para o envelope de erro da API
+ * — a Evolution é um upstream, nunca `500` nosso. Também dispara o alerta
+ * `evolution_api_error` (fire-and-forget, `sendAlert` nunca lança) — antes
+ * desta rodada essas falhas só apareciam no log, silenciosas fora dele. Só
+ * `code`/`action` vão pro alerta, nunca `err.message`/`err.cause` (podem
+ * ecoar dado da requisição — ver regra 4 em `lib/alerts.ts`); a
+ * deduplicação por `code` (dentro de `sendAlert`) evita 1 alerta por
+ * requisição enquanto a Evolution estiver fora do ar.
+ */
 function rethrowAsUpstream(err: unknown, action: string): never {
   if (err instanceof MessagingError) {
     logger.error(`falha ao ${action} na Evolution API`, { code: err.code, status: err.status });
+    void sendAlert({ kind: 'evolution_api_error', action, code: err.code });
     upstreamError(`Não foi possível ${action} agora (Evolution API indisponível ou com erro). Tente novamente em instantes.`);
   }
   throw err;
@@ -264,6 +275,9 @@ export async function deleteWhatsAppInstance(id: string): Promise<void> {
       instanceId: id,
       err: err instanceof Error ? err : new Error(String(err)),
     });
+    if (err instanceof MessagingError) {
+      void sendAlert({ kind: 'evolution_api_error', action: 'apagar a instância', code: err.code });
+    }
   }
 
   try {

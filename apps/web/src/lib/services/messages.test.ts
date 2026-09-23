@@ -223,6 +223,8 @@ vi.mock('@/lib/logger', async () => {
 });
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn(() => ({ allowed: true })) }));
 vi.mock('@/lib/services/campaign-targets', () => ({ haltCampaignsSoleInstanceDisconnected: vi.fn(async () => []) }));
+const sendAlertMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/alerts', () => ({ sendAlert: sendAlertMock }));
 
 const sendTextMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/evolution', () => ({ getEvolutionClient: () => ({ sendText: sendTextMock }) }));
@@ -441,6 +443,15 @@ describe('sendLeadMessage — falha da Evolution compensa os contadores', () => 
     expect(store.messages[0]?.status).toBe('failed');
     expect(store.instances.find((i) => i.id === 'inst-1')?.status).toBe('disconnected');
     expect(store.leadActivities.some((a) => a.type === 'message_failed')).toBe(true);
+    // Alerta de instância caindo (achado do dono, 2026-09-23: isto era
+    // silencioso) — mensagem PRÓPRIA, nunca `err.message` cru da Evolution.
+    expect(sendAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'instance_disconnected', instanceId: 'inst-1', reason: 'disconnected' }),
+    );
+    const disconnectCall = sendAlertMock.mock.calls.find((c) => (c[0] as { kind: string }).kind === 'instance_disconnected')![0] as { message: string };
+    expect(disconnectCall.message).not.toContain('instância caiu'); // não repassa o `err.message` cru
+    // Também alerta saúde da Evolution API (código, sem a mensagem crua).
+    expect(sendAlertMock).toHaveBeenCalledWith({ kind: 'evolution_api_error', action: 'enviar mensagem', code: 'INSTANCE_DISCONNECTED' });
   });
 
   it('5 falhas consecutivas degradam a instância (kill switch do §4.9.5/§6.6) — usando RATE_LIMITED, que É uma falha CONFIRMADA (a Evolution rejeitou antes de tentar enviar)', async () => {
@@ -452,9 +463,23 @@ describe('sendLeadMessage — falha da Evolution compensa os contadores', () => 
 
     expect(store.instances.find((i) => i.id === 'inst-1')?.consecutiveFailures).toBe(5);
     expect(store.instances.find((i) => i.id === 'inst-1')?.isDegraded).toBe(true);
+    expect(sendAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'instance_degraded', instanceId: 'inst-1', consecutiveFailures: 5, threshold: 5 }),
+    );
   });
 
-  it('INVALID_NUMBER não incrementa consecutiveFailures (não é falha da instância)', async () => {
+  it('a 4ª falha consecutiva (ainda abaixo do limite) NÃO alerta instance_degraded', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    store.instances.push(instance({ id: 'inst-1', consecutiveFailures: 3 }));
+    sendTextMock.mockRejectedValue(new MessagingError('RATE_LIMITED', 'limite da Evolution'));
+
+    await expect(sendLeadMessage('lead-1', body(), ACTOR)).rejects.toMatchObject({ code: 'UPSTREAM_ERROR' });
+
+    expect(store.instances.find((i) => i.id === 'inst-1')?.consecutiveFailures).toBe(4);
+    expect(sendAlertMock).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'instance_degraded' }));
+  });
+
+  it('INVALID_NUMBER não incrementa consecutiveFailures (não é falha da instância) nem alerta saúde da Evolution API (o erro é do NÚMERO do lead, mensagem ecoa o telefone)', async () => {
     store.leads.push(lead({ id: 'lead-1' }));
     store.instances.push(instance({ id: 'inst-1', consecutiveFailures: 0 }));
     sendTextMock.mockRejectedValue(new MessagingError('INVALID_NUMBER', 'número sem WhatsApp'));
@@ -462,6 +487,7 @@ describe('sendLeadMessage — falha da Evolution compensa os contadores', () => 
     await expect(sendLeadMessage('lead-1', body(), ACTOR)).rejects.toMatchObject({ code: 'CONFLICT', reason: 'NUMBER_HAS_NO_WHATSAPP' });
 
     expect(store.instances.find((i) => i.id === 'inst-1')?.consecutiveFailures).toBe(0);
+    expect(sendAlertMock).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'evolution_api_error' }));
   });
 });
 

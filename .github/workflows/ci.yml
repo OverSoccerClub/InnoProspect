@@ -1,26 +1,38 @@
 name: CI
 
-# CI do InnoProspect (monorepo pnpm + Turborepo).
+# CI do InnoProspect (monorepo pnpm + Turborepo). Dois jobs:
 #
-# O QUE ESTE WORKFLOW VALIDA: que o código instala com o lockfile congelado,
-# tipa, linta e passa nos testes automatizados (Vitest) num ambiente limpo
-# (Ubuntu, Node 22, pnpm 9.12.0 — as MESMAS versões que apps/web/Dockerfile e
-# apps/worker/Dockerfile usam em produção; não chutadas).
+#  1. `build-and-test` — que o código instala com o lockfile congelado, tipa,
+#     linta e passa nos testes automatizados (Vitest) num ambiente limpo
+#     (Ubuntu, Node 22, pnpm 9.12.0 — as MESMAS versões que apps/web/
+#     Dockerfile e apps/worker/Dockerfile usam em produção; não chutadas).
+#     Este job usa `DATABASE_URL` como PLACEHOLDER (env abaixo) — nenhuma
+#     conexão real é feita, `prisma generate` só resolve o schema.
 #
-# O QUE ELE NÃO VALIDA — ver "DEPLOY.md §9" para a lista completa e o porquê:
-# - Que `prisma migrate deploy` aplica de verdade contra um Postgres real.
-# - Que a Evolution API responde, ou que o worker conecta num Redis real.
-# - Que os Dockerfiles buildam (`docker build` não roda aqui).
+#  2. `worker-selftest` (2026-09-23) — builda o worker de verdade (`tsup`,
+#     o mesmo comando do Dockerfile) e roda `node dist/selftest.js` (modo
+#     COMPLETO) contra um Postgres/Redis EFÊMEROS deste job e um Chromium na
+#     mesma versão pinada em `packages/scraper/package.json`. Existe porque
+#     CINCO incidentes reais (22-23/09) passaram pelo job 1 inteiro — typecheck,
+#     lint, centenas de testes — e só quebraram no boot do artefato real em
+#     produção: nome de fila inválido, `.ts` fonte dentro do bundle, Chromium
+#     divergente da imagem base, `require` de CommonJS em ESM, e um script
+#     operacional impossível de rodar no container. Ver `apps/worker/src/
+#     selftest-checks.ts` para o que cada passo verifica e por quê.
+#
+# O QUE NENHUM DOS DOIS VALIDA — ver "DEPLOY.md §9" para a lista completa:
+# - Que `prisma migrate deploy` aplica de verdade contra um Postgres com
+#   dado real (o Postgres do job 2 é vazio, sem nenhuma migração aplicada —
+#   de propósito: `checkPostgres` usa `SELECT 1`, que não exige schema).
+# - Que a Evolution API responde.
+# - Que os `Dockerfile`s buildam (`docker build` não roda em nenhum job —
+#   o job 2 builda com `tsup`, não com Docker; o Chromium usado é instalado
+#   via `playwright install`, não é a imagem base `mcr.microsoft.com/
+#   playwright:*` do Dockerfile, embora seja a MESMA versão do pacote).
 # - Que o `next build` de produção compila — de propósito NÃO roda aqui:
 #   exigiria segredos reais (ou placeholders que não provam nada sobre o
 #   build do EasyPanel) para gerar um artefato que este workflow não usa
 #   para nada. O primeiro build real continua sendo o do EasyPanel.
-#
-# DATABASE_URL abaixo é um PLACEHOLDER, não um segredo — o MESMO valor usado
-# como default do `ARG DATABASE_URL` nos Dockerfiles. `prisma generate` só
-# precisa de uma URL com formato válido para resolver o schema do Prisma;
-# nenhuma conexão real é feita. NUNCA troque este valor por uma credencial
-# de verdade.
 
 on:
   push:
@@ -90,3 +102,96 @@ jobs:
 
       - name: Testes automatizados (Vitest)
         run: pnpm test
+
+  # worker-selftest (Vulcano, 2026-09-23) — o job acima passa em typecheck/
+  # lint/testes há meses e mesmo assim CINCO incidentes derrubaram o worker
+  # em produção em 22-23/09: nome de fila inválido, `.ts` fonte dentro do
+  # bundle, Chromium divergente da imagem base, `require` de CommonJS em
+  # ESM, e um script operacional impossível de rodar no container. Nenhum
+  # desses portões olha para o ARTEFATO que sobe (`dist/*.js` com `node`
+  # puro, contra Postgres/Redis/Chromium de verdade) — só este job faz isso.
+  # Roda `node dist/selftest.js` (modo COMPLETO, `apps/worker/src/selftest.
+  # ts`) contra Postgres/Redis efêmeros deste job.
+  worker-selftest:
+    name: Auto-teste do worker (Postgres + Redis + Chromium reais)
+    needs: build-and-test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: selftest
+          POSTGRES_PASSWORD: selftest
+          POSTGRES_DB: selftest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U selftest"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Efêmero, do MESMO job — não é o Postgres/Redis de produção, e não
+      # sobrevive além deste run. `SELECT 1`/heartbeat não exigem nenhuma
+      # migração/schema aplicado (ver `checkPostgres` em `selftest-checks.
+      # ts`), então NÃO rodamos `prisma migrate deploy` aqui de propósito —
+      # continua sendo o primeiro boot real no EasyPanel que prova isso
+      # (ver DEPLOY.md §9).
+      DATABASE_URL: 'postgresql://selftest:selftest@localhost:5432/selftest'
+      REDIS_URL: 'redis://localhost:6379'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Instalar dependências (lockfile congelado)
+        run: pnpm install --frozen-lockfile
+
+      - name: Gerar e compilar @inno/db (exports apontam para o .js)
+        run: |
+          pnpm --filter @inno/db run generate
+          pnpm --filter @inno/db run build
+
+      - name: Buildar o worker (tsup) — é o ARTEFATO que este job testa
+        run: pnpm --filter worker run build
+
+      # Instala o Chromium na MESMA versão que `packages/scraper/package.
+      # json` já tem pinada (`playwright`, sem `^`) — via o binário do
+      # PRÓPRIO `playwright` já resolvido pelo `pnpm install` acima, nunca
+      # uma versão digitada à mão aqui. Isso fecha o loop no incidente real
+      # de 2026-09-22 (`playwright` do npm divergindo do Chromium
+      # disponível) sem duplicar o número da versão neste arquivo — se
+      # alguém bumpar o pin em `packages/scraper/package.json` (e o `ARG
+      # PLAYWRIGHT_VERSION` do Dockerfile, junto, por causa da guarda de
+      # build), este passo instala a versão nova sozinho, sem precisar
+      # editar o CI.
+      - name: Instalar o Chromium do Playwright (mesma versão pinada em packages/scraper)
+        run: pnpm --filter @inno/scraper exec playwright install --with-deps chromium
+
+      # Roda o AUTO-TESTE COMPLETO contra o artefato real (`dist/`), não
+      # contra o TypeScript fonte — é a mesma diferença que separou "passou
+      # no CI" de "quebrou em produção" nos 5 incidentes de 22-23/09.
+      - name: Auto-teste completo (node dist/selftest.js)
+        run: node apps/worker/dist/selftest.js

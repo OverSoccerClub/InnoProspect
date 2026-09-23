@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   checkDataShape,
+  checkEnrichmentFillRate,
   checkNameFillRate,
   checkPhoneFillRate,
   checkZeroStreak,
+  type LeadEnrichmentSample,
 } from './assertions.js';
 
 describe('checkZeroStreak (A1)', () => {
@@ -135,5 +137,63 @@ describe('checkDataShape (A4)', () => {
   it('NÃO dispara com dados dentro da forma esperada', () => {
     const samples = Array.from({ length: 20 }, () => ({ rating: 4.2, phoneNormalizationFailed: false }));
     expect(checkDataShape(samples).triggered).toBe(false);
+  });
+});
+
+describe('checkEnrichmentFillRate (A5 — incidente real de 2026-09-23: ~260 leads só com o nome, nenhuma assertion disparou)', () => {
+  const nameOnly: LeadEnrichmentSample = { hasAddress: false, hasPhone: false, hasCategory: false, hasWebsite: false };
+  const fullyEnriched: LeadEnrichmentSample = { hasAddress: true, hasPhone: true, hasCategory: true, hasWebsite: true };
+
+  it('dispara reproduzindo o cenário real: janela inteira só com o nome', () => {
+    const samples = Array.from({ length: 30 }, () => ({ ...nameOnly }));
+    const result = checkEnrichmentFillRate(samples);
+    expect(result.triggered).toBe(true);
+    if (result.triggered) {
+      expect(result.code).toBe('ENRICHMENT_FILL_RATE_LOW');
+      expect(result.severity).toBe('critical');
+      // Diferente de A3/A4: uma falha estrutural em TODOS os campos ao
+      // mesmo tempo não tem explicação de nicho plausível — pausa a fila.
+      expect(result.pauseQueue).toBe(true);
+      expect(result.metric).toBeCloseTo(1);
+    }
+  });
+
+  it('NÃO dispara com amostra abaixo do mínimo, mesmo 100% só-com-nome (ruído, não incidente)', () => {
+    const samples = Array.from({ length: 10 }, () => ({ ...nameOnly }));
+    expect(checkEnrichmentFillRate(samples).triggered).toBe(false);
+  });
+
+  it('NÃO dispara para nicho legítimo sem telefone/site — endereço+categoria ainda preenchidos bastam para NÃO contar como "só com o nome"', () => {
+    const samples: LeadEnrichmentSample[] = Array.from({ length: 30 }, () => ({
+      hasAddress: true,
+      hasPhone: false,
+      hasCategory: true,
+      hasWebsite: false,
+    }));
+    expect(checkEnrichmentFillRate(samples).triggered).toBe(false);
+  });
+
+  it('NÃO dispara logo abaixo do piso de 30%', () => {
+    const samples = [
+      ...Array.from({ length: 8 }, () => ({ ...nameOnly })), // 8/30 = 26.7%
+      ...Array.from({ length: 22 }, () => ({ ...fullyEnriched })),
+    ];
+    expect(checkEnrichmentFillRate(samples).triggered).toBe(false);
+  });
+
+  it('dispara logo acima do piso de 30%', () => {
+    const samples = [
+      ...Array.from({ length: 10 }, () => ({ ...nameOnly })), // 10/30 = 33.3%
+      ...Array.from({ length: 20 }, () => ({ ...fullyEnriched })),
+    ];
+    const result = checkEnrichmentFillRate(samples);
+    expect(result.triggered).toBe(true);
+    if (result.triggered) expect(result.metric).toBeCloseTo(10 / 30);
+  });
+
+  it('um lead com SÓ telefone (sem endereço/categoria/site) NÃO conta como "só com o nome" — a métrica exige os 4 vazios ao mesmo tempo', () => {
+    const partial: LeadEnrichmentSample = { hasAddress: false, hasPhone: true, hasCategory: false, hasWebsite: false };
+    const samples = Array.from({ length: 30 }, () => ({ ...partial }));
+    expect(checkEnrichmentFillRate(samples).triggered).toBe(false);
   });
 });

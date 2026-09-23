@@ -104,12 +104,30 @@
 # mexer nos DOIS lados de propósito, e o build avisa alto e claro se esquecer
 # um deles.
 #
-# ⚠️ NÃO validado com `docker build` nesta máquina (sem Docker instalado).
-# Em especial, o caminho exato de `PLAYWRIGHT_BROWSERS_PATH`, a existência
-# do usuário `pwuser` e a NOVA guarda de versão do Playwright (stage `deps`)
-# PRECISAM ser conferidos no primeiro build real (rodar
-# `echo $PLAYWRIGHT_BROWSERS_PATH` dentro de um container da imagem base
-# `mcr.microsoft.com/playwright:v1.62.1-jammy` antes de confiar cegamente).
+# ✅ ATUALIZAÇÃO (Vulcano, 2026-09-23): o aviso antigo aqui ("NÃO validado com
+# `docker build` nesta máquina, PRECISAM ser conferidos no primeiro build
+# real") ficou desatualizado — o cabeçalho ACIMA já registra que o 1º build
+# real rodou no EasyPanel em 2026-09-22 e morreu exatamente na criação do
+# usuário `pwuser` (`groupadd: group 'pwuser' already exists`, código 9),
+# corrigido pela guarda condicional no stage `runner`. Builds seguintes
+# passaram: o `PROGRESSO.md` confirma o worker em produção coletando leads
+# reais do Google Maps desde então — o que só é possível se
+# `PLAYWRIGHT_BROWSERS_PATH` resolveu certo E a guarda de versão do
+# Playwright (stage `deps`, abaixo) passou, já que os dois bloqueiam o build
+# antes de chegar a esse ponto. Um comentário que afirma "não validado"
+# quando já foi validado por operação real é pior que nenhum comentário —
+# por isso a correção.
+#
+# ⚠️ O QUE AINDA NÃO FOI VALIDADO POR NENHUM BUILD REAL (esta máquina de
+# desenvolvimento continua sem Docker instalado): o `HEALTHCHECK` abaixo
+# (`node dist/selftest.js --ping`, adicionado nesta mesma entrega) e o job
+# novo de CI que roda o auto-teste completo contra Postgres/Redis efêmeros
+# (`.github/workflows/ci.yml`). O primeiro sinal de que o `HEALTHCHECK`
+# funciona é `docker inspect --format='{{json .State.Health}}' <container>`
+# (ou a coluna "Health" do EasyPanel) mostrando `healthy` alguns segundos
+# depois do boot — se ficar em `starting`/`unhealthy`, o log do próprio
+# comando (`docker inspect` traz o `Output` de cada tentativa) já diz qual
+# passo falhou, sem precisar adivinhar.
 
 ARG PLAYWRIGHT_VERSION=v1.62.1
 
@@ -266,5 +284,35 @@ RUN rm -rf "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}"/firefox-* \
            "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}"/ffmpeg-* 2>/dev/null || true
 
 USER pwuser
+
+# HEALTHCHECK (Vulcano, 2026-09-23) — roda `node dist/selftest.js --ping`
+# (ver `apps/worker/src/selftest.ts`/`selftest-checks.ts`), NÃO o auto-teste
+# completo. De propósito: o modo completo abre e fecha um Chromium de
+# verdade (~1-2s + um processo de sistema inteiro) — repetir isso a cada 30s
+# PARA SEMPRE, disputando CPU/memória com o scraping real dentro do MESMO
+# container, seria puro desperdício sem provar nada que o próprio fluxo de
+# scraping não prove sozinho (Chromium morto vira BROWSER_CRASH + retry +
+# alerta, ver `observability/alerts.ts`). O modo `--ping` é deliberadamente
+# mais barato: só Postgres (`SELECT 1`) + o heartbeat que o PROCESSO
+# PRINCIPAL já grava no Redis (`lib/queue-state.ts`) — prova que o laço
+# principal do worker está de fato vivo e escrevendo, não só que o processo
+# Node não morreu. O auto-teste COMPLETO roda 1x no boot (`index.ts`, antes
+# de subir qualquer Worker/Queue) e no CI (`.github/workflows/ci.yml`).
+#
+# `--timeout=20s` dá folga confortável acima do pior caso interno do modo
+# `--ping` (2 passos × `PING_STEP_TIMEOUT_MS`=8s = 16s, `selftest-checks.ts`)
+# — se o Docker precisar matar o processo por exceder ISTO, algo já está
+# MUITO mais lento que o esperado, e a métrica que importa (container
+# marcado `unhealthy`) já está correta de qualquer forma.
+# `--start-period=40s` dá espaço para o boot real (auto-teste completo +
+# `requeue-orphans`) terminar antes de qualquer falha contar para o
+# `--retries`.
+#
+# ⚠️ NÃO validado por nenhum build/`docker run` real nesta máquina (sem
+# Docker instalado) — ver o aviso no cabeçalho deste arquivo para o primeiro
+# sinal real de que funcionou (`docker inspect .State.Health` / coluna
+# "Health" do EasyPanel).
+HEALTHCHECK --interval=30s --timeout=20s --start-period=40s --retries=3 \
+  CMD ["node", "dist/selftest.js", "--ping"]
 
 CMD ["node", "dist/index.js"]

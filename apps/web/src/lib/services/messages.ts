@@ -43,6 +43,7 @@ import { badRequest, conflict, notFound, rateLimited, upstreamError } from '@/li
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getEvolutionClient } from '@/lib/evolution';
 import { haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
+import { sendAlert } from '@/lib/alerts';
 import { logger } from '@/lib/logger';
 
 const APP_TIMEZONE = () => process.env.APP_TIMEZONE || DEFAULT_SEND_WINDOW_CONFIG.timezone;
@@ -288,12 +289,32 @@ const EVOLUTION_ERROR_EFFECT: Record<MessagingErrorCode, EvolutionErrorEffect> =
  * Transação 2b — CONFIRMADA falha (ARQUITETURA §4.9.5): compensa a reserva
  * do write-ahead por completo (sentCount volta, failedCount sobe) porque
  * sabemos que a mensagem NÃO saiu (a Evolution rejeitou antes de processar).
+ *
+ * `previousStatus`/`instanceName` (capturados em `sendLeadMessage` ANTES da
+ * tentativa de envio, via `candidate.instance`) evitam alertar
+ * `instance_disconnected` de novo quando a instância JÁ estava desconectada
+ * — mesmo cuidado do webhook (`webhook.ts#handleConnectionUpdate`). Na
+ * prática, o G7 do guard (`evaluateSendGuard`, `@inno/core`) já bloqueia com
+ * `409 INSTANCE_NOT_CONNECTED` qualquer tentativa SEQUENCIAL contra uma
+ * instância que já está `disconnected` no banco (nunca chega a `sendText`
+ * nem a esta função) — então esta checagem é defesa de segunda linha para a
+ * corrida entre 2 requisições CONCORRENTES que leram `status: 'connected'`
+ * antes de qualquer uma das duas commitar a mudança (não elimina o duplo
+ * alerta nesse caso raro, só reduz a janela).
  */
 async function recordSendFailure(
   tx: Prisma.TransactionClient,
-  params: { messageId: string; instanceId: string; instanceDate: Date; effect: EvolutionErrorEffect; errorMessage: string },
+  params: {
+    messageId: string;
+    instanceId: string;
+    instanceName: string | null;
+    instanceDate: Date;
+    effect: EvolutionErrorEffect;
+    errorMessage: string;
+    previousStatus: string;
+  },
 ): Promise<void> {
-  const { messageId, instanceId, instanceDate, effect, errorMessage } = params;
+  const { messageId, instanceId, instanceName, instanceDate, effect, errorMessage, previousStatus } = params;
 
   await tx.message.update({
     where: { id: messageId },
@@ -318,9 +339,27 @@ async function recordSendFailure(
 
     if (effect.incrementConsecutiveFailures && updated.consecutiveFailures >= CONSECUTIVE_FAILURE_DEGRADE_THRESHOLD && !updated.isDegraded) {
       await tx.whatsAppInstance.update({ where: { id: instanceId }, data: { isDegraded: true } });
+      void sendAlert({
+        kind: 'instance_degraded',
+        instanceId,
+        instanceName,
+        consecutiveFailures: updated.consecutiveFailures,
+        threshold: CONSECUTIVE_FAILURE_DEGRADE_THRESHOLD,
+      });
     }
 
     if (effect.disconnectInstance) {
+      // Mensagem PRÓPRIA (`effect.reason`, vocabulário fechado nosso — nunca
+      // `errorMessage` cru da Evolution, ver regra 4 em `lib/alerts.ts`).
+      if (previousStatus !== 'disconnected') {
+        void sendAlert({
+          kind: 'instance_disconnected',
+          instanceId,
+          instanceName,
+          reason: 'disconnected',
+          message: `Instância desconectada durante uma tentativa de envio (código: ${effect.reason}).`,
+        });
+      }
       await haltCampaignsSoleInstanceDisconnected(tx, instanceId, `Instância desconectada durante envio manual: ${errorMessage}`);
     }
   }
@@ -560,7 +599,13 @@ export async function sendLeadMessage(
     providerMessageId = sendResult.providerMessageId;
     sentAt = new Date();
   } catch (err) {
-    await handleSendFailure(err, { messageId: reservedMessage.id, instanceId: instance.id, instanceDate: today });
+    await handleSendFailure(err, {
+      messageId: reservedMessage.id,
+      instanceId: instance.id,
+      instanceName: instance.name,
+      instanceDate: today,
+      previousStatus: instance.status,
+    });
     throw mapSendErrorToApiError(err);
   }
 
@@ -660,7 +705,7 @@ function throwForBlockedVerdict(
 
 async function handleSendFailure(
   err: unknown,
-  ctx: { messageId: string; instanceId: string; instanceDate: Date },
+  ctx: { messageId: string; instanceId: string; instanceName: string | null; instanceDate: Date; previousStatus: string },
 ): Promise<void> {
   const messagingError = err instanceof MessagingError ? err : null;
   const effect = messagingError ? EVOLUTION_ERROR_EFFECT[messagingError.code] : EVOLUTION_ERROR_EFFECT.UNKNOWN;
@@ -673,11 +718,31 @@ async function handleSendFailure(
     outcome: effect.outcome,
   });
 
+  // Alerta de saúde da Evolution API — todo `MessagingError` EXCETO
+  // `INVALID_NUMBER`, que é um problema do NÚMERO DO LEAD, não da API/
+  // instância (e cujo `message`, único caso do vocabulário, ecoa o telefone
+  // — ver `evolution-client.ts` — mais um motivo pra nunca entrar aqui).
+  // `code` (não `errorMessage`) é o único dado que vai pro alerta, e
+  // `sendAlert` deduplica por `code` — não flooda mesmo sob reenvio.
+  if (messagingError && messagingError.code !== 'INVALID_NUMBER') {
+    void sendAlert({ kind: 'evolution_api_error', action: 'enviar mensagem', code: messagingError.code });
+  }
+
   if (effect.outcome === 'uncertain') {
     await prisma.$transaction((tx) => recordSendUncertain(tx, { messageId: ctx.messageId, effect, errorMessage }));
     return;
   }
-  await prisma.$transaction((tx) => recordSendFailure(tx, { ...ctx, effect, errorMessage }));
+  await prisma.$transaction((tx) =>
+    recordSendFailure(tx, {
+      messageId: ctx.messageId,
+      instanceId: ctx.instanceId,
+      instanceName: ctx.instanceName,
+      instanceDate: ctx.instanceDate,
+      previousStatus: ctx.previousStatus,
+      effect,
+      errorMessage,
+    }),
+  );
 }
 
 /** Nunca `500` para falha da Evolution (ARQUITETURA §4.9.5) — sempre `409` (nosso, regra de negócio) ou `502 UPSTREAM_ERROR` (defeito do provedor). */
