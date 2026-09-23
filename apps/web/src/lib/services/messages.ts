@@ -19,6 +19,7 @@
 import { prisma, type Lead, type Prisma, type WhatsAppInstance } from '@inno/db';
 import { MessagingError, type MessagingErrorCode } from '@inno/messaging';
 import {
+  advanceSendPace,
   checkStatusTransition,
   deriveInstanceHealth,
   effectiveDailyLimit,
@@ -30,9 +31,17 @@ import {
   renderTemplate,
   resolveSpintax,
   validateTemplateVariables,
+  DEFAULT_COLD_FOLLOWUP_COOLDOWN_MS,
+  DEFAULT_JITTER_RANGE_SECONDS,
+  DEFAULT_MICRO_PAUSE_CONFIG,
   DEFAULT_SEND_WINDOW_CONFIG,
   MAX_DECISION_TO_SEND_MS,
+  MIN_JITTER_FLOOR_SECONDS,
+  type AdvanceSendPaceResult,
+  type JitterRangeSeconds,
   type LeadStatus,
+  type MicroPauseConfig,
+  type PaceAdvanceMode,
   type SendGuardFacts,
   type SendGuardVerdict,
   type SendWindowConfig,
@@ -107,6 +116,76 @@ function duplicateWindowMsFromEnv(): number {
 function manualSendRatePerMinFromEnv(): number {
   const value = Number.parseInt(process.env.MANUAL_SEND_RATE_PER_MIN ?? '', 10);
   return Number.isFinite(value) && value > 0 ? value : 10;
+}
+
+/**
+ * 🆕 Fase 4.C — Cooldown de 2º contato frio (G9b, ARQUITETURA §4.9.10/§10
+ * `COLD_FOLLOWUP_COOLDOWN_H`). Sem esta leitura, `evaluateSendGuard` caía no
+ * default de `@inno/core` (24h, igual) — mas silenciosamente, sem honrar o
+ * env documentado, mesmo padrão dos outros `*FromEnv` deste arquivo.
+ */
+function coldFollowupCooldownMsFromEnv(): number {
+  const hours = Number.parseInt(process.env.COLD_FOLLOWUP_COOLDOWN_H ?? '', 10);
+  return Number.isFinite(hours) && hours > 0 ? hours * 60 * 60 * 1000 : DEFAULT_COLD_FOLLOWUP_COOLDOWN_MS;
+}
+
+/** 🆕 Fase 4.C — piso de 30s (`MIN_JITTER_FLOOR_SECONDS`) nunca contornável pela env, mesmo espírito de `quietHoursFromEnv` (ARQUITETURA §6.3: "configurável, mín. 30s"). */
+function jitterRangeSecondsFromEnv(): JitterRangeSeconds {
+  const base = DEFAULT_JITTER_RANGE_SECONDS;
+  const envMin = Number.parseInt(process.env.DISPATCH_JITTER_MIN_S ?? '', 10);
+  const envMax = Number.parseInt(process.env.DISPATCH_JITTER_MAX_S ?? '', 10);
+  const minSeconds = Number.isFinite(envMin) ? Math.max(envMin, MIN_JITTER_FLOOR_SECONDS) : base.minSeconds;
+  const maxSeconds = Number.isFinite(envMax) && envMax > minSeconds ? envMax : base.maxSeconds;
+  return { minSeconds, maxSeconds };
+}
+
+/** 🆕 Fase 4.C — `DISPATCH_MICRO_PAUSE_*` (ARQUITETURA §10). Valor inválido/fora de ordem cai no default de `@inno/core`, nunca em NaN silencioso. */
+function microPauseConfigFromEnv(): MicroPauseConfig {
+  const base = DEFAULT_MICRO_PAUSE_CONFIG;
+  const envEveryMin = Number.parseInt(process.env.DISPATCH_MICRO_PAUSE_EVERY_MIN ?? '', 10);
+  const envEveryMax = Number.parseInt(process.env.DISPATCH_MICRO_PAUSE_EVERY_MAX ?? '', 10);
+  const envPauseMin = Number.parseInt(process.env.DISPATCH_MICRO_PAUSE_MIN_S ?? '', 10);
+  const envPauseMax = Number.parseInt(process.env.DISPATCH_MICRO_PAUSE_MAX_S ?? '', 10);
+
+  const everyMin = Number.isFinite(envEveryMin) && envEveryMin > 0 ? envEveryMin : base.everyMin;
+  const everyMax = Number.isFinite(envEveryMax) && envEveryMax >= everyMin ? envEveryMax : base.everyMax;
+  const pauseMinSeconds = Number.isFinite(envPauseMin) && envPauseMin > 0 ? envPauseMin : base.pauseMinSeconds;
+  const pauseMaxSeconds = Number.isFinite(envPauseMax) && envPauseMax >= pauseMinSeconds ? envPauseMax : base.pauseMaxSeconds;
+
+  return { everyMin, everyMax, pauseMinSeconds, pauseMaxSeconds };
+}
+
+/**
+ * Campos de `WhatsAppInstance` que TODO envio (sucesso, falha confirmada OU
+ * incerto — ARQUITETURA §6.8.7 "depois de TODO envio") escreve para avançar a
+ * cadência, computados PURAMENTE a partir do `AdvanceSendPaceResult`
+ * (`@inno/core`), sem 2ª leitura de banco.
+ *
+ * ⚠️ `sendsSinceMicroPause` usa `{ increment: 1 }` — NUNCA o valor absoluto
+ * que `advanceSendPace` calculou — para o incremento em si continuar atômico
+ * no Postgres mesmo se a leitura que alimentou `advanceSendPace` (feita ao
+ * resolver a instância, antes do `sendText`) já estivesse um passo atrás de
+ * outra escrita concorrente (ver memória do Cronos,
+ * `gate-nullable-e-contadores-concorrentes`: "sempre incremento atômico em
+ * SQL, nunca read-modify-write em JS"). Só a DECISÃO de disparar a
+ * micro-pausa (o sorteio em `shouldTriggerMicroPause`) pode ficar levemente
+ * desatualizada sob concorrência real — nunca o contador persistido, que
+ * nunca perde um incremento. Reset para `0` (micro-pausa disparou) é SET
+ * incondicional, sem essa janela.
+ */
+function paceFieldsForUpdate(
+  mode: PaceAdvanceMode,
+  result: AdvanceSendPaceResult,
+): Pick<Prisma.WhatsAppInstanceUpdateInput, 'nextSendAllowedAt' | 'sendsSinceMicroPause'> {
+  if (mode === 'floor') {
+    // Resposta a conversa aberta (`ignorePaceLock` honrado) não toca o
+    // contador de micro-pausa — decisão da Fase 4.B, `packages/core/whatsapp/jitter.ts`.
+    return { nextSendAllowedAt: result.nextSendAllowedAt };
+  }
+  return {
+    nextSendAllowedAt: result.nextSendAllowedAt,
+    sendsSinceMicroPause: result.microPauseTriggered ? 0 : { increment: 1 },
+  };
 }
 
 /** Mesma granularidade de `InstanceDailyStat.date` (`@db.Date`, fuso `APP_TIMEZONE`). Duplicado de propósito de `lib/services/whatsapp-instances.ts#todayDateKey` — mesma regra de "duplicar em vez de importar entre módulos de serviço não relacionados" já usada no monorepo (ver `convention-api-routes-fase1`, regra 4). */
@@ -312,9 +391,11 @@ async function recordSendFailure(
     effect: EvolutionErrorEffect;
     errorMessage: string;
     previousStatus: string;
+    /** 🆕 Fase 4.C — a cadência avança mesmo em falha CONFIRMADA (§6.8.7: "depois de TODO envio"). */
+    paceUpdate: Pick<Prisma.WhatsAppInstanceUpdateInput, 'nextSendAllowedAt' | 'sendsSinceMicroPause'>;
   },
 ): Promise<void> {
-  const { messageId, instanceId, instanceName, instanceDate, effect, errorMessage, previousStatus } = params;
+  const { messageId, instanceId, instanceName, instanceDate, effect, errorMessage, previousStatus, paceUpdate } = params;
 
   await tx.message.update({
     where: { id: messageId },
@@ -326,17 +407,22 @@ async function recordSendFailure(
     data: { sentCount: { decrement: 1 }, failedCount: { increment: 1 } },
   });
 
-  if (effect.incrementConsecutiveFailures || effect.disconnectInstance) {
-    const updated = await tx.whatsAppInstance.update({
-      where: { id: instanceId },
-      data: {
-        ...(effect.incrementConsecutiveFailures ? { consecutiveFailures: { increment: 1 } } : {}),
-        ...(effect.disconnectInstance
-          ? { status: 'disconnected', lastErrorAt: new Date(), lastErrorMessage: errorMessage }
-          : {}),
-      },
-    });
+  // ⚠️ Este `update` roda SEMPRE agora (antes só rodava quando a falha
+  // afetava `consecutiveFailures`/`status`) — a cadência (`paceUpdate`)
+  // precisa avançar em toda falha confirmada, não só nas que punem a
+  // instância. `consecutiveFailures`/desconexão continuam condicionais.
+  const updated = await tx.whatsAppInstance.update({
+    where: { id: instanceId },
+    data: {
+      ...paceUpdate,
+      ...(effect.incrementConsecutiveFailures ? { consecutiveFailures: { increment: 1 } } : {}),
+      ...(effect.disconnectInstance
+        ? { status: 'disconnected', lastErrorAt: new Date(), lastErrorMessage: errorMessage }
+        : {}),
+    },
+  });
 
+  if (effect.incrementConsecutiveFailures || effect.disconnectInstance) {
     if (effect.incrementConsecutiveFailures && updated.consecutiveFailures >= CONSECUTIVE_FAILURE_DEGRADE_THRESHOLD && !updated.isDegraded) {
       await tx.whatsAppInstance.update({ where: { id: instanceId }, data: { isDegraded: true } });
       void sendAlert({
@@ -395,14 +481,31 @@ async function recordSendFailure(
  */
 async function recordSendUncertain(
   tx: Prisma.TransactionClient,
-  params: { messageId: string; effect: EvolutionErrorEffect; errorMessage: string },
+  params: {
+    messageId: string;
+    instanceId: string;
+    effect: EvolutionErrorEffect;
+    errorMessage: string;
+    /** 🆕 Fase 4.C — a cadência avança mesmo em resultado incerto (§6.8.7: "depois de TODO envio", é o caso mais importante — a mensagem pode ter saído). */
+    paceUpdate: Pick<Prisma.WhatsAppInstanceUpdateInput, 'nextSendAllowedAt' | 'sendsSinceMicroPause'>;
+  },
 ): Promise<void> {
-  const { messageId, effect, errorMessage } = params;
+  const { messageId, instanceId, effect, errorMessage, paceUpdate } = params;
   const humanMessage = `Resultado incerto — a mensagem PODE ter sido entregue antes da falha de comunicação. Verifique a conversa antes de reenviar. (${errorMessage})`;
 
   await tx.message.update({
     where: { id: messageId },
     data: { status: 'failed', errorCode: effect.reason, errorMessage: humanMessage },
+  });
+
+  // 🆕 Fase 4.C — `consecutiveUncertain` (distinto de `consecutiveFailures`,
+  // ver comentário do campo no schema) sobe em incerto e só zera em SUCESSO
+  // confirmado — nunca em falha confirmada normal. Junto com `paceUpdate`
+  // porque os dois são o mesmo `update` na mesma linha (Cronos: "incremento
+  // atômico, nunca read-modify-write em JS").
+  await tx.whatsAppInstance.update({
+    where: { id: instanceId },
+    data: { ...paceUpdate, consecutiveUncertain: { increment: 1 } },
   });
 
   const message = await tx.message.findUnique({ where: { id: messageId } });
@@ -506,18 +609,31 @@ export async function sendLeadMessage(
   const candidate = await resolveInstanceForSend(lead.id, input.instanceId);
   const { instance } = candidate;
 
-  // G9 — última mensagem de saída (qualquer instância) + G10 — 1º contato frio
-  const lastOutbound = await prisma.message.findFirst({
-    where: { leadId: lead.id, direction: 'outbound' },
-    orderBy: { createdAt: 'desc' },
-    select: { createdAt: true },
-  });
+  // G9 — última mensagem de saída (qualquer instância) + G10 — 1º contato
+  // frio + 🆕 Fase 4.C — última mensagem de ENTRADA (G9b/`lastInboundAt`).
+  // Em `Promise.all` (não em série) — ainda estamos ANTES da leitura de
+  // opt-out, então não quebra o invariante "nenhum `await` entre a consulta
+  // de opt-out e `evaluateSendGuard`" (esse invariante é só sobre o QUE VEM
+  // DEPOIS do opt-out, não sobre tudo que vem antes).
+  const [lastOutbound, lastInbound] = await Promise.all([
+    prisma.message.findFirst({
+      where: { leadId: lead.id, direction: 'outbound' },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    }),
+    prisma.message.findFirst({
+      where: { leadId: lead.id, direction: 'inbound' },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    }),
+  ]);
   const isColdFirstContact = lastOutbound === null;
 
   // G11 — ⚠️ ÚLTIMA leitura de banco antes da decisão. Nenhum `await` entre
   // esta linha e a chamada de `evaluateSendGuard` abaixo.
   const optOutRow = await prisma.optOut.findUnique({ where: { phoneE164 } });
   const guardNow = new Date();
+  const coldFollowupCooldownMs = coldFollowupCooldownMsFromEnv();
 
   const facts: SendGuardFacts = {
     now: guardNow,
@@ -527,27 +643,52 @@ export async function sendLeadMessage(
       isDegraded: instance.isDegraded,
       warmupDay: instance.warmupDay,
       dailyLimitOverride: instance.dailyLimitOverride,
+      // 🆕 Fase 4.C (G9c) — SEMPRE `null` explícito quando não há gate ainda,
+      // NUNCA omitido: campo omitido (`undefined`) deixaria G9c inerte (é a
+      // semântica de "chamador não ligado" documentada em `send-guard.ts`) —
+      // exatamente a armadilha registrada na memória desta rodada anterior.
+      nextSendAllowedAt: instance.nextSendAllowedAt ?? null,
     },
     quota: { sentToday: candidate.sentToday },
     optOut: { exists: optOutRow !== null, checkedAt: guardNow },
     lastOutboundAt: lastOutbound?.createdAt ?? null,
+    // 🆕 Fase 4.C (G9b) — mesmo cuidado: `null` explícito, nunca omitido.
+    lastInboundAt: lastInbound?.createdAt ?? null,
     isColdFirstContact,
     text: finalText,
     companyName: process.env.APP_COMPANY_NAME || null,
     overrides: {
       allowNonMobile: input.allowNonMobile,
       confirmOutsideBusinessWindow: input.confirmOutsideBusinessWindow,
+      // 🆕 Fase 4.C — decisão registrada no handoff do Vega: o envio MANUAL é
+      // sempre um humano na tela, então este serviço sempre PEDE o desvio.
+      // Quem decide se ele VALE é só o guard (G9c em `send-guard.ts`), que o
+      // anula sempre que `isColdFirstContact === true` — por isso é seguro
+      // pedir incondicionalmente aqui: 1º contato frio continua travado
+      // (o motor e o manual usam a MESMA trava), e só a resposta a uma
+      // conversa já aberta de fato passa direto.
+      ignorePaceLock: true,
     },
   };
 
   const verdict = evaluateSendGuard(facts, {
     windowConfig: sendWindowConfigFromEnv(),
     duplicateWindowMs: duplicateWindowMsFromEnv(),
+    coldFollowupCooldownMs,
   });
 
   if (!verdict.allow) {
-    throwForBlockedVerdict(verdict, { optOutCreatedAt: optOutRow?.createdAt ?? null, timezone: APP_TIMEZONE() });
+    throwForBlockedVerdict(verdict, { optOutCreatedAt: optOutRow?.createdAt ?? null, timezone: APP_TIMEZONE(), coldFollowupCooldownMs });
   }
+
+  // 🆕 Fase 4.C — se o guard de fato honrou `ignorePaceLock` (warning
+  // `PACE_LOCK_BYPASSED_FOR_REPLY`), o avanço da cadência usa o modo
+  // `'floor'` (só o piso do jitter, sem tocar a micro-pausa — ARQUITETURA
+  // §4.9.10, tabela "as duas cadências"). Fora desse caso (envio normal,
+  // seja 1º contato frio ou resposta que não bateu no gate), é `'full'`.
+  const paceMode: PaceAdvanceMode = verdict.warnings.some((w) => w.code === 'PACE_LOCK_BYPASSED_FOR_REPLY') ? 'floor' : 'full';
+  const jitterRangeSeconds = jitterRangeSecondsFromEnv();
+  const microPauseConfig = microPauseConfigFromEnv();
 
   // ── Write-ahead (ARQUITETURA §4.9.5, transação 1) — a ÚNICA escrita entre o guard e a rede. ──
   // `timeout`/`maxWait` explícitos (achado do Órion, revisão de 2026-09-22):
@@ -599,20 +740,48 @@ export async function sendLeadMessage(
     providerMessageId = sendResult.providerMessageId;
     sentAt = new Date();
   } catch (err) {
+    // 🆕 Fase 4.C — a cadência avança para falha CONFIRMADA e para resultado
+    // INCERTO igual (ARQUITETURA §6.8.7: "depois de TODO envio, sucesso,
+    // falha ou incerto") — só NÃO avança quando `sendText` nem chegou a ser
+    // chamado (ex.: `SEND_WINDOW_EXPIRED` acima, antes deste `try`).
+    const paceResult = advanceSendPace({
+      now: new Date(),
+      sendsSinceMicroPause: instance.sendsSinceMicroPause,
+      mode: paceMode,
+      jitterRangeSeconds,
+      microPause: microPauseConfig,
+    });
     await handleSendFailure(err, {
       messageId: reservedMessage.id,
       instanceId: instance.id,
       instanceName: instance.name,
       instanceDate: today,
       previousStatus: instance.status,
+      paceUpdate: paceFieldsForUpdate(paceMode, paceResult),
     });
     throw mapSendErrorToApiError(err);
   }
 
+  // 🆕 Fase 4.C — cadência avança também no SUCESSO, com `sentAt` (o instante
+  // real do envio) em vez de `new Date()` de novo.
+  const paceResult = advanceSendPace({
+    now: sentAt,
+    sendsSinceMicroPause: instance.sendsSinceMicroPause,
+    mode: paceMode,
+    jitterRangeSeconds,
+    microPause: microPauseConfig,
+  });
+
   // ── Transação 2a (sucesso, ARQUITETURA §4.9.5) ──
   await prisma.$transaction(async (tx) => {
     await tx.message.update({ where: { id: reservedMessage.id }, data: { status: 'sent', providerMessageId, sentAt } });
-    await tx.whatsAppInstance.update({ where: { id: instance.id }, data: { consecutiveFailures: 0 } });
+    await tx.whatsAppInstance.update({
+      where: { id: instance.id },
+      // `consecutiveUncertain: 0` — zerado por SUCESSO confirmado (comentário
+      // do campo no schema); `consecutiveFailures: 0` já existia antes desta
+      // rodada.
+      data: { consecutiveFailures: 0, consecutiveUncertain: 0, ...paceFieldsForUpdate(paceMode, paceResult) },
+    });
     await advanceLeadToContacted(tx, lead.id, lead.status);
     await tx.leadActivity.create({
       data: {
@@ -631,7 +800,18 @@ export async function sendLeadMessage(
     });
   });
 
-  logger.info('mensagem enviada', { leadId: lead.id, instanceId: instance.id, messageId: reservedMessage.id, isColdFirstContact });
+  // Observabilidade mínima da cadência (ARQUITETURA §6.8.8) — nunca dado
+  // sensível, só o que explica um gap grande na timeline do número.
+  logger.info('mensagem enviada', {
+    leadId: lead.id,
+    instanceId: instance.id,
+    messageId: reservedMessage.id,
+    isColdFirstContact,
+    paceMode,
+    jitterMs: paceResult.jitterMs,
+    microPauseTriggered: paceResult.microPauseTriggered,
+    nextSendAllowedAt: paceResult.nextSendAllowedAt.toISOString(),
+  });
 
   const dailyLimitAfter = candidate.dailyLimit;
   const sentTodayAfter = candidate.sentToday + 1;
@@ -687,7 +867,7 @@ async function advanceLeadToContacted(tx: Prisma.TransactionClient, leadId: stri
 
 function throwForBlockedVerdict(
   verdict: Extract<SendGuardVerdict, { allow: false }>,
-  ctx: { optOutCreatedAt: Date | null; timezone: string },
+  ctx: { optOutCreatedAt: Date | null; timezone: string; coldFollowupCooldownMs: number },
 ): never {
   const { reason, message, meta } = verdict;
 
@@ -700,12 +880,36 @@ function throwForBlockedVerdict(
   if ((reason === 'QUIET_HOURS' || reason === 'OUTSIDE_BUSINESS_WINDOW') && meta?.nextWindowOpensAt) {
     conflict(message, [{ path: 'nextWindowOpensAt', message: String(meta.nextWindowOpensAt) }], reason);
   }
+  // 🆕 Fase 4.C — requisito de produto do dono: quem bate no gate precisa
+  // saber QUANDO pode enviar de novo, não só que está bloqueado. O guard já
+  // devolve `nextSendAllowedAt` em `meta` (ISO) — só repassamos para
+  // `details[]`, mesma convenção "path = nome do campo, message = valor ISO"
+  // que `nextWindowOpensAt`/`resetsAt` já usam acima (ver `common.ts`).
+  if (reason === 'SEND_PACE_LOCKED' && meta?.nextSendAllowedAt) {
+    conflict(message, [{ path: 'nextSendAllowedAt', message: String(meta.nextSendAllowedAt) }], reason);
+  }
+  // 🆕 Fase 4.C — mesmo requisito para o cooldown de 2º contato frio. O guard
+  // só devolve `lastOutboundAt` em `meta` (não computa quando o cooldown
+  // expira — não sabe `coldFollowupCooldownMs`, que é lido da env aqui, na
+  // camada de serviço); por isso quem soma é este arquivo, não `@inno/core`.
+  if (reason === 'LEAD_CONTACT_COOLDOWN' && meta?.lastOutboundAt) {
+    const resetsAt = new Date(new Date(String(meta.lastOutboundAt)).getTime() + ctx.coldFollowupCooldownMs);
+    conflict(message, [{ path: 'resetsAt', message: resetsAt.toISOString() }], reason);
+  }
   conflict(message, undefined, reason);
 }
 
 async function handleSendFailure(
   err: unknown,
-  ctx: { messageId: string; instanceId: string; instanceName: string | null; instanceDate: Date; previousStatus: string },
+  ctx: {
+    messageId: string;
+    instanceId: string;
+    instanceName: string | null;
+    instanceDate: Date;
+    previousStatus: string;
+    /** 🆕 Fase 4.C */
+    paceUpdate: Pick<Prisma.WhatsAppInstanceUpdateInput, 'nextSendAllowedAt' | 'sendsSinceMicroPause'>;
+  },
 ): Promise<void> {
   const messagingError = err instanceof MessagingError ? err : null;
   const effect = messagingError ? EVOLUTION_ERROR_EFFECT[messagingError.code] : EVOLUTION_ERROR_EFFECT.UNKNOWN;
@@ -729,7 +933,9 @@ async function handleSendFailure(
   }
 
   if (effect.outcome === 'uncertain') {
-    await prisma.$transaction((tx) => recordSendUncertain(tx, { messageId: ctx.messageId, effect, errorMessage }));
+    await prisma.$transaction((tx) =>
+      recordSendUncertain(tx, { messageId: ctx.messageId, instanceId: ctx.instanceId, effect, errorMessage, paceUpdate: ctx.paceUpdate }),
+    );
     return;
   }
   await prisma.$transaction((tx) =>
@@ -741,6 +947,7 @@ async function handleSendFailure(
       previousStatus: ctx.previousStatus,
       effect,
       errorMessage,
+      paceUpdate: ctx.paceUpdate,
     }),
   );
 }

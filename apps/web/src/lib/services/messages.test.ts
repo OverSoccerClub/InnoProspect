@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessagingError } from '@inno/messaging';
+import { DEFAULT_COLD_FOLLOWUP_COOLDOWN_MS } from '@inno/core';
 import type { SendLeadMessageBody } from '@inno/contracts';
 
 // Terça-feira, 10:00 em America/Sao_Paulo (13:00 UTC) — dentro do piso duro
@@ -40,6 +41,10 @@ type FakeInstance = {
   consecutiveFailures: number;
   lastErrorAt: Date | null;
   lastErrorMessage: string | null;
+  // 🆕 Fase 4.C (ARQUITETURA §4.9.10/§6.8.1) — cadência.
+  nextSendAllowedAt: Date | null;
+  sendsSinceMicroPause: number;
+  consecutiveUncertain: number;
 };
 
 type FakeStat = { instanceId: string; date: Date; sentCount: number; failedCount: number };
@@ -260,6 +265,38 @@ function instance(overrides: Partial<FakeInstance> & Pick<FakeInstance, 'id'>): 
     consecutiveFailures: 0,
     lastErrorAt: null,
     lastErrorMessage: null,
+    // 🆕 Fase 4.C — `null`/`0` = "nunca enviou" / "sem gate ainda" (estado de
+    // toda instância que já existe hoje em produção, Cronos/migração
+    // aditiva) — nunca deve bloquear por default.
+    nextSendAllowedAt: null,
+    sendsSinceMicroPause: 0,
+    consecutiveUncertain: 0,
+    ...overrides,
+  };
+}
+
+function inboundMessage(overrides: Partial<FakeMessage> & Pick<FakeMessage, 'id' | 'leadId' | 'instanceId' | 'createdAt'>): FakeMessage {
+  return {
+    body: 'oi, quero saber mais',
+    status: 'delivered',
+    providerMessageId: null,
+    errorCode: null,
+    errorMessage: null,
+    sentAt: null,
+    direction: 'inbound',
+    ...overrides,
+  };
+}
+
+function outboundMessage(overrides: Partial<FakeMessage> & Pick<FakeMessage, 'id' | 'leadId' | 'instanceId' | 'createdAt'>): FakeMessage {
+  return {
+    body: 'oi',
+    status: 'sent',
+    providerMessageId: 'prov-x',
+    errorCode: null,
+    errorMessage: null,
+    sentAt: overrides.createdAt,
+    direction: 'outbound',
     ...overrides,
   };
 }
@@ -285,6 +322,13 @@ beforeEach(() => {
   delete process.env.DISPATCH_WINDOW_END;
   delete process.env.MANUAL_SEND_DUPLICATE_WINDOW_S;
   delete process.env.MANUAL_SEND_RATE_PER_MIN;
+  delete process.env.COLD_FOLLOWUP_COOLDOWN_H;
+  delete process.env.DISPATCH_JITTER_MIN_S;
+  delete process.env.DISPATCH_JITTER_MAX_S;
+  delete process.env.DISPATCH_MICRO_PAUSE_EVERY_MIN;
+  delete process.env.DISPATCH_MICRO_PAUSE_EVERY_MAX;
+  delete process.env.DISPATCH_MICRO_PAUSE_MIN_S;
+  delete process.env.DISPATCH_MICRO_PAUSE_MAX_S;
   vi.mocked(checkRateLimit).mockReturnValue({ allowed: true });
   sendTextMock.mockReset();
 });
@@ -492,9 +536,9 @@ describe('sendLeadMessage — falha da Evolution compensa os contadores', () => 
 });
 
 describe('sendLeadMessage — resultado INCERTO no timeout/erro transitório do envio (achado do Órion, 2026-09-22)', () => {
-  it('timeout no envio: devolve 502/EVOLUTION_SEND_UNCERTAIN, NÃO chama sendText uma 2ª vez, NÃO restaura a cota (pode ter saído) e NÃO pune a instância', async () => {
+  it('timeout no envio: devolve 502/EVOLUTION_SEND_UNCERTAIN, NÃO chama sendText uma 2ª vez, NÃO restaura a cota (pode ter saído) e NÃO pune a instância — MAS avança a cadência (Fase 4.C, §6.8.7: "depois de TODO envio")', async () => {
     store.leads.push(lead({ id: 'lead-1' }));
-    store.instances.push(instance({ id: 'inst-1', consecutiveFailures: 0 }));
+    store.instances.push(instance({ id: 'inst-1', consecutiveFailures: 0, sendsSinceMicroPause: 5, consecutiveUncertain: 1 }));
     sendTextMock.mockRejectedValue(new MessagingError('TIMEOUT', 'Evolution API não respondeu em 15000ms'));
 
     await expect(sendLeadMessage('lead-1', body(), ACTOR)).rejects.toMatchObject({ code: 'UPSTREAM_ERROR', reason: 'EVOLUTION_SEND_UNCERTAIN' });
@@ -507,9 +551,21 @@ describe('sendLeadMessage — resultado INCERTO no timeout/erro transitório do 
     expect(message?.status).toBe('failed');
     expect(message?.errorCode).toBe('EVOLUTION_SEND_UNCERTAIN');
     expect(message?.errorMessage).toMatch(/incerto/i);
-    expect(store.instances.find((i) => i.id === 'inst-1')?.consecutiveFailures).toBe(0);
-    expect(store.instances.find((i) => i.id === 'inst-1')?.status).toBe('connected');
+    const updatedInstance = store.instances.find((i) => i.id === 'inst-1');
+    expect(updatedInstance?.consecutiveFailures).toBe(0);
+    expect(updatedInstance?.status).toBe('connected');
     expect(store.leadActivities.some((a) => a.type === 'message_uncertain')).toBe(true);
+    // 🆕 Fase 4.C — resultado incerto É o caso mais importante para avançar o
+    // gate: a mensagem pode ter saído, então o ritmo avança como se tivesse.
+    expect(updatedInstance?.nextSendAllowedAt).not.toBeNull();
+    expect(updatedInstance!.nextSendAllowedAt!.getTime()).toBeGreaterThan(NOW.getTime());
+    expect(updatedInstance?.sendsSinceMicroPause).toBe(6); // 5 + 1, modo 'full' (1º contato frio)
+    expect(updatedInstance?.consecutiveUncertain).toBe(2); // sobe em incerto (distinto de consecutiveFailures)
+    // Incremento ATÔMICO — a chamada ao Prisma usa `{ increment: 1 }`, nunca
+    // o valor somado em JavaScript (Cronos: "nunca read-modify-write em JS").
+    expect(prismaMock.whatsAppInstance.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ sendsSinceMicroPause: { increment: 1 }, consecutiveUncertain: { increment: 1 } }) }),
+    );
   });
 
   it('TRANSIENT_ERROR no envio (5xx/rede) tem o MESMO tratamento incerto que TIMEOUT', async () => {
@@ -522,6 +578,119 @@ describe('sendLeadMessage — resultado INCERTO no timeout/erro transitório do 
     const stat = store.stats.find((s) => s.instanceId === 'inst-1');
     expect(stat?.sentCount).toBe(1);
     expect(store.instances.find((i) => i.id === 'inst-1')?.consecutiveFailures).toBe(0);
+  });
+});
+
+describe('sendLeadMessage — Fase 4.C: cadência ligada no envio unitário (ARQUITETURA §4.9.10/§6.8.7)', () => {
+  it('envio permitido: instância com nextSendAllowedAt NULO (estado de toda instância já existente) continua enviando normalmente', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    store.instances.push(instance({ id: 'inst-1', nextSendAllowedAt: null }));
+    sendTextMock.mockResolvedValue({ providerMessageId: 'evo-msg-1', remoteJid: 'x', rawStatus: null });
+
+    const result = await sendLeadMessage('lead-1', body(), ACTOR);
+
+    expect(result.message.status).toBe('sent');
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('envio travado: 1º contato frio com nextSendAllowedAt no futuro devolve 409/SEND_PACE_LOCKED com o horário de liberação em details[] — NÃO chama sendText', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    const nextSendAllowedAt = new Date(NOW.getTime() + 60_000); // 60s no futuro
+    store.instances.push(instance({ id: 'inst-1', nextSendAllowedAt }));
+
+    await expect(sendLeadMessage('lead-1', body(), ACTOR)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      reason: 'SEND_PACE_LOCKED',
+      details: [{ path: 'nextSendAllowedAt', message: nextSendAllowedAt.toISOString() }],
+    });
+    expect(sendTextMock).not.toHaveBeenCalled();
+  });
+
+  it('resposta a conversa aberta BYPASSA o SEND_PACE_LOCKED (overrides.ignorePaceLock, honrado só porque isColdFirstContact é false) — avisa PACE_LOCK_BYPASSED_FOR_REPLY e avança o gate só pelo PISO do jitter, sem tocar sendsSinceMicroPause', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    store.instances.push(instance({ id: 'inst-1', nextSendAllowedAt: new Date(NOW.getTime() + 60_000), sendsSinceMicroPause: 5 }));
+    store.messages.push(outboundMessage({ id: 'msg-out', leadId: 'lead-1', instanceId: 'inst-1', createdAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) }));
+    store.messages.push(inboundMessage({ id: 'msg-in', leadId: 'lead-1', instanceId: 'inst-1', createdAt: new Date(NOW.getTime() - 60 * 60 * 1000) }));
+    sendTextMock.mockResolvedValue({ providerMessageId: 'evo-msg-2', remoteJid: 'x', rawStatus: null });
+
+    const result = await sendLeadMessage('lead-1', body(), ACTOR);
+
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
+    expect(result.warnings.some((w) => w.code === 'PACE_LOCK_BYPASSED_FOR_REPLY')).toBe(true);
+    const updatedInstance = store.instances.find((i) => i.id === 'inst-1');
+    // Modo 'floor': só o piso do jitter (45s default), determinístico — sem sorteio.
+    expect(updatedInstance?.nextSendAllowedAt?.toISOString()).toBe(new Date(NOW.getTime() + 45_000).toISOString());
+    expect(updatedInstance?.sendsSinceMicroPause).toBe(5); // NÃO tocado (decisão da Fase 4.B) — nem incrementado, nem zerado
+  });
+
+  it('1º contato frio NÃO bypassa mesmo com o serviço sempre pedindo ignorePaceLock — a trava é do NÚMERO e o guard anula o override para contato frio (ARQUITETURA A24)', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    // Sem nenhuma mensagem anterior → isColdFirstContact = true.
+    store.instances.push(instance({ id: 'inst-1', nextSendAllowedAt: new Date(NOW.getTime() + 60_000) }));
+
+    await expect(sendLeadMessage('lead-1', body(), ACTOR)).rejects.toMatchObject({ code: 'CONFLICT', reason: 'SEND_PACE_LOCKED' });
+    expect(sendTextMock).not.toHaveBeenCalled();
+  });
+
+  it('G9b — 2º contato frio dentro do cooldown (lead nunca respondeu) devolve 409/LEAD_CONTACT_COOLDOWN com "resetsAt" calculado a partir de lastOutboundAt + COLD_FOLLOWUP_COOLDOWN_H', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    store.instances.push(instance({ id: 'inst-1' }));
+    const lastOutboundAt = new Date(NOW.getTime() - 2 * 60 * 60 * 1000); // 2h atrás — fora da janela de duplo-clique (60s), dentro do cooldown de 24h
+    store.messages.push(outboundMessage({ id: 'msg-out', leadId: 'lead-1', instanceId: 'inst-1', createdAt: lastOutboundAt }));
+    // Nenhuma mensagem inbound — lead nunca respondeu.
+
+    const expectedResetsAt = new Date(lastOutboundAt.getTime() + DEFAULT_COLD_FOLLOWUP_COOLDOWN_MS);
+
+    await expect(sendLeadMessage('lead-1', body(), ACTOR)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      reason: 'LEAD_CONTACT_COOLDOWN',
+      details: [{ path: 'resetsAt', message: expectedResetsAt.toISOString() }],
+    });
+    expect(sendTextMock).not.toHaveBeenCalled();
+  });
+
+  it('G9b respeita COLD_FOLLOWUP_COOLDOWN_H da env — cooldown mais curto libera mais rápido', async () => {
+    process.env.COLD_FOLLOWUP_COOLDOWN_H = '1'; // 1h, não 24h
+    store.leads.push(lead({ id: 'lead-1' }));
+    store.instances.push(instance({ id: 'inst-1' }));
+    const lastOutboundAt = new Date(NOW.getTime() - 2 * 60 * 60 * 1000); // 2h atrás — já passou do cooldown de 1h
+    store.messages.push(outboundMessage({ id: 'msg-out', leadId: 'lead-1', instanceId: 'inst-1', createdAt: lastOutboundAt }));
+    sendTextMock.mockResolvedValue({ providerMessageId: 'evo-msg-3', remoteJid: 'x', rawStatus: null });
+
+    const result = await sendLeadMessage('lead-1', body(), ACTOR);
+
+    expect(result.message.status).toBe('sent'); // não bloqueou — cooldown de 1h já expirou
+  });
+
+  it('sucesso: avança nextSendAllowedAt e incrementa sendsSinceMicroPause de forma ATÔMICA ({ increment: 1 }, nunca lido-e-somado em JS), e zera consecutiveUncertain', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    store.instances.push(instance({ id: 'inst-1', sendsSinceMicroPause: 5, consecutiveUncertain: 3 }));
+    sendTextMock.mockResolvedValue({ providerMessageId: 'evo-msg-4', remoteJid: 'x', rawStatus: null });
+
+    await sendLeadMessage('lead-1', body(), ACTOR);
+
+    const updatedInstance = store.instances.find((i) => i.id === 'inst-1');
+    expect(updatedInstance?.nextSendAllowedAt).not.toBeNull();
+    expect(updatedInstance!.nextSendAllowedAt!.getTime()).toBeGreaterThan(NOW.getTime());
+    expect(updatedInstance?.sendsSinceMicroPause).toBe(6); // 5 + 1 — abaixo de everyMin(18), nunca dispara micro-pausa
+    expect(updatedInstance?.consecutiveUncertain).toBe(0); // zerado por SUCESSO confirmado
+    expect(prismaMock.whatsAppInstance.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ sendsSinceMicroPause: { increment: 1 } }) }),
+    );
+  });
+
+  it('micro-pausa: sendsSinceMicroPause já em everyMax (25) SEMPRE dispara (determinístico) — reseta para 0 (SET incondicional) e o gate recebe um jitter de 5–12min, não de 45–180s', async () => {
+    store.leads.push(lead({ id: 'lead-1' }));
+    store.instances.push(instance({ id: 'inst-1', sendsSinceMicroPause: 24 })); // 24 + 1 = 25 = everyMax
+    sendTextMock.mockResolvedValue({ providerMessageId: 'evo-msg-5', remoteJid: 'x', rawStatus: null });
+
+    await sendLeadMessage('lead-1', body(), ACTOR);
+
+    const updatedInstance = store.instances.find((i) => i.id === 'inst-1');
+    expect(updatedInstance?.sendsSinceMicroPause).toBe(0); // zerado, não incrementado
+    const deltaMs = updatedInstance!.nextSendAllowedAt!.getTime() - NOW.getTime();
+    expect(deltaMs).toBeGreaterThanOrEqual(5 * 60 * 1000);
+    expect(deltaMs).toBeLessThanOrEqual(12 * 60 * 1000);
   });
 });
 
