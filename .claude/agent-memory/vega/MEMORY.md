@@ -16,3 +16,4 @@
 - [Bug: seletores do card da lista do Maps quebrados/errados (endereço/categoria), 2026-09-22](bug_maps_card_selectors_drift_2026_09.md) — evidência ao vivo (7 cards reais), telefone sai da lista sem abrir ficha, fixtures reescritas com HTML real.
 - [Convenção: alertas webhook do web (alerts.ts, Onda 3)](convention_web_alerts.md) — instância caindo/degradada, campanha parada, Evolution API com erro; dedupe só em evolution_api_error, nunca repassa mensagem crua.
 - [Convenção: sanidade A5 (enriquecimento) + remoção do RawCapture](convention_sanity_a5_enrichment.md) — pega leads "só com o nome", migrações offline, gotcha de lock do Prisma no Windows.
+- [Convenção: cadência do disparo — jitter.ts + G9b/G9c no send-guard (Fase 4.B)](convention_cadencia_jitter_pace_lock.md) — drawLogNormalJitterMs/shouldTriggerMicroPause/advanceSendPace, facts opcionais p/ não tocar apps/web.

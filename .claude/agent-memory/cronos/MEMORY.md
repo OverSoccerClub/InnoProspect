@@ -1,3 +1,4 @@
 - [Convenções do schema InnoProspect](schema-conventions.md) — cuid2, chaves naturais, enum parity com packages/contracts, migração via diff sem Postgres local, ordem de coluna em índice composto.
 - [Cascade + contadores históricos (LGPD)](lgpd-cascade-vs-historical-counters.md) — padrão pra tabelas filhas de Lead com dado snapshotado: Cascade + contadores agregados no pai, nunca COUNT() puro nem SetNull.
 - [prisma generate EPERM com next dev](prisma-generate-eperm-dev-server.md) — Windows trava o .dll.node do client enquanto o dev server do dono está rodando; não é bug do schema.
+- [Gate nullable + contadores concorrentes](gate-nullable-e-contadores-concorrentes.md) — NULL = sem restrição (nunca bloqueio) num gate DateTime?; incremento sempre atômico em SQL quando web+worker escrevem a mesma coluna.

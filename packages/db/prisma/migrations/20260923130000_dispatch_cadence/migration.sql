@@ -1,0 +1,132 @@
+-- InnoProspect — Fase 4.A: estado de cadência do disparo (ARQUITETURA.md §8
+-- item 4.A, §4.9.10, §6.8.1, §6.8.7, §4.5.8). Entra ANTES do motor de
+-- campanhas (§6.8, `dispatch-tick.job`, ainda não implementado) — o freio
+-- estreia hoje no envio manual (uma ficha de lead por vez, sem freio nenhum
+-- neste momento: dá para clicar 20x em 1 minuto), e o motor herda a
+-- cadência já exercitada em produção, não uma coluna nova sem histórico.
+--
+-- Gerada com `prisma migrate diff --from-schema-datamodel <snapshot do
+-- schema ANTES desta mudança> --to-schema-datamodel prisma/schema.prisma
+-- --script` — sem Postgres disponível nesta máquina de desenvolvimento (ver
+-- memória `innoprospect-bloqueio-docker`). ⚠️ Esta migração NÃO foi
+-- aplicada contra um banco vivo. Ela roda no boot do container via
+-- `prisma migrate deploy` (entrypoint fail-fast) — conferir o resultado no
+-- primeiro boot em produção, não só aqui. É o primeiro `migrate deploy`
+-- real quem prova, de fato: (a) que o SQL abaixo bate 1:1 com o que o
+-- Prisma teria gerado a partir do datamodel atual — eu escrevi/revisei à
+-- mão porque não há shadow database para `migrate dev` confirmar; (b) que
+-- as duas tabelas alvo continuam do tamanho que a Fase 3/4 deixou (dezenas
+-- de linhas em `whatsapp_instances`, zero em `campaign_instances` — ver
+-- abaixo) — se algum backfill de dado tiver rodado nesta janela fora do meu
+-- controle, os defaults abaixo continuam corretos mesmo assim, mas quero
+-- que o boot seja o primeiro fato, não a suposição.
+--
+-- ⚠️ 100% ADITIVA: só `ALTER TABLE ... ADD COLUMN`, todas com DEFAULT ou
+-- nullable. Nenhuma linha existente é alterada, nenhum dado é lido, nenhuma
+-- coluna/tabela existente é tocada além de acrescentar colunas novas.
+--
+-- ── POR QUE NÃO PRECISA DE ROLLBACK/EXPAND-CONTRACT EM ETAPAS ──────────────
+-- `ADD COLUMN` com DEFAULT constante (ou nullable sem default) em Postgres
+-- ≥11 é operação de METADADO: não reescreve a tabela, não copia linha por
+-- linha, e o lock (ACCESS EXCLUSIVE) dura o tempo de atualizar o catálogo —
+-- milissegundos, mesmo em uma tabela com milhões de linhas. Isto só deixa
+-- de ser verdade se o DEFAULT for uma expressão VOLÁTIL (ex.: `now()`,
+-- `gen_random_uuid()`), que force reescrita física; não é o caso aqui (0
+-- para os Int, NULL para o DateTime). Por isso este arquivo é uma migração
+-- única, direta, SEM o padrão expand/contract (que existe para trocar o
+-- SIGNIFICADO de uma coluna já povoada sem lock longo, não para criar uma
+-- coluna nova) — expand/contract aqui seria complexidade sem propósito.
+--
+-- ── SE ESTAS TABELAS FOSSEM GRANDES (nota para quando não forem mais) ──────
+-- `whatsapp_instances` hoje tem dezenas de linhas (números de WhatsApp de
+-- 1 dono — ver comentário no schema.prisma) e `campaign_instances` está
+-- vazia (Fase 4 nunca rodou o motor). Nenhuma das duas preocupações de
+-- volume abaixo se aplica ainda, mas registrando para quando/se a segunda
+-- deixar de estar vazia (ex.: se o motor rodar por anos com muitas
+-- campanhas × muitas instâncias):
+--   1. `campaign_instances` é 1 linha por (campanha, instância) — mesmo com
+--      centenas de campanhas e dezenas de instâncias, a tabela nunca sai da
+--      ordem de milhares de linhas; ADD COLUMN nela nunca vai preocupar.
+--   2. `whatsapp_instances` por natureza do produto (1 dono, números físicos
+--      de WhatsApp) não tem caminho realista para "grande" — não é uma
+--      tabela transacional que cresce com o uso, é config de poucos
+--      recursos físicos. Se isso mudar (ex.: multi-tenant, cada cliente com
+--      seu pool de números), revisitar TAMBÉM o comentário de "sem índice
+--      extra" no schema.prisma antes de assumir que continua válido.
+--
+-- ── ROLLBACK ────────────────────────────────────────────────────────────
+-- Reversível: `ALTER TABLE ... DROP COLUMN` para as 5 colunas, na ordem
+-- inversa desta migração. Seguro em qualquer volume (DROP COLUMN também é
+-- operação de metadado — Postgres marca a coluna como removida no catálogo
+-- sem reescrever linhas; o espaço físico é recuperado depois por VACUUM,
+-- não durante o DROP). Perda de dado no rollback: qualquer gate de cadência
+-- em andamento (`nextSendAllowedAt` futuro, contadores > 0) se perde — se
+-- isto já estiver em produção com o motor rodando, rollback só é seguro com
+-- a fila de disparo pausada (§4.10) e nenhuma campanha `running`, para não
+-- reintroduzir rajada sem freio no momento exato da reversão.
+--
+--   ALTER TABLE "campaign_instances"  DROP COLUMN "failedCount";
+--   ALTER TABLE "campaign_instances"  DROP COLUMN "sentCount";
+--   ALTER TABLE "whatsapp_instances"  DROP COLUMN "consecutiveUncertain";
+--   ALTER TABLE "whatsapp_instances"  DROP COLUMN "sendsSinceMicroPause";
+--   ALTER TABLE "whatsapp_instances"  DROP COLUMN "nextSendAllowedAt";
+--
+-- ── DEFAULT DAS INSTÂNCIAS JÁ EXISTENTES EM PRODUÇÃO — decisão explícita ──
+-- `nextSendAllowedAt` nasce NULL para toda linha já existente (não há
+-- DEFAULT, e não há backfill: ADD COLUMN sem DEFAULT em coluna nullable só
+-- preenche NULL, não lê nem escreve as linhas atuais). NULL SIGNIFICA "sem
+-- gate ainda — pode enviar agora". Isto é o único estado coerente com "o
+-- envio manual continua funcionando hoje sem quebrar": as instâncias que já
+-- existem estavam enviando SEM nenhum freio até este exato instante; se eu
+-- inventasse um valor no passado (ex.: `now() - interval '1 hour'`) para
+-- simular "já pode enviar", o efeito seria IDÊNTICO a NULL na prática (as
+-- duas leituras — `IS NULL` e `<= now()` — liberam o envio), então NULL é a
+-- escolha mais simples que já expressa a mesma coisa sem inventar um
+-- instante arbitrário no passado. `sendsSinceMicroPause` e
+-- `consecutiveUncertain` nascem 0 (DEFAULT 0) — zerar "início do
+-- aquecimento da cadência" é o único estado que faz sentido para uma
+-- instância que nunca teve estes contadores.
+--
+-- ⚠️ AVISO PARA QUEM ESCREVE A LEITURA DESTE GATE (Vega, packages/core):
+-- NUNCA fazer `WHERE "nextSendAllowedAt" <= now()` sozinho — em SQL,
+-- `NULL <= now()` avalia para NULL (falso), então isso EXCLUIRIA da rotação
+-- toda instância que nunca enviou, inclusive as que já existem hoje. A
+-- consulta correta é `WHERE "nextSendAllowedAt" IS NULL OR
+-- "nextSendAllowedAt" <= now()`. Mesmo aviso está no comentário do campo em
+-- schema.prisma.
+--
+-- ── CONCORRÊNCIA — leitura obrigatória antes de escrever a política ───────
+-- `nextSendAllowedAt`, `sendsSinceMicroPause` e `consecutiveUncertain` são
+-- escritos por PROCESSOS DIFERENTES na MESMA linha: o envio manual
+-- (apps/web, route handler) e o `dispatch-tick.job` (apps/worker) escrevem
+-- `nextSendAllowedAt` a cada envio bem-sucedido de qualquer um dos dois
+-- caminhos (§4.9.10 — "cadência é propriedade do número, não do
+-- chamador"); o `warmup-roll.job` (§6.9, diário) zera
+-- `sendsSinceMicroPause`/`consecutiveUncertain` por cima do que o
+-- dispatch-tick estiver incrementando. Isto é concorrência real entre
+-- processos, não uma hipótese distante.
+--
+-- REGRA: incremento/decremento destas 3 colunas TEM que ser expresso como
+-- `UPDATE ... SET col = col + 1` (SQL cru) ou `{ increment: 1 }` /
+-- `{ decrement: 1 }` (Prisma) — NUNCA como leitura em uma query seguida de
+-- escrita do valor calculado em JavaScript (`SELECT` → soma na aplicação →
+-- `UPDATE` com o número literal). A segunda forma tem uma janela entre
+-- leitura e escrita onde a OUTRA transação pode escrever por cima — a conta
+-- perde 1 incremento sem erro nenhum visível (lost update), e isto é
+-- exatamente o tipo de bug que só aparece em produção sob carga, nunca em
+-- teste local sequencial. `UPDATE col = col + 1` não tem essa janela: o
+-- Postgres resolve o valor "atual" e aplica a soma como parte da mesma
+-- operação atômica, sob o lock de linha que a primeira transação a chegar
+-- adquire — a segunda espera e opera sobre o valor JÁ incrementado, nunca
+-- sobre um valor obsoleto. Reset para 0 (sucesso zera consecutiveUncertain;
+-- warmup-roll zera os dois) pode ser um `SET col = 0` direto, sem
+-- depender do valor anterior.
+
+-- AlterTable
+ALTER TABLE "whatsapp_instances" ADD COLUMN "nextSendAllowedAt" TIMESTAMP(3);
+ALTER TABLE "whatsapp_instances" ADD COLUMN "sendsSinceMicroPause" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "whatsapp_instances" ADD COLUMN "consecutiveUncertain" INTEGER NOT NULL DEFAULT 0;
+
+-- AlterTable
+ALTER TABLE "campaign_instances" ADD COLUMN "sentCount" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "campaign_instances" ADD COLUMN "failedCount" INTEGER NOT NULL DEFAULT 0;

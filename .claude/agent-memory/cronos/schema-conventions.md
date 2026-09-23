@@ -47,6 +47,18 @@ seguintes (Fase 2/3/4, `20260801130000_add_messaging_and_campaigns`):
   `search_tasks` já povoadas) — `CREATE INDEX` sozinho é sempre aditivo por
   natureza (não apaga nem transforma dado), o cuidado nesse caso não é
   aditividade e sim lock de escrita, ver [[migracao-nao-transacional-postgres]].
+- **`ADD COLUMN` com DEFAULT constante (ou nullable sem default) NÃO precisa
+  de expand/contract nem de aviso de lock longo**, mesmo em tabela grande —
+  desde o Postgres 11 é operação de METADADO (atualiza o catálogo, não
+  reescreve linha por linha), lock `ACCESS EXCLUSIVE` de milissegundos
+  independente do volume. Isso só deixa de valer se o DEFAULT for uma
+  expressão VOLÁTIL (`now()`, `gen_random_uuid()`, etc.), que força
+  reescrita física — nenhum dos meus defaults até agora (`0`, `false`,
+  `NULL`) cai nesse caso. Expand/contract é para trocar o SIGNIFICADO de uma
+  coluna JÁ POVOADA sem lock longo (backfill em etapas); não é o padrão
+  certo para uma coluna nova que nasce vazia — usá-lo aí é complexidade sem
+  propósito. Ver `20260923130000_dispatch_cadence` (5 colunas novas em
+  `whatsapp_instances`/`campaign_instances`, migração única, sem etapas).
 - **Índice composto: coluna de IGUALDADE antes da coluna de FAIXA/ordenação**
   no `WHERE`. Ex.: `WHERE status = 'completed' AND finishedAt >= X` pede
   `(status, finishedAt)`, nunca `(finishedAt, status)` — o Postgres usa a(s)

@@ -187,6 +187,114 @@ describe('evaluateSendGuard — G9 anti-duplo-clique', () => {
   });
 });
 
+describe('evaluateSendGuard — compat retroativa dos facts novos da v1.2 (G9b/G9c)', () => {
+  it('sem lastInboundAt/nextSendAllowedAt/ignorePaceLock (undefined), comportamento é idêntico ao de antes desta rodada', () => {
+    // baseFacts() não seta nenhum dos 3 campos novos — simula o chamador atual
+    // (apps/web/src/lib/services/messages.ts), que não foi tocado nesta rodada.
+    const verdict = evaluateSendGuard(baseFacts({ lastOutboundAt: new Date(NOW.getTime() - 61_000) }));
+    expect(verdict.allow).toBe(true);
+  });
+});
+
+describe('evaluateSendGuard — G9b cooldown de contato frio sem resposta (LEAD_CONTACT_COOLDOWN)', () => {
+  it('bloqueia quando lastInboundAt é null (nunca respondeu) e o outbound anterior foi há menos de 24h', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({ lastOutboundAt: new Date(NOW.getTime() - 60 * 60 * 1000), lastInboundAt: null }),
+    );
+    expect(verdict.allow).toBe(false);
+    if (!verdict.allow) expect(verdict.reason).toBe('LEAD_CONTACT_COOLDOWN');
+  });
+
+  it('permite quando lastInboundAt é null mas o outbound anterior já passou de 24h', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({ lastOutboundAt: new Date(NOW.getTime() - 25 * 60 * 60 * 1000), lastInboundAt: null }),
+    );
+    expect(verdict.allow).toBe(true);
+  });
+
+  it('NÃO bloqueia quando o lead já respondeu (lastInboundAt é uma Date), mesmo com outbound recente', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({ lastOutboundAt: new Date(NOW.getTime() - 60 * 60 * 1000), lastInboundAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) }),
+    );
+    expect(verdict.allow).toBe(true);
+  });
+
+  it('cooldown é configurável via options.coldFollowupCooldownMs', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({ lastOutboundAt: new Date(NOW.getTime() - 5_000), lastInboundAt: null }),
+      { coldFollowupCooldownMs: 1_000, duplicateWindowMs: 1 },
+    );
+    expect(verdict.allow).toBe(true);
+  });
+});
+
+describe('evaluateSendGuard — G9c trava de ritmo do número (SEND_PACE_LOCKED)', () => {
+  it('bloqueia quando now < nextSendAllowedAt (instante ANTERIOR ao permitido)', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({ instance: { status: 'connected', isDegraded: false, warmupDay: 22, dailyLimitOverride: null, nextSendAllowedAt: new Date(NOW.getTime() + 1) } }),
+    );
+    expect(verdict.allow).toBe(false);
+    if (!verdict.allow) expect(verdict.reason).toBe('SEND_PACE_LOCKED');
+  });
+
+  it('permite quando now === nextSendAllowedAt (instante EXATAMENTE igual — o gate já libera)', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({ instance: { status: 'connected', isDegraded: false, warmupDay: 22, dailyLimitOverride: null, nextSendAllowedAt: NOW } }),
+    );
+    expect(verdict.allow).toBe(true);
+  });
+
+  it('permite quando now > nextSendAllowedAt (instante POSTERIOR ao permitido)', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({ instance: { status: 'connected', isDegraded: false, warmupDay: 22, dailyLimitOverride: null, nextSendAllowedAt: new Date(NOW.getTime() - 1) } }),
+    );
+    expect(verdict.allow).toBe(true);
+  });
+
+  it('1º contato frio: bloqueia MESMO com ignorePaceLock:true — o guard anula o override sozinho', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({
+        isColdFirstContact: true,
+        text: 'Olá! Aqui é da Innova Prospect. Se não quiser mais receber, responda SAIR.',
+        instance: { status: 'connected', isDegraded: false, warmupDay: 22, dailyLimitOverride: null, nextSendAllowedAt: new Date(NOW.getTime() + 60_000) },
+        overrides: { allowNonMobile: false, confirmOutsideBusinessWindow: false, ignorePaceLock: true },
+      }),
+    );
+    expect(verdict.allow).toBe(false);
+    if (!verdict.allow) expect(verdict.reason).toBe('SEND_PACE_LOCKED');
+  });
+
+  it('resposta em conversa aberta (isColdFirstContact:false) COM ignorePaceLock:true: permite e avisa PACE_LOCK_BYPASSED_FOR_REPLY', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({
+        isColdFirstContact: false,
+        instance: { status: 'connected', isDegraded: false, warmupDay: 22, dailyLimitOverride: null, nextSendAllowedAt: new Date(NOW.getTime() + 60_000) },
+        overrides: { allowNonMobile: false, confirmOutsideBusinessWindow: false, ignorePaceLock: true },
+      }),
+    );
+    expect(verdict.allow).toBe(true);
+    if (verdict.allow) expect(verdict.warnings.map((w) => w.code)).toContain('PACE_LOCK_BYPASSED_FOR_REPLY');
+  });
+
+  it('resposta em conversa aberta SEM ignorePaceLock:true ainda bloqueia — o override tem que ser pedido explicitamente', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({
+        isColdFirstContact: false,
+        instance: { status: 'connected', isDegraded: false, warmupDay: 22, dailyLimitOverride: null, nextSendAllowedAt: new Date(NOW.getTime() + 60_000) },
+      }),
+    );
+    expect(verdict.allow).toBe(false);
+    if (!verdict.allow) expect(verdict.reason).toBe('SEND_PACE_LOCKED');
+  });
+
+  it('nextSendAllowedAt null (coluna existe, gate livre) não bloqueia', () => {
+    const verdict = evaluateSendGuard(
+      baseFacts({ instance: { status: 'connected', isDegraded: false, warmupDay: 22, dailyLimitOverride: null, nextSendAllowedAt: null } }),
+    );
+    expect(verdict.allow).toBe(true);
+  });
+});
+
 describe('evaluateSendGuard — G10 1º contato frio (conteúdo obrigatório, ARQUITETURA §7.4)', () => {
   it('bloqueia MISSING_OPTOUT_NOTICE quando o texto não tem instrução de descadastro', () => {
     const verdict = evaluateSendGuard(baseFacts({ isColdFirstContact: true, text: 'Olá! Sou da Innova Prospect, tudo bem?' }));

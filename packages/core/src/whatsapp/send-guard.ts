@@ -18,6 +18,18 @@
  * demais — é a diferença entre "regra de disciplina" (alguém pode ignorar
  * numa revisão apressada) e "falha de runtime" (quebra sozinha em produção).
  * NÃO trocar por comentário `// não cachear`.
+ *
+ * 🆕 v1.2 (Fase 4.B, ARQUITETURA §4.9.10/§6.8): G9b (`LEAD_CONTACT_COOLDOWN`)
+ * e G9c (`SEND_PACE_LOCKED`) chegam aqui, não em `packages/core/whatsapp/jitter.ts`
+ * nem no chamador — porque cadência é decisão de negócio ("pode enviar
+ * AGORA?"), e este é o único portão que decide isso. `jitter.ts` só calcula
+ * QUANTO empurrar `nextSendAllowedAt` depois de um envio; quem lê esse valor
+ * e decide bloquear é sempre este arquivo. Os três facts novos
+ * (`instance.nextSendAllowedAt`, `lastInboundAt`, `overrides.ignorePaceLock`)
+ * são opcionais de propósito: nenhum chamador existente foi tocado nesta
+ * rodada (a ligação é da Fase 4.C), então `undefined` preserva o
+ * comportamento de hoje byte a byte — só `null`/`Date` explícitos ativam os
+ * gates novos.
  */
 import type { PhoneType, WhatsAppInstanceStatus } from '@inno/contracts';
 import { hasCompanyNameMention, hasOptOutNotice } from '../templates/optout-notice.js';
@@ -53,6 +65,13 @@ export const MAX_DECISION_TO_SEND_MS = 5_000;
 export const DEFAULT_DUPLICATE_SEND_WINDOW_MS = 60_000;
 
 /**
+ * Cooldown padrão de 2º contato frio (ARQUITETURA §4.9.10/§10 `COLD_FOLLOWUP_COOLDOWN_H`) — 24h.
+ * G9 (60s) impede duplo clique; isto impede INSISTIR: 2ª abordagem fria no
+ * mesmo dia para quem nunca respondeu é o padrão que produz denúncia.
+ */
+export const DEFAULT_COLD_FOLLOWUP_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Lançado quando `optOut.checkedAt` é mais velho que `OPT_OUT_MAX_AGE_MS`
  * (ou o valor passado em `options.optOutMaxAgeMs`, só para teste). Sinal de
  * que a checagem de opt-out foi cacheada/reaproveitada — nunca deveria
@@ -82,6 +101,8 @@ export type SendBlockReason =
   | 'INSTANCE_BANNED'
   | 'DAILY_LIMIT_REACHED'
   | 'DUPLICATE_SEND'
+  | 'LEAD_CONTACT_COOLDOWN' // 🆕 v1.2 — G9b (§4.9.10)
+  | 'SEND_PACE_LOCKED' // 🆕 v1.2 — G9c (§4.9.10)
   | 'MISSING_OPTOUT_NOTICE'
   | 'MISSING_COMPANY_NAME'
   | 'OPTED_OUT';
@@ -105,18 +126,48 @@ export type SendGuardFacts = {
     isDegraded: boolean;
     warmupDay: number;
     dailyLimitOverride: number | null;
+    /**
+     * 🆕 v1.2 (ARQUITETURA §4.9.10/§6.8.1) — `WhatsAppInstance.nextSendAllowedAt`,
+     * o gate único de cadência (alimenta G9c). Três estados, de propósito:
+     * - `undefined`: o chamador ainda não foi ligado a este gate (a Fase 4.C liga
+     *   o manual/dispatch-tick a este campo). G9c não avalia — comportamento
+     *   IDÊNTICO ao de antes desta rodada, para não quebrar quem ainda não
+     *   passa este fact (compat retroativa, sem tocar `apps/web` aqui).
+     * - `null`: o chamador já foi ligado, e o gate está livre agora.
+     * - `Date`: a trava está ativa até este instante.
+     */
+    nextSendAllowedAt?: Date | null;
   };
   quota: { sentToday: number };
   /** ⚠️ `checkedAt` precisa ser o instante da consulta feita AGORA — ver `StaleOptOutCheckError`. */
   optOut: { exists: boolean; checkedAt: Date };
   lastOutboundAt: Date | null;
+  /**
+   * 🆕 v1.2 (ARQUITETURA §4.9.10, alimenta G9b) — último inbound deste lead
+   * (qualquer instância). Mesma semântica de três estados de
+   * `instance.nextSendAllowedAt`: `undefined` = chamador não ligado ainda
+   * (G9b não avalia); `null` = lead nunca respondeu; `Date` = respondeu nesta
+   * data. Ver `=== null` estrito no corpo da função — é o que distingue
+   * "não sei" de "sei que não respondeu".
+   */
+  lastInboundAt?: Date | null;
   /** "Não existe nenhuma Message outbound para este lead" (ARQUITETURA §7.4, v1.1). */
   isColdFirstContact: boolean;
   /** Texto FINAL (já renderizado + spintaxado, ou `body` cru) que será enviado. */
   text: string;
   /** `null`/vazio = `APP_COMPANY_NAME` não configurado (dívida D9) — G10 trata isso como "empresa não identificada", nunca como "não sei, deixa passar". */
   companyName: string | null;
-  overrides: { allowNonMobile: boolean; confirmOutsideBusinessWindow: boolean };
+  overrides: {
+    allowNonMobile: boolean;
+    confirmOutsideBusinessWindow: boolean;
+    /**
+     * 🆕 v1.2 (ARQUITETURA §4.9.10) — só tem efeito quando `isColdFirstContact
+     * === false`: o próprio guard anula o override em contato frio (G9c),
+     * para nenhum chamador conseguir liberar o gate para um contato frio nem
+     * "mentindo" a flag. `undefined`/`false` = comportamento de hoje.
+     */
+    ignorePaceLock?: boolean;
+  };
 };
 
 export type SendGuardVerdict =
@@ -130,6 +181,8 @@ export type EvaluateSendGuardOptions = {
   duplicateWindowMs?: number;
   /** Default `OPT_OUT_MAX_AGE_MS` — parametrizado só para teste (simular carimbo velho sem `setTimeout` real). Produção nunca deve passar isto. */
   optOutMaxAgeMs?: number;
+  /** Default `DEFAULT_COLD_FOLLOWUP_COOLDOWN_MS` (24h) — a camada de serviço lê `COLD_FOLLOWUP_COOLDOWN_H`. Alimenta G9b. */
+  coldFollowupCooldownMs?: number;
 };
 
 function blocked(reason: SendBlockReason, message: string, meta?: Record<string, unknown>): SendGuardVerdict {
@@ -143,6 +196,7 @@ export function evaluateSendGuard(facts: SendGuardFacts, options: EvaluateSendGu
   const windowConfig = options.windowConfig ?? DEFAULT_SEND_WINDOW_CONFIG;
   const duplicateWindowMs = options.duplicateWindowMs ?? DEFAULT_DUPLICATE_SEND_WINDOW_MS;
   const optOutMaxAgeMs = options.optOutMaxAgeMs ?? OPT_OUT_MAX_AGE_MS;
+  const coldFollowupCooldownMs = options.coldFollowupCooldownMs ?? DEFAULT_COLD_FOLLOWUP_COOLDOWN_MS;
 
   // Carimbo do opt-out — a PRIMEIRA coisa verificada, antes de qualquer
   // gate de negócio. Não é um "bloqueio" (não tem `reason`): é bug de quem
@@ -212,6 +266,46 @@ export function evaluateSendGuard(facts: SendGuardFacts, options: EvaluateSendGu
         lastOutboundAt: facts.lastOutboundAt.toISOString(),
       });
     }
+  }
+
+  // G9b — cooldown de 2º contato frio (ARQUITETURA §4.9.10, `COLD_FOLLOWUP_COOLDOWN_H`).
+  // Diferente de G9 (60s, duplo-clique): a janela aqui é de HORAS e a condição
+  // extra é "o lead nunca respondeu" — insistir com quem nunca respondeu no
+  // mesmo dia é o padrão que produz denúncia, e denúncia é o que derruba o
+  // número. `=== null` estrito (não `!facts.lastInboundAt`) é o que faz este
+  // gate ficar inerte para chamadores que ainda não foram ligados a ele: só
+  // dispara quando alguém DECLAROU explicitamente "sei que não respondeu".
+  if (facts.lastInboundAt === null && facts.lastOutboundAt) {
+    const sinceLastOutboundMs = facts.now.getTime() - facts.lastOutboundAt.getTime();
+    if (sinceLastOutboundMs >= 0 && sinceLastOutboundMs < coldFollowupCooldownMs) {
+      return blocked('LEAD_CONTACT_COOLDOWN', 'Este lead ainda não respondeu ao contato anterior — aguarde antes de insistir.', {
+        lastOutboundAt: facts.lastOutboundAt.toISOString(),
+      });
+    }
+  }
+
+  // G9c — trava de ritmo do NÚMERO (ARQUITETURA §4.9.10/§6.8.7). Cadência é
+  // propriedade da INSTÂNCIA, não de quem chama: o mesmo portão serve o envio
+  // manual e o `dispatch-tick`, e é AQUI DENTRO que `ignorePaceLock` é
+  // avaliado — nunca no chamador. Isso é o que impede um chamador de liberar
+  // o gate para um contato frio "mentindo" a flag: o próprio guard anula o
+  // override quando `isColdFirstContact` é verdadeiro, sempre. Gate ausente
+  // (`undefined`) ou livre (`null`) não bloqueia — mesma semântica de "não
+  // ligado ainda" do G9b.
+  if (facts.instance.nextSendAllowedAt && facts.now.getTime() < facts.instance.nextSendAllowedAt.getTime()) {
+    const bypassAllowed = Boolean(facts.overrides.ignorePaceLock) && !facts.isColdFirstContact;
+    if (!bypassAllowed) {
+      return blocked('SEND_PACE_LOCKED', 'Este número ainda está no intervalo mínimo desde o envio anterior.', {
+        nextSendAllowedAt: facts.instance.nextSendAllowedAt.toISOString(),
+      });
+    }
+    // Desvio AUTORIZADO (responder conversa aberta não pode esperar o gate),
+    // mas nunca invisível — é para isto que este warning existe (ARQUITETURA
+    // §4.9.10: "desvio autorizado é aceitável; desvio invisível não").
+    warnings.push({
+      code: 'PACE_LOCK_BYPASSED_FOR_REPLY',
+      message: 'Enviado antes do intervalo normal por ser resposta a uma conversa em aberto.',
+    });
   }
 
   // G10 — 1º contato frio: aviso de descadastro + identificação do remetente (ARQUITETURA §7.4)

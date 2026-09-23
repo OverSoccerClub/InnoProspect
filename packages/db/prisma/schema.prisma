@@ -13,6 +13,14 @@
 // Enums novos (Campaign*, Message*, WhatsAppInstance*, OptOutSource) espelham
 // packages/contracts/src/common.ts valor a valor — ver comentário em cada um.
 //
+// Migração 20260923130000_dispatch_cadence (Fase 4.A, ARQUITETURA §8 item
+// 4.A) acrescenta, de forma 100% ADITIVA, o estado de cadência do disparo
+// (§4.9.10, §6.8.1, §6.8.7): `WhatsAppInstance.nextSendAllowedAt` /
+// `sendsSinceMicroPause` / `consecutiveUncertain`, e `CampaignInstance.
+// sentCount` / `failedCount` (§4.5.8). Entra ANTES do motor de campanhas
+// (§6.8, ainda não implementado) de propósito — o freio estreia no envio
+// manual, com volume 1 e um humano olhando.
+//
 // Convenções deste schema:
 //   - Todo id de entidade "operacional" usa cuid2 (@default(cuid(2))), conforme
 //     ARQUITETURA.md §4.0 ("IDs: cuid2 string").
@@ -662,6 +670,56 @@ model WhatsAppInstance {
   /// envio consecutivas → degraded"). Zerado a cada envio bem-sucedido.
   consecutiveFailures Int     @default(0)
 
+  // ── 🆕 Fase 4.A — CADÊNCIA (ARQUITETURA §4.9.10, §6.8.1, §6.8.7) ──────────
+  // Cadência é propriedade do NÚMERO, não do chamador: as três colunas
+  // abaixo são gravadas tanto pelo envio manual (apps/web) quanto pelo
+  // `dispatch-tick.job` (apps/worker) — SEM segunda implementação da
+  // política em nenhum dos dois lados (packages/core é a única fonte).
+  //
+  // ⚠️ CONCORRÊNCIA: esta linha tem DOIS escritores em processos distintos
+  // (o route handler do envio manual e o worker do dispatch-tick), mais um
+  // TERCEIRO periódico (`warmup-roll.job`, §6.9, zera sendsSinceMicroPause/
+  // consecutiveUncertain à meia-noite). Nenhum dos três pode fazer
+  // read-modify-write em JS (ler o valor, somar 1 na aplicação, escrever de
+  // volta) — duas escritas concorrentes na mesma linha perderiam uma
+  // atualização (lost update). Usar SEMPRE `UPDATE ... SET col = col + 1`
+  // (ou, em Prisma, `{ increment: 1 }`/`{ decrement: 1 }`) — o Postgres
+  // serializa por lock de linha e a conta nunca se perde, mesmo com dois
+  // processos escrevendo ao mesmo tempo. Reset para 0 (sucesso zera
+  // consecutiveUncertain; warmup-roll zera os dois) é um SET incondicional,
+  // não precisa ler antes. Ver aviso completo no cabeçalho da migração
+  // 20260923130000_dispatch_cadence.
+  /// Gate único de cadência (§4.9.10): antes deste instante, NENHUM envio
+  /// por esta instância é permitido — nem manual, nem campanha. Todo envio
+  /// bem-sucedido empurra este valor para `now() + jitter` (§6.8.7).
+  /// NULO = "sem gate ainda" (nunca enviou, ou o gate já expirou e ainda não
+  /// foi limpo) — TRATAR COMO "pode enviar agora", nunca como bloqueio.
+  /// Consultar sempre como `nextSendAllowedAt IS NULL OR nextSendAllowedAt
+  /// <= now()`: comparar `NULL <= now()` em SQL dá NULL (falso), então um
+  /// `WHERE nextSendAllowedAt <= now()` sem o `IS NULL` EXCLUIRIA por engano
+  /// toda instância que nunca enviou — inclusive as que já existem hoje em
+  /// produção, quebrando o envio manual que já funciona.
+  nextSendAllowedAt DateTime?
+
+  /// Conta envios (sucesso/falha/incerto — TODOS, §6.8.7) desde a última
+  /// micro-pausa. Ao cruzar o limiar sorteado (18-25), o worker sorteia um
+  /// jitter longo (5-12min) e zera este contador. Persistido (não em
+  /// memória) porque um restart do worker não pode fazer a micro-pausa
+  /// desaparecer — é exatamente no reinício, com fila acumulada, que a
+  /// tentação de disparar em rajada é maior. Zerado também 1x/dia pelo
+  /// `warmup-roll.job` (§6.9) para não crescer sem limite.
+  sendsSinceMicroPause Int @default(0)
+
+  /// Envios com resultado INCERTO (timeout/erro transiente da Evolution,
+  /// §6.8.6) em sequência na mesma instância. Distinto de
+  /// `consecutiveFailures`: incerto significa "pode ter chegado" — não é
+  /// falha confirmada e não pode punir a instância pelo mesmo caminho
+  /// (isDegraded fica intocado). ≥3 tira a instância da rotação no ciclo;
+  /// ≥5 dá halt na campanha (política em packages/core, não aqui). Zerado
+  /// por qualquer envio com SUCESSO confirmado, e também 1x/dia pelo
+  /// `warmup-roll.job` (§6.9).
+  consecutiveUncertain Int @default(0)
+
   /// Data em que o warmup começou a contar. `warmupDay` avança 1 POR DIA DE
   /// CALENDÁRIO COM AO MENOS 1 ENVIO (ARQUITETURA §6.2) — não é
   /// `now() - warmupStartedAt`, por isso o dia é persistido e avançado
@@ -696,7 +754,15 @@ model WhatsAppInstance {
   campaignInstances CampaignInstance[]
 
   // Volume desta tabela é dezenas de linhas (números de WhatsApp), não
-  // milhares — sem índice extra além da PK e dos @unique acima.
+  // milhares — sem índice extra além da PK e dos @unique acima. Vale
+  // também para `nextSendAllowedAt` (Fase 4.A): a pergunta "qual instância
+  // desta campanha pode enviar agora" (§6.8.3, passo 2.2) filtra sobre o
+  // conjunto de `CampaignInstance` de 1 campanha — no máximo alguns números
+  // — nunca a tabela toda por igualdade em massa. Um índice em
+  // `nextSendAllowedAt` pagaria custo de escrita (é a coluna mais escrita
+  // desta tabela, tocada a CADA envio) sem nenhuma consulta que precise
+  // dele. Revisitar só se este número deixar de ser "poucos números por
+  // dono" — não previsto no roadmap.
   @@map("whatsapp_instances")
 }
 
@@ -978,6 +1044,24 @@ model CampaignInstance {
 
   createdAt DateTime @default(now())
 
+  // ── 🆕 Fase 4.A — CONTADORES POR CAMPANHA×INSTÂNCIA (ARQUITETURA §4.5.8) ──
+  /// "Quanto ESTA instância enviou NESTA campanha" — não existe em nenhum
+  /// outro lugar do schema: `InstanceDailyStat.sentCount` é por instância
+  /// por DIA (soma todas as campanhas + envio manual); `Campaign.sentCount`
+  /// é por campanha (soma todas as instâncias). Sem este par, o cruzamento
+  /// exigiria `COUNT(*)` em `Message JOIN CampaignTarget` a cada poll de 3s
+  /// da tela de progresso — a mesma invariante de `Campaign`
+  /// ("incrementado, nunca COUNT(*)") vale aqui. Incrementados na MESMA
+  /// transação de `advanceCampaignTargetStatus()` quando o alvo alcança
+  /// `sent`/`failed` (§6.8.6) — não no write-ahead — então, ao contrário de
+  /// `InstanceDailyStat.sentCount`, NÃO precisam de compensação: o resultado
+  /// já é definitivo quando o contador é tocado. `failedCount` também soma
+  /// o resultado `send_uncertain` (§6.8.6): incerto termina como `failed`
+  /// no alvo, então entra no funil de falha aqui — coerente com
+  /// `Campaign.failedCount`, que faz o mesmo.
+  sentCount   Int @default(0)
+  failedCount Int @default(0)
+
   /// 1 instância entra 1x por campanha — a ROTAÇÃO em runtime (round-robin
   /// ponderado por quota, ARQUITETURA §6.5) é lógica do worker sobre esta
   /// lista, não duplicidade de linha aqui.
@@ -986,6 +1070,11 @@ model CampaignInstance {
   // (§6.6: "TODAS as campanhas que usam SÓ esta instância → halted") e pelo
   // DELETE de instância (409 INSTANCE_IN_USE).
   @@index([instanceId])
+  // sentCount/failedCount são sempre lidos/escritos pela chave já indexada
+  // acima (@@unique([campaignId, instanceId]) — 1 linha por par) ou listados
+  // via `campaignId` (join natural de GET /campaigns/:id, `perInstance[]`,
+  // §4.5.8) — nenhuma consulta filtra POR VALOR de sentCount/failedCount,
+  // então nenhum índice novo se justifica para eles.
   @@map("campaign_instances")
 }
 
