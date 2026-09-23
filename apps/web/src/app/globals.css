@@ -320,3 +320,56 @@
     16px 100%;
   background-attachment: local, local, scroll, scroll;
 }
+
+/*
+ * Papel de parede da Conversa (`components/leads/lead-conversation.tsx`) —
+ * redesenho de 2026-09-23, pedido do dono depois da 1ª conversa real em
+ * produção: a área de mensagens era um retângulo branco enorme e não
+ * "parecia uma conversa". Moldura de celular foi descartada (desperdiça
+ * largura, cabe menos texto, "celular dentro de celular" em telas
+ * pequenas) — a textura é o substituto: uma trama de pontos no hue da
+ * marca (mesmo H≈231 de `--primary`), bem mais sutil que qualquer
+ * wallpaper de app de chat real, o suficiente para o olho reconhecer
+ * "isto é uma superfície de conversa" sem competir com as bolhas.
+ *
+ * Os valores de alpha são LITERAIS (não `var(--primary)` com alpha
+ * anexado) porque CSS não deixa compor um alpha novo em cima de uma custom
+ * property sem "relative color syntax" — se o hue/L/C de `--primary`
+ * mudar, recalcular os dois tons abaixo também (script de conferência:
+ * ver DESIGN-SYSTEM.md §7A).
+ *
+ * Contraste é PISO, não estética — medido via conversor OKLCH→sRGB +
+ * fórmula WCAG (mesmo método do resto do arquivo, não "no olho"), no PIOR
+ * caso (texto encostado num ponto da trama, não no vão entre pontos):
+ *   - `muted-foreground` sobre a textura pura (ex.: aviso "nenhuma
+ *     resposta chegou ainda", que fica direto sobre este fundo, sem
+ *     bolha): light 5.82:1, dark 5.27:1 — ambos acima do piso 4.5:1.
+ *   - `foreground` dentro da bolha de saída (`bg-primary/10`, translúcida,
+ *     então herda a textura por trás): light 13.16:1, dark 12.51:1.
+ *   - bolha opaca de entrada (`bg-muted`) cobre a textura por completo —
+ *     contraste idêntico ao já validado em DESIGN-SYSTEM.md §7.
+ * Se a densidade/opacidade dos pontos aumentar no futuro, refazer essa
+ * conta antes — o dark mode tem a margem mais estreita das duas.
+ */
+.inno-chat-wallpaper {
+  background-color: var(--card);
+  background-image:
+    radial-gradient(circle, oklch(0.47 0.16 231 / 8%) 1.2px, transparent 1.3px),
+    radial-gradient(circle, oklch(0.47 0.16 231 / 8%) 1.2px, transparent 1.3px),
+    linear-gradient(oklch(0.47 0.16 231 / 5%), oklch(0.47 0.16 231 / 5%));
+  background-size:
+    36px 36px,
+    36px 36px,
+    100% 100%;
+  background-position:
+    0 0,
+    18px 18px,
+    0 0;
+  background-repeat: repeat, repeat, no-repeat;
+}
+.dark .inno-chat-wallpaper {
+  background-image:
+    radial-gradient(circle, oklch(0.72 0.12 231 / 7%) 1.2px, transparent 1.3px),
+    radial-gradient(circle, oklch(0.72 0.12 231 / 7%) 1.2px, transparent 1.3px),
+    linear-gradient(oklch(0.72 0.12 231 / 5%), oklch(0.72 0.12 231 / 5%));
+}

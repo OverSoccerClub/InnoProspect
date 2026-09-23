@@ -650,3 +650,61 @@ o gráfico como fake à primeira vista. `mockGetEmptyDashboardSummary()` existe
 à parte, só pra testar o estado de primeiro acesso — trocado manualmente em
 `lib/api/dashboard.ts` durante o teste e revertido depois, nunca um flag
 permanente no código de produção.
+
+### 9.5 Papel de parede da Conversa — textura em vez de moldura de celular (2026-09-23)
+
+Depois da 1ª conversa real em produção, o dono pediu para simular a tela do
+WhatsApp dentro de uma moldura de celular. Argumento contra, aceito: moldura
+desperdiça a largura que o redesenho anterior (§ ver `project-lead-conversation-redesign`
+na memória da Lyra) tinha acabado de conquistar, cabe menos texto por tela, e
+vira "celular dentro de celular" em telas pequenas. O pedido real por trás —
+"a área de mensagens é um retângulo branco enorme e vazio" — foi resolvido
+sem moldura, com 3 mudanças em `components/leads/lead-conversation.tsx`:
+
+1. **Textura `.inno-chat-wallpaper` (`globals.css`)** — trama de pontos
+   escalonados (dois `radial-gradient` intercalados por `background-position`)
+   + um véu (`linear-gradient` sólido) sobre `var(--card)`, no mesmo hue de
+   `--primary` (H≈231), literal (não `var()` com alpha anexado — CSS não
+   permite compor alpha novo sobre uma custom property sem *relative color
+   syntax*). Alpha por camada: light véu 5%/ponto 8%, dark véu 5%/ponto 7% —
+   valores diferentes por tema porque o piso mais apertado é o texto
+   `muted-foreground` que fica DIRETO sobre a textura (o aviso "nenhuma
+   resposta chegou ainda"), não dentro de bolha: medido (conversor
+   OKLCH→sRGB + fórmula WCAG, pior caso = pixel em cima do ponto, não no
+   vão) em **5.82:1 (light) / 5.27:1 (dark)** — dark tem a margem mais
+   estreita das duas, não aumentar a opacidade lá sem recalcular. Bolha de
+   saída (`bg-primary/10`, translúcida, herda a textura por trás):
+   **13.16:1 (light) / 12.51:1 (dark)** para o texto `foreground`. Bolha de
+   entrada (`bg-muted`, opaca) cobre a textura por completo — contraste
+   idêntico ao já validado em §7.
+2. **2 bugs de contraste pré-existentes achados no caminho (mesma causa raiz
+   de §1.4/§4 — token dual-role, texto vermelho direto sobre fundo tintado
+   de vermelho) e corrigidos, independentes da textura:** o rótulo "Pedido de
+   descadastro" e o aviso "Não foi entregue..." usavam `text-destructive`
+   como corpo de texto — no dark, mediam **3.09:1** e **2.71:1**
+   respectivamente (abaixo do piso 4.5:1), mesmo sem a textura nova (a
+   textura só piorava mais, para 2.40:1/2.20:1). Os dois viraram
+   `text-foreground`; o sinal semântico continua — ícone `ShieldOff`
+   colorido (piso 3:1, onde passa) no primeiro, `MessageStatusBadge
+   variant="destructive"` (fill sólido, já validado em §7) no segundo.
+3. **Altura fixa (`h-[360px] sm:h-[420px]`), não mais `min-h`/`max-h`
+   elástico** — compartilhada entre o estado populado E o vazio (mesma
+   constante `CONVERSATION_HEIGHT`), para o card não mudar de tamanho quando
+   a 1ª mensagem chega. Isso também resolveu o pedido nº2 do dono ("baixo o
+   bastante para o compositor no rodapé ficar sempre alcançável sem rolar a
+   página"): o compositor é o próximo irmão direto no fluxo normal, não
+   precisa de cálculo de viewport. O estado vazio (`messages.length === 0`)
+   passou a viver dentro do mesmo container com textura + altura fixa (antes
+   era um `EmptyState` solto, sem textura, fora do fluxo da conversa) —
+   `EmptyState` continua reaproveitado (não um componente novo), só
+   recebendo `className` para tirar a borda tracejada/fundo próprios, que
+   competiam com a textura em vez de se somar a ela.
+
+Verificado com uma réplica estática do CSS + Chromium real via
+`playwright-core` (sem subir `next dev` — servidor compartilhado, ver
+`bug-shared-next-dev-cache-conflict` na memória da Lyra): altura fixa
+confirmada (`clientHeight`/`scrollHeight` iguais quando cabe, rolagem própria
+só aparece quando o conteúdo excede), textura visível e texto legível nos
+dois temas por captura de tela real. Contraste calculado analiticamente
+(mesmo método já em uso neste arquivo desde §7 — "não no olho"), não
+estimado.

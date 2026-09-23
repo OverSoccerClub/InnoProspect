@@ -81,3 +81,15 @@ typecheck/lint/test` verdes (321 no pacote web, 645 no monorepo, era 636 +
 9 testes novos que eu mesma adicionei), mas o scroll-to-bottom, o separador
 de dia sticky, e a bolha em 390px não foram vistos rodando. Pendência
 explícita pra Íris.
+
+**Rodada 2 (2026-09-23) — depois da 1ª conversa real chegar em produção:**
+moldura de celular pedida e descartada (argumentei, dono topou — desperdiça
+largura, cabe menos texto, "celular dentro de celular" em telas pequenas).
+O pedido real ("retângulo branco vazio") virou textura CSS pura
+(`.inno-chat-wallpaper`) + altura FIXA compartilhada entre vazio/populado
+(antes era `min-h`/`max-h` elástico) — detalhe completo em
+[[convention-chat-wallpaper-texture]] e DESIGN-SYSTEM.md §9.5. No caminho,
+achei e corrigi 2 bugs de contraste PRÉ-EXISTENTES (não causados pela
+textura, só pioravam com ela) no mesmo arquivo — mesma causa raiz de
+[[feedback-dual-role-color-tokens]]. `pnpm test` no monorepo: 667/667,
+igual ao número que o dono deu como baseline — sem regressão de contagem.

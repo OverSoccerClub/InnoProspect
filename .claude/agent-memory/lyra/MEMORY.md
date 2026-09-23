@@ -25,3 +25,4 @@
 - [turbo generate trava (EPERM) com next dev compartilhado de pé](bug_turbo_generate_lock_blocks_typecheck.md) — usar `pnpm --filter <pkg> run typecheck/lint/test` pacote a pacote, nunca matar o dev server
 - [Redesenho da conversa do lead após a 1ª mensagem real](project_lead_conversation_redesign.md) — polling silencioso resolveu "não mostra resposta"; timeline infiel é gap do webhook (Vega); chat virou protagonista
 - [`LeadActivity.type` texto livre: backend grava 'opt_out', UI só reconhecia 'opted_out'](bug_lead_activity_type_spelling_mismatch.md) — usar `isOptOutActivity()`, nunca comparar a string direto
+- [Textura de fundo (dot-grid CSS) + medir contraste em camadas por matemática, não screenshot](convention_chat_wallpaper_texture.md) — muted-foreground sem bolha por baixo é o piso real, não o texto principal; achou 2 bugs pré-existentes de texto vermelho no caminho
