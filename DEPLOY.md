@@ -289,6 +289,50 @@ quebrou.
 
 ---
 
+## 7.2.1. Scripts operacionais do `web` (mesma restrição, motivo diferente)
+
+O `worker` (§7.2) não tem `tsx`/`pnpm`/`src` na imagem porque carrega só
+`dist/`. O `web` tem `tsx` (o Dockerfile instala o `node_modules` completo
+com `--shamefully-hoist`) e **parece** ter tudo — mas a imagem final
+(`apps/web/Dockerfile`, stage `runner`) só copia:
+- o bundle `.next/standalone` do Next (não o código-fonte de `apps/web/src`,
+  nem `apps/web/scripts/`);
+- `node_modules` completo, mas os symlinks `@inno/*` só resolvem para os
+  pacotes cujo **código-fonte também foi copiado** — hoje só
+  `packages/db/prisma`+`packages/db/src` (ver o `COPY` da stage `runner`).
+  `@inno/messaging`, `@inno/core`, `@inno/contracts` etc. NÃO estão na
+  imagem — o symlink existe, mas fica pendurado sem destino.
+
+Isso já custou uma tentativa real: `apps/web/scripts/sync-instance-api-keys.ts`
+foi escrito importando `@inno/messaging` e `apps/web/src/lib/...`, e o
+primeiro `node node_modules/tsx/dist/cli.mjs apps/web/scripts/...` em
+produção (2026-09-23) falhou com `ERR_MODULE_NOT_FOUND` — nem o arquivo, nem
+suas dependências, existiam na imagem.
+
+**Regra:** todo script operacional novo do `web` (o que rodar via `tsx` num
+shell do container, fora do boot automático) tem que:
+1. Viver em `packages/db/prisma/` (mesmo lugar de `seed.ts`/`admin.ts`/
+   `evolution-servers.ts`) — é o ÚNICO diretório de código-fonte fora de
+   `apps/web/.next` que a stage `runner` copia.
+2. Importar só `node:*` (crypto, fs, etc.), `../src/client.js` (o Prisma
+   singleton) e, se precisar, duplicar deliberadamente (nunca importar) uma
+   função pequena de outro pacote — mesmo padrão já usado pela cifra AES-GCM
+   em `evolution-servers.ts`/`sync-instance-api-keys.ts` duplicando
+   `apps/web/src/lib/evolution-server-crypto.ts`. **Nenhum `@inno/*` além do
+   próprio `@inno/db`, nenhum `apps/web/src`.**
+3. Chamar a Evolution API (ou qualquer HTTP externo) com `fetch` puro, não
+   com `EvolutionClient`/`@inno/messaging` — o cliente do pacote não está na
+   imagem.
+
+**Guarda barata que falta (proposta, não implementada):** um passo no CI (ou
+uma linha no `RUN node -e ...` que já existe no Dockerfile, stage `builder`)
+que rode `madge`/um grep simples sobre `packages/db/prisma/**/*.ts` reprovando
+qualquer `import` de `@inno/` que não seja `@inno/db`, ou de `apps/web`/
+`apps/worker` — hoje isso só se descobre rodando o script de verdade em
+produção, tarde demais.
+
+---
+
 ## 7.3. Bootstrap do multi-servidor Evolution API (Fase 4.B, 2026-09-23)
 
 🆕 Roda **UMA VEZ**, depois do primeiro `prisma migrate deploy` que aplicar
@@ -341,6 +385,60 @@ passa a EXIGIR `evolutionServerId` no corpo a partir desta rodada (ver
 `whatsapp.contract.ts`) — a tela de criação de instância precisa de um
 seletor de servidor (pendência da Lyra, ver PARA O PRÓXIMO do handoff do
 Vega).
+
+---
+
+## 7.4. Capturar a credencial própria de instâncias já pareadas (2026-09-23)
+
+🆕 Roda depois da migração `20260923150000_instance_webhook_apikey`
+(automática, no boot do `web`) — mesma família operacional do §7.3, mas para
+o caso "instância que já existia ANTES desta correção, ou cuja captura
+automática em `POST /instance/create` falhou naquela hora": sem este passo,
+ela só aceita o webhook pela chave GLOBAL do `EvolutionServer`; se a
+Evolution assinar o webhook com a chave DA INSTÂNCIA, o evento continua
+recusado em silêncio (ver §4.8 da ARQUITETURA e o registro do incidente em
+`.claude/agent-memory/vega/bug_webhook_apikey_instance_vs_global.md`).
+
+⚠️ Script SÓ LÊ (`GET /instance/fetchInstances`) — nunca chama `connect`/
+`create`. Seguro rodar contra instância já conectada; não gera QR novo, não
+desconecta nada.
+
+Terminal no container `web` (working dir `/app`, mesmo caminho de
+`node_modules/tsx/dist/cli.mjs` do §7):
+
+```sh
+node node_modules/tsx/dist/cli.mjs packages/db/prisma/sync-instance-api-keys.ts
+```
+
+Saída esperada quando dá certo — uma linha `✔ ... credencial própria
+capturada e cifrada.` por instância que tinha o quê capturar, terminando em:
+
+```
+— Resumo —
+  Credenciais capturadas: <N>
+  Sem credencial própria na Evolution (continuam pela chave do servidor): <M>
+```
+
+`<N>` = 0 é aceitável (significa que a Evolution não devolveu `hash`/`token`/
+`apikey` reconhecível para nenhuma instância — elas continuam cobertas pela
+chave GLOBAL do servidor, ver PENDÊNCIA abaixo) — só uma mensagem de erro
+antes do "— Resumo —" indica falha real. Para conferir 1 instância só:
+
+```sh
+node node_modules/tsx/dist/cli.mjs packages/db/prisma/sync-instance-api-keys.ts <evolutionInstanceName>
+```
+
+Idempotente — pode rodar de novo quando quiser, sempre recifra com o valor
+mais recente.
+
+**Pendência real, não resolvida por este script:** qual dos dois níveis de
+credencial (própria da instância ou global do servidor) a Evolution
+efetivamente usa para assinar o webhook nunca foi confirmado contra um
+servidor real (mesma limitação de sempre — sem Evolution disponível para
+testar nesta máquina). A correção aceita as duas em paralelo
+(`resolveExpectedWebhookApiKeys`); se depois deste script o webhook ainda
+vier mudo, o próximo passo é olhar o log da rota (`webhook evolution: apikey
+sem correspondência` vs. `instanceKey desconhecida`) e comparar manualmente.
 
 ---
 

@@ -815,7 +815,7 @@ model WhatsAppInstance {
   // webhook por falta desta credencial extra:
   //   1. Instância criada ANTES desta migração (inclusive a já pareada do
   //      dono) — preenchida por comando operacional
-  //      (`apps/web/scripts/sync-instance-api-keys.ts`, lê
+  //      (`packages/db/prisma/sync-instance-api-keys.ts`, lê
   //      `GET /instance/fetchInstances`, NUNCA reconecta/gera QR novo).
   //   2. `POST /instance/create` não devolveu nenhum campo reconhecido
   //      (parsing defensivo, `packages/messaging/src/client/wire.ts`) —

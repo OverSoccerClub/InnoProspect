@@ -116,7 +116,7 @@ export class EvolutionClient {
    * `GET /instance/fetchInstances` — lista as instâncias do servidor JUNTO
    * com a credencial de webhook PRÓPRIA de cada uma (achado do dono,
    * 2026-09-23 — ver `client/wire.ts#parseFetchInstancesResponse`). Único
-   * chamador hoje: `apps/web/scripts/sync-instance-api-keys.ts` (comando
+   * chamador hoje: `packages/db/prisma/sync-instance-api-keys.ts` (comando
    * operacional que preenche a credencial de instâncias JÁ PAREADAS, sem
    * reconectar/gerar QR novo — este endpoint é uma LEITURA pura, mesmo
    * espírito de `testConnection`, que usa o mesmo caminho mas descarta o

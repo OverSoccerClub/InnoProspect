@@ -41,7 +41,7 @@ type WebhookAuthInstance = Pick<
  * ACEITAS em vez de escolher uma:
  *   1. A credencial PRÓPRIA da instância (`WhatsAppInstance.
  *      instanceApiKey*`, cifrada — capturada em `POST /instance/create` ou
- *      preenchida pelo comando operacional `apps/web/scripts/
+ *      preenchida pelo comando operacional `packages/db/prisma/
  *      sync-instance-api-keys.ts` para instância já pareada). Ausente
  *      (`null`) em instância legada ou cuja captura falhou — OMITIDA da
  *      lista, nunca tratada como bloqueio.

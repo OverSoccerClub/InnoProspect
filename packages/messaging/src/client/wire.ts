@@ -164,7 +164,7 @@ export type FetchedInstanceInfo = {
 
 /**
  * `GET /instance/fetchInstances` — usado pelo comando operacional
- * `apps/web/scripts/sync-instance-api-keys.ts` para preencher a credencial
+ * `packages/db/prisma/sync-instance-api-keys.ts` para preencher a credencial
  * própria de instâncias JÁ PAREADAS (criadas antes desta correção, ou cuja
  * captura em `parseCreateInstanceResponse` falhou). NÃO CONFIRMADO contra
  * servidor real qual dos dois formatos abaixo a v2.3.7 usa — aceita os dois,

@@ -32,7 +32,7 @@
 -- existe um valor "certo" para preencher via UPDATE em massa — a credencial
 -- de cada instância só existe na Evolution, uma consulta HTTP por linha.
 -- Por isso o preenchimento é um COMANDO OPERACIONAL separado
--- (`apps/web/scripts/sync-instance-api-keys.ts`, chama
+-- (`packages/db/prisma/sync-instance-api-keys.ts`, chama
 -- `GET /instance/fetchInstances` e casa por `evolutionInstanceName`),
 -- não uma migração SQL. Enquanto ele não roda (ou para instância cuja
 -- captura na criação falhou), as 4 colunas ficam NULL — e isso é seguro:

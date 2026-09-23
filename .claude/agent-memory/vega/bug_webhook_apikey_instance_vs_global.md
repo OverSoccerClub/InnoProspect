@@ -42,11 +42,14 @@ dois casos possíveis, já que não dá para confirmar qual a Evolution usa):**
   `createWhatsAppInstance` cifra e grava se veio algo; `null` não é erro
   (só loga e segue — a instância cai no fallback do servidor).
 - Captura para instância JÁ PAREADA (o caso real do dono — não pode
-  recriar, perderia a sessão): `apps/web/scripts/sync-instance-api-keys.ts`,
-  comando operacional (`node node_modules/tsx/dist/cli.mjs apps/web/scripts/
-  sync-instance-api-keys.ts`), chama `GET /instance/fetchInstances`
-  (LEITURA pura — nunca `connect`/`create`, mesma distinção crítica de
-  [[bug-qr-poll-invalidava-codigo]]) e casa por `evolutionInstanceName`.
+  recriar, perderia a sessão): `packages/db/prisma/sync-instance-api-keys.ts`
+  (🔧 2026-09-23, reescrito autossuficiente — a 1ª versão vivia em
+  `apps/web/scripts/` e quebrou em produção, ver [[bug-web-image-script-wrong-location]]),
+  comando operacional (`node node_modules/tsx/dist/cli.mjs packages/db/
+  prisma/sync-instance-api-keys.ts`), chama `GET /instance/fetchInstances`
+  via `fetch` puro (LEITURA pura — nunca `connect`/`create`, mesma distinção
+  crítica de [[bug-qr-poll-invalidava-codigo]]) e casa por
+  `evolutionInstanceName`.
 - Webhook: `resolveExpectedWebhookApiKeys` (plural, `lib/services/
   webhook.ts`) devolve um ARRAY com as candidatas resolvíveis (própria da
   instância + do servidor/env), omitindo silenciosamente qualquer fonte que
