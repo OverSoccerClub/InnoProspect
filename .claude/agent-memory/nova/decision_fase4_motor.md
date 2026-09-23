@@ -57,5 +57,24 @@ testável entregue é exatamente como nasceram as quatro funções sem chamador 
 `warmup-roll` é obrigatório (sem ele `warmupDay` nunca avança e a tabela do §6.2 é decoração);
 `health-check` entra só na fatia que para; heurísticas de shadow-ban e `retention` ficam para depois.
 
+**8. Minha objeção formal a começar a Fase 4 — condição exata de liberação (fechada em 2026-09-23).**
+A objeção NÃO é "espere a Fase 3 ser escrita" (já está, e em produção). É: **uma mensagem fria
+precisa ter chegado a um celular real por uma instância real, com o webhook voltando.** O aceite é o
+ciclo completo, não o `200` da rota: `providerMessageId` preenchido → `Message` saindo de `sent` para
+`delivered` via webhook → responder "SAIR" do celular de teste cria o `OptOut` e marca o alvo
+`skipped`. Isso exercita de uma vez o formato do `sendText`, o `instanceKey`/`apikey` do webhook, o
+`messageTimestamp`, a detecção de opt-out e os contadores. **Enquanto esse ciclo não fechar, 4.F não
+começa** — construir motor sobre acoplamento externo não exercitado é o erro que a entrega 3.7
+existia para evitar.
+**Pré-condições adicionais que acrescentei em 23/09, na ordem:** (a) medir a taxa de celular do §8.3,
+porque campanha sobre base sem celular queima cota de warmup em alvo inexistente; (b) **canal de
+alerta ligado e estendido ao `apps/web`** (instância caiu, campanha `halted`, falhas consecutivas) —
+4.F é a primeira coisa deste sistema que **age sem ninguém olhando**, e ator autônomo sem canal de
+"quebrou" transforma desconexão às 2h da manhã em número queimado; (c) restore de backup testado de
+verdade, porque 4.A é migração e 4.D materializa alvos.
+⚠️ Nota que muda a urgência de 4.A-4.C: o envio unitário **hoje não tem freio de ritmo nenhum**
+(`nextSendAllowedAt` não existe no schema). O risco de rajada por clique humano já está vivo, não é
+risco que a Fase 4 introduz.
+
 Relacionado: [[innoprospect-envio-unitario-guard]], [[innoprospect-armadilhas]],
-[[nova-licoes-plano-faseado]], [[innoprospect-uso-proprio]].
+[[nova-licoes-plano-faseado]], [[innoprospect-uso-proprio]], [[innoprospect-estado-real]].

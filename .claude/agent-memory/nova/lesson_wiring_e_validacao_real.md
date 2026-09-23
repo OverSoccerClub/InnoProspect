@@ -59,5 +59,26 @@ Aplicam-se a qualquer arquitetura que eu escrever, não só a este projeto.
    correção precisa dizer **qual era o erro**, senão alguém reverte a melhoria achando que está
    consertando.
 
+7. **Rede de sanidade definida só sobre VOLUME não pega falha de COMPLETUDE.**
+   **Why:** em 22/09/2026 o scraper coletou ~260 leads reais "com sucesso" — e quase todos só com o
+   nome, porque os seletores do card do Maps tinham mudado (commit `3da386d`). As assertions A1-A4
+   do §5.7 existem exatamente contra "sucesso silencioso", e não dispararam: elas medem *quantos*
+   leads vieram, nunca *quão preenchidos*. O dono descobriu olhando a tela.
+   **How to apply:** ao desenhar detecção de "isso quebrou sem dar erro", listar os campos que o
+   produto precisa (aqui: telefone móvel) e assertar a **taxa de preenchimento** deles, não só a
+   contagem de linhas. Vale para qualquer extração/importação/integração.
+
+8. **CI sobre o código-fonte não é portão do artefato de produção.**
+   **Why:** cinco incidentes seguidos em 22-23/09 no InnoProspect (nome de fila com `:` derrubando o
+   BullMQ no boot, Chromium ausente na imagem do worker, `.ts` solto num bundle ESM, `require` em
+   CommonJS dentro do bundle, script de backfill que não era entrada do tsup e por isso não existia
+   em produção) tinham **typecheck, lint, testes e `next build` verdes**. Nenhum dos quatro portões
+   olha para a imagem que sobe.
+   **How to apply:** todo processo empacotado precisa de uma **entrada de auto-teste no próprio
+   artefato** (`node dist/index.js --selftest`: conecta no banco e no Redis, registra as filas, abre
+   o navegador headless, sai 0) rodada no CI contra serviços reais e usada como healthcheck do
+   container. Sem isso, o primeiro teste da imagem é sempre a produção.
+
 Relacionado: [[innoprospect-arquitetura-v1]], [[innoprospect-armadilhas]],
-[[innoprospect-envio-unitario-guard]], [[innoprospect-fase4-motor]].
+[[innoprospect-envio-unitario-guard]], [[innoprospect-fase4-motor]],
+[[innoprospect-estado-real]].

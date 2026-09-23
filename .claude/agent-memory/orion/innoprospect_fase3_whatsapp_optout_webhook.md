@@ -31,17 +31,18 @@ gera 409). **Não tem TTL** (HMAC determinístico, sem expiração) — decisão
 link de auto-serviço permanente, o pior cenário de reuso é o titular confirmar de novo o próprio
 opt-out.
 
-**Gap real: nenhuma rota pública tem rate limit no servidor**, apesar do frontend
-(`unsubscribe-view.tsx`) já tratar um estado `RATE_LIMITED` que a Zod/`apiRoute` nunca emite (só existe
-no mock e no enum de `@inno/contracts`). Isso é UI construída na frente do backend — sinal de alerta
-para próxima vez: `grep` o backend antes de aceitar como implementado um comportamento que só existe
-no client. Combinado com isso, `lib/api-handler.ts` faz `req.text()` + `JSON.parse` de forma
-não-limitada em bytes ANTES de qualquer checagem de auth (a ordem é: sessão → params → query → body →
-handler). Para as duas rotas com `requireAuth:false`, isso significa que qualquer request anônimo tem
-o corpo inteiro lido/parseado antes de qualquer verificação de segredo — vetor de DoS por payload
-grande/repetido, sem exigir credencial nenhuma. Reportado como IMPORTANTE (não crítico: não vaza
-dado, é disponibilidade), mas vale cobrar um limite de tamanho de corpo (nível de proxy/EasyPanel ou
-dentro do `apiRoute`) antes de qualquer tráfego real.
+**Gap real (RESOLVIDO, confirmado em 2026-09-23): as duas rotas públicas agora têm rate limit E
+limite de corpo.** `apiRoute({ rateLimit, maxBodyBytes })` ganhou os dois parâmetros; `POST
+/api/v1/public/optout` (10 req/min por IP, corpo ≤4KB) e `POST /api/webhooks/evolution/:instanceKey`
+(300 req/min por IP, corpo ≤1MB) os usam, e o rate limit roda como PRIMEIRO passo do `apiRoute` — antes
+de sessão, antes de `req.text()`/`JSON.parse`. O `RATE_LIMITED` que a tela já esperava
+(`unsubscribe-view.tsx`) agora É emitido de verdade pelo backend. Ressalva que CONTINUA valendo, não
+resolvida: `clientIp`/`clientIpFromRequest` (`lib/rate-limit.ts`) confiam no primeiro valor de
+`X-Forwarded-For` sem validar se o proxy do EasyPanel de fato o sobrescreve — se não sobrescrever, um
+cliente forja o header e ganha um contador novo por requisição, esvaziando as duas defesas (rate limit
+de rota pública E o rate limit de login por IP em `lib/auth.ts`). Ainda "não validado nesta máquina
+contra o proxy real" (comentário do próprio código) — item de infra a confirmar com Vulcano antes de
+contar com isso como defesa forte. Ver [[innoprospect-2026-09-23-infra-paginacao]].
 
 **Webhook Evolution segue exatamente o contrato descrito no próprio código-fonte**
 (`app/api/webhooks/evolution/[instanceKey]/route.ts`, comentário no topo do arquivo): `instanceKey`

@@ -89,3 +89,64 @@ efeito retroativo, idempotência pública, admin-only delete),
 - Ver `[[feedback_vitest_mock_hoisting]]` para a armadilha de hoisting que
   vai aparecer de novo em qualquer teste futuro que compartilhe mock entre
   arquivos.
+
+## Inventário de 2026-09-23 (auditoria "o que está provado vs no escuro")
+Pedido do dono: mapear cobertura real, sem escrever teste ainda. Achado
+principal, confirmado lendo o código (não suposto): as DUAS metades do
+pipeline core do produto (busca → fanout → coleta → lead no banco) estão
+SEM NENHUM teste:
+- `apps/web/src/lib/services/searches.ts` (283 linhas: `createSearchJob`
+  com detecção de conflito ativo por niche+UF, ordenação por população,
+  `cancelSearchJob`, `retryFailedSearchTasks`) — zero `.test.ts`.
+- `apps/worker/src/jobs/scrape-search.job.ts` (`createScrapeSearchProcessor`,
+  360 linhas: `claimTask` atômico, dedupe+upsert, `offNiche` relativo à
+  busca de ORIGEM, política de retry/backoff por código de erro,
+  `maybeCompleteSearchJob`) — o próprio arquivo de teste já documenta que só
+  cobre `pauseQueueFor`; o resto nunca foi exercitado. Isso é o coração do
+  produto (é o que grava os ~260 leads que existem hoje) — prioridade #1 se
+  a Íris for escrever teste de verdade nesta rodada.
+- `apps/worker/src/scripts/backfill-off-niche.ts` — lógica de paginação por
+  cursor/idempotência nunca testada isoladamente (a função nem é exportada);
+  só foi "provada" manualmente uma vez rodando o binário compilado contra
+  banco inexistente (bateu no Prisma, não completou). Sem guarda tipo
+  `queues.test.ts` que impeça alguém de tirar a entrada do `tsup.config.ts`
+  e reintroduzir exatamente o incidente de 2026-09-23 (`pnpm: not found`
+  no container).
+- Camada de rota HTTP (`apiRoute`/`api-handler.ts`) nunca testada em
+  contrato — nem a de webhook da Evolution (comparação em tempo constante,
+  oráculo 404-não-401) nem a de opt-out público (rate limit, `bodySchema`)
+  — só a lógica de serviço por trás (`webhook.ts`, `optouts.ts`) tem rede.
+  Mesmo item já registrado como pendência #4 antes; segue valendo.
+- Regressões recentes do scraper (corrida `isVisible`, seletores do card do
+  Maps) JÁ têm teste de regressão bom (`navigate.test.ts`,
+  `extract-card.test.ts`, fixtures HTML congeladas) — não é buraco, é
+  exemplo do padrão a copiar. O nome de fila do BullMQ com `:` também já
+  tem guarda (`queues.test.ts`, inclusive cruzando apps/web × apps/worker
+  lendo o outro arquivo como texto). Versão do Playwright divergente da
+  imagem Docker é guarda de BUILD (Dockerfile), não testável em Vitest
+  nesta máquina sem Docker — item aceito como fora do alcance de teste
+  automatizado local.
+- Zero `*.test.tsx`, zero E2E, confirmado por busca no repo inteiro — bate
+  com a leitura do dono.
+- `prisma migrate deploy` contra Postgres real: o próprio `ci.yml` documenta
+  em comentário que isso NÃO roda em CI (`DATABASE_URL` é só um placeholder
+  para o typecheck). Nunca provado fora de produção mesmo.
+
+**Fechado nesta rodada**: escrevi `apps/worker/src/jobs/scrape-search.job.test.ts`
+(7 testes novos de `createScrapeSearchProcessor` + os 2 que já existiam de
+`pauseQueueFor`) e `apps/worker/src/test/fake-db.ts` (fake db dedicado a
+SearchTask/SearchJob/Lead, mesmo padrão do fake-db do apps/web). Cobre: claim
+atômico ignorando task não-pending, criação de leads novos com upsert,
+recoleta (update em vez de duplicar, sem contar como novo), `offNiche`
+relativo ao nicho de ORIGEM (não da task atual — a armadilha documentada no
+próprio `niche.ts`), retry dentro do teto com backoff, esgotamento de
+tentativas (task falha mas o SearchJob continua/completa), e `LAYOUT_CHANGED`
+(maxAttempts=0, pausa a fila na hora, severidade crítica). Validado por
+mutação: quebrei de propósito a linha `originNiche = existing?.searchJob.niche
+?? task.searchJob.niche` para só `task.searchJob.niche` e o teste de offNiche
+falhou como esperado — não é teste vazio. Removi também `passWithNoTests` de
+`apps/worker/vitest.config.ts` (agora existe teste de verdade; o CI volta a
+falhar se `src/**` ficar sem cobertura de novo). `searches.ts`
+(`apps/web/src/lib/services/searches.ts`, a metade "busca → fanout" do mesmo
+fluxo: `createSearchJob`, `cancelSearchJob`, `retryFailedSearchTasks`) segue
+SEM teste — é a próxima peça óbvia se alguém continuar este trabalho.
