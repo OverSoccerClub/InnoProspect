@@ -123,6 +123,25 @@ export type ApiRouteOptions<TQuery, TBody, TParams> = {
    * precisa (o operador já passou por login).
    */
   maxBodyBytes?: number;
+  /**
+   * Exige que a sessão tenha este `role` — MECANISMO ÚNICO de autorização por
+   * papel (CRUD de usuários, Onda 4): nenhuma rota deve voltar a copiar
+   * `if (session.user.role !== 'admin') forbidden(...)` por conta própria
+   * (era o padrão em `lib/services/optouts.ts#deleteOptOut` antes desta
+   * rodada — centralizado aqui). Roda logo depois de resolver a sessão, ANTES
+   * de parsear params/query/body (mesma lógica de "falhar rápido, antes do
+   * trabalho caro" do `rateLimit` acima). Pressupõe `requireAuth` (default
+   * `true`) — combinar com `requireAuth: false` não faz sentido (não há
+   * sessão para checar o papel) e aqui vira `401`, não `403`, se ainda assim
+   * acontecer.
+   *
+   * Só o papel salvo no JWT no momento do LOGIN é considerado — se um admin
+   * rebaixar/desativar outro usuário, uma sessão já aberta daquele usuário
+   * continua com o papel antigo até expirar/logar de novo (limitação
+   * conhecida da estratégia `session: { strategy: 'jwt' }`, documentada no
+   * handoff; não há storage de sessão server-side para revogar na hora).
+   */
+  requireRole?: 'admin' | 'operator';
   querySchema?: ZodType<TQuery>;
   bodySchema?: ZodType<TBody>;
   paramsSchema?: ZodType<TParams>;
@@ -174,6 +193,17 @@ export function apiRoute<TQuery = undefined, TBody = undefined, TParams = Record
         const authSession = await auth();
         if (!authSession?.user) unauthorized();
         session = authSession as AuthedSession;
+      }
+
+      if (options.requireRole) {
+        if (!session) unauthorized();
+        if (session.user.role !== options.requireRole) {
+          forbidden(
+            options.requireRole === 'admin'
+              ? 'Esta ação exige permissão de administrador.'
+              : `Esta ação exige o papel "${options.requireRole}".`,
+          );
+        }
       }
 
       const rawParams = (await ctx.params) ?? {};

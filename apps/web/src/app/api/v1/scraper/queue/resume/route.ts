@@ -7,6 +7,9 @@
  * `409 CONFLICT` se a fila já não estiver pausada (idempotência: chamar duas
  * vezes não é erro de sistema, mas também não há nada pra fazer na segunda).
  * `200 { ok: true, status: 'running', resolvedIncidents }` no sucesso.
+ *
+ * `requireRole: 'admin'` (Onda 4): retomar a fila é "cancelar/retomar fila"
+ * — ação de administração operacional, não de uso rotineiro do sistema.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -16,6 +19,7 @@ import { resumeScraperQueue } from '@/lib/services/scraper-health';
 const bodySchema = z.object({ acknowledge: z.literal(true) });
 
 export const POST = apiRoute({
+  requireRole: 'admin',
   bodySchema,
   handler: async () => {
     const result = await resumeScraperQueue();

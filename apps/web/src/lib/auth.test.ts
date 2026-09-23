@@ -23,7 +23,7 @@ vi.mock('next-auth/providers/credentials', () => ({
   default: (config: unknown) => config,
 }));
 
-const users = new Map<string, { id: string; email: string; name: string; role: string; passwordHash: string }>();
+const users = new Map<string, { id: string; email: string; name: string; role: string; passwordHash: string; isActive: boolean }>();
 
 vi.mock('@inno/db', () => ({
   prisma: {
@@ -76,6 +76,7 @@ describe('authorizeCredentials — rate limit de login', () => {
       name: 'Vendedor',
       role: 'seller',
       passwordHash: REAL_PASSWORD_HASH,
+      isActive: true,
     });
   });
 
@@ -184,6 +185,7 @@ describe('authorizeCredentials — rate limit de login', () => {
         name: `Pessoa ${i}`,
         role: 'seller',
         passwordHash: REAL_PASSWORD_HASH,
+        isActive: true,
       });
       const result = await authorizeCredentials(
         { email: `pessoa-${i}@innoprospect.local`, password: REAL_PASSWORD },
@@ -276,5 +278,29 @@ describe('authorizeCredentials — rate limit de login', () => {
       );
     }
     expect(logger.warn).toHaveBeenLastCalledWith('auth.login.falhou', expect.objectContaining({ motivo: 'senha_incorreta' }));
+  });
+
+  // CRUD de usuários (Onda 4): "desativar" só vale alguma coisa se um login
+  // NOVO com a senha certa também for recusado — senão a tela de usuários
+  // teria um botão decorativo.
+  it('conta desativada (isActive: false) não loga mesmo com a senha certa', async () => {
+    users.set('inativo@innoprospect.local', {
+      id: 'user_inativo',
+      email: 'inativo@innoprospect.local',
+      name: 'Ex-funcionário',
+      role: 'seller',
+      passwordHash: REAL_PASSWORD_HASH,
+      isActive: false,
+    });
+    const { authorizeCredentials } = await import('./auth');
+    const { logger } = await import('./logger');
+
+    const result = await authorizeCredentials(
+      { email: 'inativo@innoprospect.local', password: REAL_PASSWORD },
+      request('203.0.113.77'),
+    );
+
+    expect(result).toBeNull();
+    expect(logger.warn).toHaveBeenLastCalledWith('auth.login.falhou', expect.objectContaining({ motivo: 'usuario_inativo' }));
   });
 });

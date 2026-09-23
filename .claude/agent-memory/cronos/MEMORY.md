@@ -2,3 +2,4 @@
 - [Cascade + contadores históricos (LGPD)](lgpd-cascade-vs-historical-counters.md) — padrão pra tabelas filhas de Lead com dado snapshotado: Cascade + contadores agregados no pai, nunca COUNT() puro nem SetNull.
 - [prisma generate EPERM com next dev](prisma-generate-eperm-dev-server.md) — Windows trava o .dll.node do client enquanto o dev server do dono está rodando; não é bug do schema.
 - [Gate nullable + contadores concorrentes](gate-nullable-e-contadores-concorrentes.md) — NULL = sem restrição (nunca bloqueio) num gate DateTime?; incremento sempre atômico em SQL quando web+worker escrevem a mesma coluna.
+- [EvolutionServer multi-servidor](evolution-server-multi-servidor.md) — cifra em Bytes/GCM (formato, não implementação), FK nullable + bootstrap antes do NOT NULL, script roda via tsx no container web (não tsup do worker).

@@ -132,6 +132,29 @@ export async function authorizeCredentials(
     return null;
   }
 
+  // CRUD de usuários (Onda 4): usuário desativado (`isActive: false`,
+  // `lib/services/users.ts#deactivateUser`) nunca ganha uma sessão NOVA,
+  // mesmo com a senha certa — senão "desativar" na tela de usuários seria só
+  // decoração. Mesma resposta genérica ao navegador (não revela SE a conta
+  // existe/está desativada), gasta cota do rate limit igual a qualquer outra
+  // falha (não é um jeito mais barato de varrer contas desativadas).
+  //
+  // LIMITAÇÃO CONHECIDA (documentar, não escondida): isto só impede um NOVO
+  // login. Uma sessão JÁ aberta (JWT já emitido) deste usuário continua
+  // válida até expirar — `session: { strategy: 'jwt' }` não tem storage
+  // server-side para revogar na hora (ver `auth.config.ts`). Ver handoff.
+  if (!user.isActive) {
+    checkRateLimit(emailKey, LOGIN_RATE_LIMIT_WINDOW_MS, LOGIN_RATE_LIMIT_MAX_PER_EMAIL);
+    checkRateLimit(ipKey, LOGIN_RATE_LIMIT_WINDOW_MS, LOGIN_RATE_LIMIT_MAX_PER_IP);
+    logger.warn('auth.login.falhou', {
+      motivo: 'usuario_inativo',
+      emailTentado: email,
+      userId: user.id,
+      dica: 'Conta desativada por um admin (User.isActive=false). Reative em /api/v1/users/:id (PATCH isActive:true) se for engano.',
+    });
+    return null;
+  }
+
   // Sucesso: zera a cota deste E-MAIL (não a do IP, ver comentário acima dos
   // limites) — login correto não deveria continuar "gastando" a mesma cota
   // que suas próprias tentativas erradas anteriores já gastaram.

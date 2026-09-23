@@ -17,4 +17,5 @@
 - [Convenção: alertas webhook do web (alerts.ts, Onda 3)](convention_web_alerts.md) — instância caindo/degradada, campanha parada, Evolution API com erro; dedupe só em evolution_api_error, nunca repassa mensagem crua.
 - [Convenção: sanidade A5 (enriquecimento) + remoção do RawCapture](convention_sanity_a5_enrichment.md) — pega leads "só com o nome", migrações offline, gotcha de lock do Prisma no Windows.
 - [Convenção: cadência do disparo — jitter.ts + G9b/G9c no send-guard (Fase 4.B)](convention_cadencia_jitter_pace_lock.md) — drawLogNormalJitterMs/shouldTriggerMicroPause/advanceSendPace, facts opcionais p/ não tocar apps/web.
+- [Convenção: CRUD de usuários + requireRole (Onda 4)](convention_admin_role_and_user_crud.md) — mecanismo único em apiRoute, User.isActive (nunca excluir, FK Restrict comprovado), nunca-zero-admin com FOR UPDATE, limitação de JWT não revogar na hora.
 - [Convenção: cadência LIGADA no envio manual (Fase 4.C)](convention_cadencia_ligada_envio_manual.md) — ignorePaceLock sempre true no serviço, incremento atômico, details[nextSendAllowedAt/resetsAt] p/ Lyra.

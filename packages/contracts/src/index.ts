@@ -12,3 +12,4 @@ export * from './whatsapp.contract.js';
 export * from './optout.contract.js';
 export * from './webhook.contract.js';
 export * from './dashboard.contract.js';
+export * from './user.contract.js';

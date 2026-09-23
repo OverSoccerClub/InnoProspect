@@ -21,6 +21,17 @@
 // (§6.8, ainda não implementado) de propósito — o freio estreia no envio
 // manual, com volume 1 e um humano olhando.
 //
+// Migração 20260923140000_evolution_servers (Fase 4.B) acrescenta, de forma
+// ADITIVA, `EvolutionServer` (multi-servidor Evolution API — hoje só
+// EVOLUTION_API_URL/EVOLUTION_API_KEY em variável de ambiente, um único
+// servidor possível) e `WhatsAppInstance.evolutionServerId` (NULLABLE — ver
+// comentário no campo sobre a janela de bootstrap). A credencial
+// (`apiKeyCiphertext`/`apiKeyIv`/`apiKeyAuthTag`/`apiKeyKeyVersion`) é
+// cifrada em repouso (AES-256-GCM) — implementação da cifra é do Vega, este
+// schema só fixa o FORMATO das colunas. Ver handoff do Cronos para a ordem
+// de bootstrap (migração → script operacional → confirmação → segunda
+// migração de NOT NULL, não incluída aqui de propósito).
+//
 // Convenções deste schema:
 //   - Todo id de entidade "operacional" usa cuid2 (@default(cuid(2))), conforme
 //     ARQUITETURA.md §4.0 ("IDs: cuid2 string").
@@ -212,6 +223,16 @@ model User {
   passwordHash String
   name         String
   role         UserRole @default(operator)
+  /// CRUD de usuários (Onda 4, Vega): "desativar", nunca excluir de verdade.
+  /// `SearchJob.createdById`/`WhatsAppInstance.createdById`/
+  /// `MessageTemplate.createdById`/`Campaign.createdById` são
+  /// `onDelete: Restrict` — apagar um User que já criou QUALQUER uma dessas
+  /// entidades estoura violação de FK (P2003) na hora, e isso é a MAIORIA
+  /// dos usuários reais, não uma exceção. `Lead.ownerId`/
+  /// `LeadActivity.actorUserId` são `SetNull`, mas apagar perderia a
+  /// autoria de auditoria (quem fez opt-out, quem mudou status). `isActive`
+  /// bloqueia login (`lib/auth.ts#authorizeCredentials`) sem apagar nada.
+  isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -223,6 +244,8 @@ model User {
   whatsAppInstancesCreated WhatsAppInstance[] @relation("WhatsAppInstanceCreatedBy")
   messageTemplatesCreated  MessageTemplate[]  @relation("MessageTemplateCreatedBy")
   campaignsCreated         Campaign[]         @relation("CampaignCreatedBy")
+  // Fase 4.B — dono lógico de quem cadastrou o servidor Evolution.
+  evolutionServersCreated  EvolutionServer[]  @relation("EvolutionServerCreatedBy")
 
   @@map("users")
 }
@@ -637,6 +660,86 @@ model ScraperHealthEvent {
 // (ARQUITETURA §3.1, §4.6-§4.8, §6.1-§6.7, §7)
 // ═══════════════════════════════════════════════════════════════════════
 
+// ── FASE 4.B — SERVIDORES EVOLUTION API (multi-servidor) ───────────────
+// Motivo: até esta migração, EVOLUTION_API_URL/EVOLUTION_API_KEY eram
+// variáveis de ambiente GLOBAIS (packages/messaging/src/client/
+// evolution-client.ts) — 1 processo só conseguia falar com 1 servidor
+// Evolution, não havia onde configurar um segundo. `EvolutionServer`
+// substitui a env var por linhas na tabela; `WhatsAppInstance` passa a
+// dizer EM QUAL servidor ela vive (campo `evolutionServerId` abaixo).
+
+/// Um deployment/servidor da Evolution API. 1 servidor hospeda N
+/// `WhatsAppInstance` (FK do lado de lá). Tabela pequena — mesma ordem de
+/// grandeza de `WhatsAppInstance` (poucos servidores físicos por dono).
+model EvolutionServer {
+  id   String @id @default(cuid(2))
+  name String
+
+  /// URL base do servidor (ex.: "https://evolution1.minhaempresa.com"),
+  /// SEM barra final — normalizar antes de gravar/comparar (mesma regra já
+  /// aplicada hoje em `evolutionConfigFromEnv`:
+  /// `baseUrl.replace(/\/+$/, '')`). `@unique` existe para impedir cadastrar
+  /// o MESMO servidor real duas vezes por engano — só funciona se quem
+  /// escreve JÁ normalizar antes (o banco não sabe que
+  /// "https://x.com" e "https://x.com/" são a mesma URL).
+  baseUrl String @unique
+
+  // ── CREDENCIAL CIFRADA EM REPOUSO (AES-256-GCM) ───────────────────────
+  // A CHAVE-MESTRE nunca entra no banco — fica em variável de ambiente (a
+  // implementação da cifra, incluindo o nome exato dessa env var, é do
+  // Vega; aqui só o FORMATO das colunas que a cifra precisa preencher).
+  // `Bytes` (não String/base64) por dois motivos: (1) mapeia para `bytea`
+  // nativo do Postgres, sem os ~33% de overhead que base64 teria numa
+  // String, sem ambiguidade de charset; (2) `crypto.createCipheriv`/
+  // `createDecipheriv` do Node já devolvem/aceitam Buffer — Vega não
+  // precisa encode/decode nenhum dos 3 campos abaixo, só repassar o Buffer
+  // que o Prisma Client já entrega/aceita. São 3 colunas SEPARADAS (não 1
+  // blob concatenado) para o formato ficar autoexplicativo, sem risco de
+  // errar um offset de bytes ao fatiar um blob único.
+  /// Texto cifrado da API key (saída de `cipher.update()` + `cipher.final()`).
+  apiKeyCiphertext Bytes
+  /// Vetor de inicialização (nonce) do GCM — convenção: 12 bytes (96 bits),
+  /// recomendado pelo NIST para GCM. ÚNICO por operação de cifra — nunca
+  /// reaproveitar o mesmo IV com a mesma chave (quebra a confidencialidade
+  /// do GCM); cada rotação de API key de um servidor gera um IV novo.
+  apiKeyIv Bytes
+  /// Tag de autenticação do GCM — convenção: 16 bytes. GCM é AEAD: esta tag
+  /// é quem garante que o ciphertext não foi adulterado. Decifrar sem
+  /// validar esta tag (ou com ela adulterada) tem que lançar erro, nunca
+  /// devolver texto parcial/incerto.
+  apiKeyAuthTag Bytes
+  /// Versão da CHAVE-MESTRE (não do algoritmo) usada para cifrar esta
+  /// linha especificamente — existe para permitir ROTACIONAR a chave-mestre
+  /// sem quebrar linhas já cifradas com a versão anterior: o ambiente pode
+  /// manter a chave antiga E a nova disponíveis por um tempo (nomes exatos
+  /// das env vars são decisão do Vega), decifrando cada linha com a chave
+  /// da SUA versão e recifrando com a mais nova numa rotina operacional —
+  /// mesma família do script de bootstrap descrito no handoff. Sem esta
+  /// coluna, rotacionar a chave-mestre exigiria decifrar/recifrar TODAS as
+  /// linhas no MESMO instante em que a env var trocasse, o que não dá para
+  /// fazer atômico entre processos (web e worker sobem em momentos
+  /// diferentes) sem indisponibilidade.
+  apiKeyKeyVersion Int @default(1)
+
+  /// Operador pode desativar um servidor sem apagar (preserva histórico e
+  /// as instâncias que ainda apontam para ele) — mesmo padrão de
+  /// `WhatsAppInstance.isActive`/`MessageTemplate.isActive`.
+  isActive Boolean @default(true)
+
+  createdById String
+  /// Restrict — mesmo padrão de `WhatsAppInstance.createdBy`.
+  createdBy   User   @relation("EvolutionServerCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  instances WhatsAppInstance[]
+
+  // Sem índice extra além do @unique(baseUrl) e da PK — tabela pequena,
+  // sem padrão de consulta que precise de outra coisa hoje.
+  @@map("evolution_servers")
+}
+
 /// Um número conectado via Evolution API. Carrega o estado de aquecimento
 /// (warmup) que sustenta o teto diário duro do worker (ARQUITETURA §6.2).
 model WhatsAppInstance {
@@ -649,12 +752,51 @@ model WhatsAppInstance {
 
   /// Segredo por instância GERADO POR NÓS, usado no path
   /// `/api/webhooks/evolution/:instanceKey` (ARQUITETURA §4.8) — não é o
-  /// nome da instância nem o `EVOLUTION_API_KEY` global. É o índice que o
-  /// webhook consulta a CADA evento recebido para achar a instância; se não
-  /// bater, a rota devolve 404 (nunca 401 — não confirmar existência).
+  /// nome da instância. É o índice que o webhook consulta a CADA evento
+  /// recebido para achar a instância; se não bater, a rota devolve 404
+  /// (nunca 401 — não confirmar existência). 🆕 Fase 4.B: depois que o
+  /// webhook migrar para validar o header `apikey` por servidor (em vez do
+  /// `EVOLUTION_API_KEY` global único de hoje), este campo passa a ser
+  /// também o primeiro salto do caminho `instanceKey → instância →
+  /// servidor → chave` — 1 SELECT indexado (`@unique` abaixo) seguido de um
+  /// join por PK em `evolutionServerId` (também indexado, PK sempre é),
+  /// sem nenhum scan: o hot path do webhook continua O(1) com múltiplos
+  /// servidores.
   instanceKey String @unique
 
   phoneNumber String?
+
+  // 🆕 Fase 4.B — em qual EvolutionServer esta instância vive.
+  /// NULLABLE só durante a JANELA de migração (ver cabeçalho da migração
+  /// `20260923140000_evolution_servers` e o comentário em `EvolutionServer`
+  /// acima). Toda linha de PRODUÇÃO já existente nasce com este campo NULO,
+  /// porque a tabela `evolution_servers` não existia quando ela foi criada
+  /// — não há como fazer backfill DENTRO desta migração porque o valor
+  /// certo (o servidor real que EVOLUTION_API_URL/EVOLUTION_API_KEY
+  /// apontam hoje) só existe fora do banco, na env var do processo. O
+  /// script operacional `packages/db/prisma/evolution-servers.ts` (comando
+  /// `bootstrap`, a ser escrito pelo Vega) roda DEPOIS desta migração,
+  /// cria o primeiro `EvolutionServer` a partir da env var, e faz
+  /// `UPDATE whatsapp_instances SET evolution_server_id = <id> WHERE
+  /// evolution_server_id IS NULL` — uma UPDATE só, sem risco de lock longo
+  /// (esta tabela tem dezenas de linhas). SÓ DEPOIS de confirmar
+  /// `SELECT count(*) FROM whatsapp_instances WHERE evolution_server_id
+  /// IS NULL` = 0 é seguro aplicar uma SEGUNDA migração
+  /// (`ALTER COLUMN "evolutionServerId" SET NOT NULL`) — não incluída
+  /// nesta entrega de propósito: aplicá-la antes do backfill quebraria
+  /// TODA instância existente (a migração falharia, ou pior, se alguém
+  /// forçar um DEFAULT fake só para passar o NOT NULL, criaria uma FK para
+  /// um servidor que não existe). Até a segunda migração rodar, TRATAR
+  /// COMO OBRIGATÓRIO na camada de aplicação (toda rota nova de criação de
+  /// instância deve exigir `evolutionServerId`, mesmo que o banco ainda
+  /// aceite NULL) — o NULL que resta é só das linhas legadas, nunca de uma
+  /// linha criada depois desta feature existir.
+  evolutionServerId String?
+  /// Restrict — mesmo padrão de `CampaignInstance.instance`/
+  /// `MessageTemplate.createdBy`: um servidor com QUALQUER instância viva
+  /// apontando para ele não pode ser apagado por baixo (mesma família do
+  /// "409 X_IN_USE" já usado em outras entidades referenciadas).
+  evolutionServer   EvolutionServer? @relation(fields: [evolutionServerId], references: [id], onDelete: Restrict)
 
   status WhatsAppInstanceStatus @default(disconnected)
 
@@ -763,6 +905,17 @@ model WhatsAppInstance {
   // desta tabela, tocada a CADA envio) sem nenhuma consulta que precise
   // dele. Revisitar só se este número deixar de ser "poucos números por
   // dono" — não previsto no roadmap.
+  //
+  // 🆕 Fase 4.B: `evolutionServerId` NÃO precisa de índice para o hot path
+  // do webhook (esse caminho entra por `instanceKey`, que já é `@unique` —
+  // o join até `EvolutionServer` daí em diante é por PK, sempre indexada,
+  // sem precisar de índice extra desta ponta). Este índice serve uma
+  // consulta DIFERENTE e certa de existir na tela de administração de
+  // servidores (Lyra): "quais instâncias este servidor hospeda" (GET
+  // /evolution-servers/:id) e a checagem "409 SERVER_IN_USE" antes de
+  // desativar/excluir um servidor — mesmo padrão de
+  // `CampaignInstance.@@index([instanceId])`.
+  @@index([evolutionServerId])
   @@map("whatsapp_instances")
 }
 

@@ -103,17 +103,15 @@ describe('createOptOut', () => {
 });
 
 describe('deleteOptOut', () => {
-  it('exige role=admin — operador comum recebe 403 e o registro NÃO é apagado', async () => {
-    resetFakeDb({ optOuts: [{ id: 'opt-1', phoneE164: '+5511987654321', source: 'manual', leadId: null, reason: null, createdAt: new Date() }] });
-
-    await expect(deleteOptOut('opt-1', { id: 'user-1', role: 'operator' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(getFakeDbState().optOuts).toHaveLength(1);
-  });
-
+  // A checagem `role=admin` saiu daqui para `requireRole: 'admin'` em
+  // `apiRoute` (Onda 4, `lib/api-handler.ts`) — mecanismo único de
+  // autorização, coberto em `apps/web/src/lib/api-handler.test.ts` (403 para
+  // operador, 200 para admin em cada rota protegida, incluindo esta). Este
+  // arquivo só testa o que sobrou: a lógica de negócio do próprio serviço.
   it('admin remove o opt-out e registra auditoria na timeline do lead vinculado', async () => {
     resetFakeDb({ optOuts: [{ id: 'opt-1', phoneE164: '+5511987654321', source: 'manual', leadId: 'lead-1', reason: null, createdAt: new Date() }] });
 
-    await deleteOptOut('opt-1', { id: 'admin-1', role: 'admin' });
+    await deleteOptOut('opt-1', 'admin-1');
 
     expect(getFakeDbState().optOuts).toHaveLength(0);
     expect(getFakeDbState().leadActivities[0]!.type).toBe('opt_out_removed');
@@ -121,7 +119,7 @@ describe('deleteOptOut', () => {
 
   it('id inexistente devolve 404', async () => {
     resetFakeDb();
-    await expect(deleteOptOut('nao-existe', { id: 'admin-1', role: 'admin' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(deleteOptOut('nao-existe', 'admin-1')).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 });
 

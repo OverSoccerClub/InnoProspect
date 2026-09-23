@@ -1,6 +1,7 @@
 /**
  * POST /api/v1/whatsapp/instances/:id/connect
  * POST /api/v1/whatsapp/instances/:id/disconnect — ARQUITETURA §4.6.
+ * `requireRole: 'admin'` (Onda 4) — ver `whatsapp/instances/route.ts`.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -11,6 +12,7 @@ import { connectWhatsAppInstance, disconnectWhatsAppInstance } from '@/lib/servi
 const paramsSchema = z.object({ id: idSchema, action: z.enum(['connect', 'disconnect']) });
 
 export const POST = apiRoute({
+  requireRole: 'admin',
   paramsSchema,
   handler: async ({ params }) => {
     if (params.action === 'connect') {

@@ -15,7 +15,7 @@ import type {
   ListOptOutsResponse,
   PublicOptOutResponse,
 } from '@inno/contracts';
-import { badRequest, conflict, forbidden, notFound } from '@/lib/api-handler';
+import { badRequest, conflict, notFound } from '@/lib/api-handler';
 import { skipPendingCampaignTargetsForPhone } from '@/lib/services/campaign-targets';
 import { logger } from '@/lib/logger';
 
@@ -111,12 +111,14 @@ export async function createOptOut(body: CreateOptOutBody, actorUserId: string):
   };
 }
 
-/** `DELETE /api/v1/optouts/:id` — exige `role=admin` (ARQUITETURA §6.7 item 5), gera auditoria. NÃO é operação de rotina. */
-export async function deleteOptOut(id: string, actor: { id: string; role: string }): Promise<void> {
-  if (actor.role !== 'admin') {
-    forbidden('Remover opt-out exige permissão de administrador.');
-  }
-
+/**
+ * `DELETE /api/v1/optouts/:id` — exige `role=admin` (ARQUITETURA §6.7 item 5),
+ * gera auditoria. NÃO é operação de rotina. A checagem de papel é feita pela
+ * rota (`requireRole: 'admin'` em `apiRoute`, `lib/api-handler.ts` — Onda 4)
+ * ANTES de chamar esta função; não repetida aqui de propósito (mecanismo
+ * único de autorização, ver comentário em `ApiRouteOptions.requireRole`).
+ */
+export async function deleteOptOut(id: string, actorUserId: string): Promise<void> {
   const optOut = await prisma.optOut.findUnique({ where: { id } });
   if (!optOut) notFound('Opt-out não encontrado.');
 
@@ -129,13 +131,13 @@ export async function deleteOptOut(id: string, actor: { id: string; role: string
           type: 'opt_out_removed',
           payload: { phoneE164: optOut.phoneE164 },
           actor: 'user',
-          actorUserId: actor.id,
+          actorUserId,
         },
       });
     }
   });
 
-  logger.info('opt-out removido', { optOutId: id, actorUserId: actor.id });
+  logger.info('opt-out removido', { optOutId: id, actorUserId });
 }
 
 /**

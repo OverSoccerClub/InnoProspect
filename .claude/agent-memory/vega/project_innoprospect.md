@@ -101,6 +101,23 @@ sempre); `pnpm typecheck` na raiz (via turbo) fica bloqueado por um lock de arqu
 rodando cada pacote individualmente. `ARQUITETURA.md §7.5`/`§2.6` ainda citam `RawCapture` — não
 editei (território da Nova), fica pendente.
 
+**Meu escopo entregue (CRUD de usuários + autorização por papel, Onda 4,
+2026-09-23 — sessão paralela à Fase 4.C, que estava em `messages.ts`/
+`whatsapp-instances.ts`, intocados aqui):** não existia NENHUMA rota de
+usuário, e `role` (`admin`|`operator`) só era verificado em UM lugar de todo
+o código. Entreguei `/api/v1/users/**` (novo, `@inno/contracts/user.contract.ts`)
+E o mecanismo que dá sentido a ele — `requireRole: 'admin'` centralizado em
+`apiRoute` (`lib/api-handler.ts`), aplicado também em `/api/v1/whatsapp/
+instances/**`, `POST /api/v1/scraper/queue/resume` e `DELETE /api/v1/optouts/
+:id` (migrado do `if` ad-hoc que existia só ali). `User.isActive` (soft-delete,
+nunca excluir — `SearchJob`/`WhatsAppInstance`/`MessageTemplate`/`Campaign.
+createdById` são `onDelete: Restrict`, comprovado antes de decidir) +
+autoproteção (não se auto-excluir/rebaixar) + nunca-zero-admin (`SELECT ...
+FOR UPDATE` dentro de transação, não validado contra Postgres real). Detalhe
+completo, o que não ficou provado, e a colisão de timestamp de migração com o
+Cronos (mesmo `schema.prisma`, mesma janela) em
+[[convention-admin-role-and-user-crud]].
+
 **Como aplicar:** antes de tocar em `apps/web/src/app/api/**`, `lib/api-handler.ts`, `lib/auth*.ts`,
 `middleware.ts` ou `apps/worker/**`, ler este arquivo + [[convention-api-routes-fase1]] +
 [[bug-nextauth-edge-prisma-split]] + [[bug-nextjs-workspace-ts-source-imports]] antes de reabrir

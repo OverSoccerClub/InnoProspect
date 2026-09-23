@@ -1,6 +1,6 @@
 /**
  * test/fake-db.ts — banco de dados falso, em memória, para os testes de
- * `lib/services/{campaign-targets,webhook,optouts}.ts`. Ver REVISAO-QA.md §3:
+ * `lib/services/{campaign-targets,webhook,optouts,users}.ts`. Ver REVISAO-QA.md §3:
  * "Fake objects manuais... já basta — zero dependência nova, rápido, e força
  * o teste a documentar exatamente o contrato usado."
  *
@@ -96,6 +96,18 @@ export interface FakeLeadActivity {
   createdAt: Date;
 }
 
+/** `lib/services/users.ts` — CRUD de usuários (Onda 4). */
+export interface FakeUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  isActive: boolean;
+  passwordHash: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface FakeDbSeed {
   leads?: FakeLead[];
   messages?: FakeMessage[];
@@ -103,6 +115,7 @@ export interface FakeDbSeed {
   campaigns?: FakeCampaign[];
   optOuts?: FakeOptOut[];
   whatsAppInstances?: FakeWhatsAppInstance[];
+  users?: FakeUser[];
 }
 
 const store = {
@@ -113,6 +126,7 @@ const store = {
   optOuts: [] as FakeOptOut[],
   whatsAppInstances: [] as FakeWhatsAppInstance[],
   leadActivities: [] as FakeLeadActivity[],
+  users: [] as FakeUser[],
 };
 
 let nextId = 1;
@@ -129,6 +143,7 @@ export function resetFakeDb(seed: FakeDbSeed = {}): void {
   store.optOuts = seed.optOuts ? [...seed.optOuts] : [];
   store.whatsAppInstances = seed.whatsAppInstances ? [...seed.whatsAppInstances] : [];
   store.leadActivities = [];
+  store.users = seed.users ? [...seed.users] : [];
   nextId = 1;
 }
 
@@ -169,6 +184,15 @@ export const fakePrismaClient = {
     }
     return Promise.all(arg as Promise<unknown>[]);
   }),
+
+  // Stub genérico — o único chamador hoje é `lib/services/users.ts`
+  // (`lockActiveAdminsAndCount`, `SELECT ... FOR UPDATE` para travar as
+  // linhas de admin ativo). Este fake NÃO simula lock/concorrência real
+  // (nenhum Postgres por trás) — só evita que o `await tx.$queryRaw` quebre
+  // por "não é função" no teste. A correção da corrida em si depende do
+  // comportamento real do Postgres, não verificável aqui (ver comentário
+  // longo em `users.ts`).
+  $queryRaw: vi.fn(async () => []),
 
   lead: {
     findFirst: vi.fn(async ({ where, orderBy }: { where?: Where; orderBy?: Record<string, string> } = {}) => {
@@ -331,6 +355,74 @@ export const fakePrismaClient = {
       const created: FakeLeadActivity = { id: genId('activity'), createdAt: new Date(), actorUserId: null, payload: null, ...data };
       store.leadActivities.push(created);
       return { ...created };
+    }),
+  },
+
+  user: {
+    findUnique: vi.fn(async ({ where }: { where: { id?: string; email?: string } }) => {
+      if (where.email !== undefined) return store.users.find((u) => u.email === where.email) ?? null;
+      return store.users.find((u) => u.id === where.id) ?? null;
+    }),
+    findMany: vi.fn(
+      async ({
+        where,
+        cursor,
+        skip,
+        take,
+      }: {
+        where?: { role?: string; isActive?: boolean; OR?: Array<Record<string, unknown>> };
+        orderBy?: unknown;
+        cursor?: { id: string };
+        skip?: number;
+        take?: number;
+      } = {}) => {
+        let rows = [...store.users].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        if (where?.role !== undefined) rows = rows.filter((u) => u.role === where.role);
+        if (where?.isActive !== undefined) rows = rows.filter((u) => u.isActive === where.isActive);
+        if (where?.OR) {
+          // Só o suficiente para o filtro `q` de `listUsers`: cada item de
+          // `OR` é `{ campo: { contains: string } }` — casa se QUALQUER
+          // campo contiver o termo (case-insensitive), reproduzindo
+          // `mode: 'insensitive'` do Prisma real.
+          rows = rows.filter((u) =>
+            (where.OR ?? []).some((cond) =>
+              Object.entries(cond).some(([field, matcher]) => {
+                const value = (u as unknown as Record<string, string>)[field];
+                const needle = (matcher as { contains?: string }).contains;
+                return typeof value === 'string' && typeof needle === 'string' && value.toLowerCase().includes(needle.toLowerCase());
+              }),
+            ),
+          );
+        }
+        if (cursor) {
+          const idx = rows.findIndex((u) => u.id === cursor.id);
+          rows = idx >= 0 ? rows.slice(idx + (skip ?? 0)) : rows;
+        }
+        if (take !== undefined) rows = rows.slice(0, take);
+        return rows;
+      },
+    ),
+    count: vi.fn(async ({ where }: { where?: { role?: string; isActive?: boolean } } = {}) => {
+      let rows = store.users;
+      if (where?.role !== undefined) rows = rows.filter((u) => u.role === where.role);
+      if (where?.isActive !== undefined) rows = rows.filter((u) => u.isActive === where.isActive);
+      return rows.length;
+    }),
+    create: vi.fn(async ({ data }: { data: Partial<FakeUser> & { email: string; passwordHash: string; name: string } }) => {
+      if (store.users.some((u) => u.email === data.email)) throwUniqueViolation();
+      const now = new Date();
+      const created: FakeUser = { id: genId('user'), role: 'operator', isActive: true, createdAt: now, updatedAt: now, ...data };
+      store.users.push(created);
+      return { ...created };
+    }),
+    update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+      const user = store.users.find((u) => u.id === where.id);
+      if (!user) throwNotFoundInFake('user');
+      if (typeof data.email === 'string' && store.users.some((u) => u.id !== where.id && u.email === data.email)) {
+        throwUniqueViolation();
+      }
+      Object.assign(user, data, { updatedAt: new Date() });
+      return { ...user };
     }),
   },
 };

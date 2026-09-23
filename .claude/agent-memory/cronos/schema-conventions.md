@@ -72,3 +72,16 @@ seguintes (Fase 2/3/4, `20260801130000_add_messaging_and_campaigns`):
   também para a query `optedOut` do dashboard, mas essa query não filtra por
   `createdAt` — só `phoneE164`, já coberto por índice existente. Índice não
   criado, para não pagar custo de escrita por uma garantia que já existe).
+- **Segredo cifrado em repouso vira `Bytes` (bytea), nunca `String` base64**
+  — 1 coluna por parte do formato (ciphertext/iv/authTag), nunca um blob
+  concatenado. Ver [[evolution-server-multi-servidor]]. Implementação da
+  cifra não é minha (é de quem consome o segredo, ex. Vega) — meu escopo é
+  só o formato das colunas.
+- **Diff de migração: sempre reconfirmar o snapshot "antes" contra o
+  arquivo VIVO no disco antes de gerar o diff**, não só contra o que eu
+  tinha lido no início da sessão — outra sessão pode editar
+  `schema.prisma` no meio do caminho (aconteceu em 2026-09-23: sessão do
+  Vega acrescentou `User.isActive` enquanto eu trabalhava). Se o snapshot
+  "antes" estiver desatualizado, o diff gerado inclui a mudança de outra
+  pessoa dentro da MINHA migração — sempre `git diff`/reler o arquivo atual
+  logo antes de tirar o snapshot "antes" definitivo.

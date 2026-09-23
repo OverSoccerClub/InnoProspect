@@ -1,5 +1,6 @@
 /**
  * GET /api/v1/whatsapp/instances/:id, DELETE /api/v1/whatsapp/instances/:id — ARQUITETURA §4.6.
+ * `requireRole: 'admin'` (Onda 4) — ver `whatsapp/instances/route.ts`.
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -10,6 +11,7 @@ import { deleteWhatsAppInstance, getWhatsAppInstanceDetail } from '@/lib/service
 const paramsSchema = z.object({ id: idSchema });
 
 export const GET = apiRoute({
+  requireRole: 'admin',
   paramsSchema,
   handler: async ({ params }) => {
     const result = await getWhatsAppInstanceDetail(params.id);
@@ -18,6 +20,7 @@ export const GET = apiRoute({
 });
 
 export const DELETE = apiRoute({
+  requireRole: 'admin',
   paramsSchema,
   handler: async ({ params }) => {
     await deleteWhatsAppInstance(params.id);
