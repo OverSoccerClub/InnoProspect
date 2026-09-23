@@ -6,7 +6,7 @@
  * ações que precisam mesmo de rede, como `connect`/QR, propagam `502
  * UPSTREAM_ERROR`).
  */
-import { MessagingError, type ConnectResult } from '@inno/messaging';
+import { MessagingError, type ConnectionState, type ConnectResult } from '@inno/messaging';
 import { Prisma, prisma, type WhatsAppInstance } from '@inno/db';
 import { deriveInstanceHealth, effectiveDailyLimit, isWarmupDayWarm } from '@inno/core';
 import type {
@@ -14,6 +14,7 @@ import type {
   CreateWhatsAppInstanceBody,
   CreateWhatsAppInstanceResponse,
   DisconnectInstanceResponse,
+  GetInstanceStatusResponse,
   GetQrCodeResponse,
   ListWhatsAppInstancesResponse,
   WhatsAppInstanceDetail,
@@ -197,13 +198,24 @@ export async function getWhatsAppInstanceDetail(id: string): Promise<WhatsAppIns
 }
 
 /**
- * `GET /whatsapp/instances/:id/qr` — chama a Evolution AO VIVO a cada
- * requisição (o QR expira em ~60s, ARQUITETURA §4.6, e Lyra faz poll de 2s
- * enquanto o modal está aberto). Decisão do Vega: em vez de cachear o QR
- * recebido via webhook `qrcode.updated` em Redis (sugestão de infra da
- * ARQUITETURA), esta rota busca direto — funcionalmente equivalente (QR
- * sempre fresco a cada poll) e evita introduzir um cliente Redis genérico em
- * `apps/web` só para isso. Ver PENDÊNCIAS no handoff.
+ * `GET /whatsapp/instances/:id/qr` — chama `EvolutionClient.connect` AO VIVO
+ * a cada requisição (`GET /instance/connect/:name`), que **(re)inicia o
+ * pareamento e emite um QR novo a cada chamada**. Isto é intencional só na
+ * cadência certa: buscar UMA vez ao abrir o modal, e de novo quando o QR
+ * atual vence (`expiresInSeconds`) ou sob pedido explícito do operador.
+ *
+ * ⚠️ BUG REAL DE PRODUÇÃO (2026-09-23), causa raiz: a decisão anterior deste
+ * comentário era "buscar direto em vez de cachear o QR do webhook — é
+ * funcionalmente equivalente". NÃO é: a tela fazia poll de 2 em 2 SEGUNDOS
+ * neste endpoint (pensando em atualizar o estado de conexão), e cada poll
+ * invalidava o QR anterior antes que alguém conseguisse abrir o WhatsApp e
+ * escanear. Ninguém conseguia conectar. A correção separou as duas
+ * responsabilidades: `getWhatsAppInstanceStatus` (abaixo) é a rota de
+ * leitura pura para sondar com frequência; ESTA rota só é chamada pelo
+ * controlador de QR do modal (`apps/web/src/lib/whatsapp/
+ * qr-connection-controller.ts`) na cadência acima. Não adicionar um poll de
+ * intervalo curto e fixo contra este endpoint de novo — é exatamente como o
+ * bug nasceu.
  */
 export async function getWhatsAppInstanceQr(id: string): Promise<GetQrCodeResponse> {
   const instance = await findInstanceOrNotFound(id);
@@ -235,6 +247,52 @@ export async function getWhatsAppInstanceQr(id: string): Promise<GetQrCodeRespon
     expiresInSeconds: 60,
     ...(result.qr.pairingCode ? { pairingCode: result.qr.pairingCode } : {}),
   };
+}
+
+/**
+ * `GET /whatsapp/instances/:id/status` — leitura PURA do estado de conexão
+ * na Evolution (`EvolutionClient.getConnectionState`, `GET
+ * /instance/connectionState/:name`): nunca reinicia o pareamento nem emite
+ * QR novo, por isso É SEGURO sondar com frequência (o modal de QR sonda de
+ * 2 em 2s enquanto está aberto, só para saber a hora de fechar). Ver a nota
+ * de bug em `getWhatsAppInstanceQr` acima para o porquê desta rota existir
+ * separada daquela.
+ *
+ * Só grava no banco na transição PARA `connected` (mesmo gatilho que
+ * `getWhatsAppInstanceQr` já tinha) — qualquer outra leitura (`connecting`/
+ * `disconnected`) devolve o `status` que já estava no banco, sem
+ * sobrescrever. Motivo: o estado bruto da Evolution só distingue 3 valores
+ * (`connected`/`connecting`/`disconnected`), enquanto o nosso `status` tem
+ * mais nuance (`qr_pending` vs `connecting` vs `banned`); e o `disconnected`
+ * observado aqui não deve dar kill switch nas campanhas por conta própria —
+ * isso é responsabilidade exclusiva do webhook `connection.update`
+ * (`lib/services/webhook.ts#handleConnectionUpdate`), que faz a transação
+ * completa junto com `haltCampaignsSoleInstanceDisconnected`. Replicar esse
+ * efeito aqui, fora dessa transação, arriscaria desincronizar banco e
+ * campanhas.
+ */
+export async function getWhatsAppInstanceStatus(id: string): Promise<GetInstanceStatusResponse> {
+  const instance = await findInstanceOrNotFound(id);
+
+  let state: ConnectionState;
+  try {
+    const client = await getEvolutionClientForInstance(instance);
+    state = await client.getConnectionState(instance.evolutionInstanceName);
+  } catch (err) {
+    rethrowAsUpstream(err, 'consultar o estado da conexão');
+  }
+
+  if (state === 'connected') {
+    if (instance.status !== 'connected') {
+      await prisma.whatsAppInstance.update({
+        where: { id },
+        data: { status: 'connected', lastConnectionAt: new Date() },
+      });
+    }
+    return { status: 'connected' };
+  }
+
+  return { status: instance.status };
 }
 
 /** `POST /whatsapp/instances/:id/connect` — resposta é sempre `status:'qr_pending'` por CONTRATO (`connectInstanceResponseSchema`, `@inno/contracts`): é um "iniciei o pareamento", o estado real é confirmado via `GET .../qr` ou `GET .../:id` (polling). */

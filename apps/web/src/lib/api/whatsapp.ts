@@ -6,6 +6,7 @@ import {
   mockDeleteInstance,
   mockDisconnectInstance,
   mockGetInstanceQr,
+  mockGetInstanceStatus,
   mockListInstances,
 } from '@/mocks/whatsapp';
 import { mockDelay } from '@/mocks/utils';
@@ -16,6 +17,7 @@ import type {
   DisconnectInstanceResponse,
   InstanceListItem,
   InstanceQrResponse,
+  InstanceStatusResponse,
 } from '@/types/whatsapp';
 
 export async function listInstances(): Promise<InstanceListItem[]> {
@@ -41,6 +43,21 @@ export async function getInstanceQr(id: string): Promise<InstanceQrResponse> {
     return mockGetInstanceQr(id);
   }
   return apiGet<InstanceQrResponse>(`/api/v1/whatsapp/instances/${id}/qr`);
+}
+
+/**
+ * Leitura pura do estado de conexão — nunca (re)gera QR. Ver
+ * `getInstanceQr` abaixo e a nota de bug em
+ * `apps/web/src/lib/services/whatsapp-instances.ts#getWhatsAppInstanceQr`
+ * (2026-09-23): é ESTA função que deve ser sondada em intervalo curto e
+ * fixo (2s), nunca `getInstanceQr`.
+ */
+export async function getInstanceStatus(id: string): Promise<InstanceStatusResponse> {
+  if (USE_MOCKS) {
+    await mockDelay(100);
+    return mockGetInstanceStatus(id);
+  }
+  return apiGet<InstanceStatusResponse>(`/api/v1/whatsapp/instances/${id}/status`);
 }
 
 export async function connectInstance(id: string): Promise<ConnectInstanceResponse> {

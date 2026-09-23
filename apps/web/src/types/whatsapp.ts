@@ -8,6 +8,7 @@ export type {
   CreateWhatsAppInstanceBody as CreateInstanceRequest,
   CreateWhatsAppInstanceResponse as CreateInstanceResponse,
   GetQrCodeResponse as InstanceQrResponse,
+  GetInstanceStatusResponse as InstanceStatusResponse,
   ConnectInstanceResponse,
   DisconnectInstanceResponse,
 } from '@inno/contracts';

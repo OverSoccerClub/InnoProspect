@@ -99,6 +99,25 @@ export const getQrCodeResponseSchema = z.discriminatedUnion('status', [
 export type GetQrCodeResponse = z.infer<typeof getQrCodeResponseSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /api/v1/whatsapp/instances/:id/status
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Leitura PURA do estado de conexão na Evolution
+ * (`EvolutionClient.getConnectionState`, `GET /instance/connectionState/:name`)
+ * — nunca (re)inicia o pareamento nem emite QR novo. Existe separado de
+ * `GetQrCodeResponse` porque aquele endpoint SEMPRE regenera o QR a cada
+ * chamada (bug real de produção, 2026-09-23: a tela fazia poll de 2s em
+ * `.../qr` e invalidava o QR antes de dar tempo de escanear — ver
+ * `apps/web/src/lib/services/whatsapp-instances.ts#getWhatsAppInstanceStatus`).
+ * Este é o endpoint seguro para sondar com frequência.
+ */
+export const getInstanceStatusResponseSchema = z.object({
+  status: whatsAppInstanceStatusSchema,
+});
+export type GetInstanceStatusResponse = z.infer<typeof getInstanceStatusResponseSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────
 // GET /api/v1/whatsapp/instances/:id
 // ─────────────────────────────────────────────────────────────────────────
 

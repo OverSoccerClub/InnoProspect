@@ -21,6 +21,7 @@ vi.mock('@/lib/services/whatsapp-instances', () => ({
   getWhatsAppInstanceDetail: vi.fn(async () => ({ id: 'inst-1' })),
   deleteWhatsAppInstance: vi.fn(async () => undefined),
   getWhatsAppInstanceQr: vi.fn(async () => ({ qrCode: 'data:image/png;base64,x' })),
+  getWhatsAppInstanceStatus: vi.fn(async () => ({ status: 'qr_pending' })),
   connectWhatsAppInstance: vi.fn(async () => ({ id: 'inst-1', status: 'qr_pending' })),
   disconnectWhatsAppInstance: vi.fn(async () => ({ id: 'inst-1', status: 'disconnected' })),
 }));
@@ -176,6 +177,11 @@ describe('rotas admin-only — operador 403 / admin passa', () => {
   it('GET /api/v1/whatsapp/instances/:id/qr', async () => {
     const { GET } = await import('./whatsapp/instances/[id]/qr/route');
     await expectAdminOnly(GET, () => jsonReq('https://x.local/api/v1/whatsapp/instances/i1/qr', 'GET'), { id: 'ckzz1234567890abcdefghijk' }, 200);
+  });
+
+  it('GET /api/v1/whatsapp/instances/:id/status', async () => {
+    const { GET } = await import('./whatsapp/instances/[id]/status/route');
+    await expectAdminOnly(GET, () => jsonReq('https://x.local/api/v1/whatsapp/instances/i1/status', 'GET'), { id: 'ckzz1234567890abcdefghijk' }, 200);
   });
 
   it('POST /api/v1/whatsapp/instances/:id/connect', async () => {

@@ -362,6 +362,7 @@ InnoProspect/
 │   │   │   │   │   │   ├── whatsapp/instances/route.ts
 │   │   │   │   │   │   ├── whatsapp/instances/[id]/route.ts
 │   │   │   │   │   │   ├── whatsapp/instances/[id]/qr/route.ts
+│   │   │   │   │   │   ├── whatsapp/instances/[id]/status/route.ts   # leitura pura, seguro sondar
 │   │   │   │   │   │   ├── whatsapp/instances/[id]/[action]/route.ts  # connect|disconnect
 │   │   │   │   │   │   ├── optouts/route.ts
 │   │   │   │   │   │   ├── locations/ufs/route.ts
@@ -1211,8 +1212,19 @@ Fechada. Todo nome em `MAIÚSCULA_COM_UNDERSCORE` abaixo é valor de `error.reas
 `200` → `{ status: 'qr_pending', qrCodeBase64: string, expiresInSeconds: number, pairingCode?: string }`
 ou `{ status: 'connected', qrCodeBase64: null }`.
 `502 UPSTREAM_ERROR` se a Evolution API não responder.
-> **Lyra:** poll de 2s neste endpoint enquanto o modal do QR estiver aberto; o QR expira em ~60s e o
-> endpoint devolve um novo automaticamente.
+> ⚠️ Este endpoint chama `EvolutionClient.connect` — **SEMPRE (re)inicia o pareamento e emite um QR
+> novo a cada chamada**. Buscar UMA vez ao abrir o modal, e de novo só quando o `expiresInSeconds`
+> anterior vencer, ou sob pedido manual do operador. **Bug real de produção (2026-09-23):** a versão
+> anterior desta nota dizia para a Lyra fazer poll de 2s aqui — isso invalidava o QR antes de dar tempo
+> de escanear e ninguém conseguia conectar. Para saber a hora de fechar o modal, sonde
+> `GET .../status` abaixo, não este.
+
+#### `GET /api/v1/whatsapp/instances/:id/status`
+`200` → `{ status: 'disconnected'|'connecting'|'qr_pending'|'connected'|'banned' }`.
+`502 UPSTREAM_ERROR` se a Evolution API não responder.
+> Leitura PURA (`EvolutionClient.getConnectionState`) — nunca reinicia o pareamento nem emite QR novo.
+> **Lyra:** poll de 2s neste endpoint enquanto o modal do QR estiver aberto, só para detectar
+> `status: 'connected'` e fechar o modal. Nunca chamar `.../qr` neste intervalo.
 
 #### `GET /api/v1/whatsapp/instances/:id` → objeto completo + `history: InstanceDailyStat[]` (30 dias)
 

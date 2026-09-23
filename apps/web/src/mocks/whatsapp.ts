@@ -6,6 +6,7 @@ import type {
   DisconnectInstanceResponse,
   InstanceListItem,
   InstanceQrResponse,
+  InstanceStatusResponse,
 } from '@/types/whatsapp';
 import { mockNoteInstanceCreatedOnServer, mockNoteInstanceRemovedFromServer, mockRequireActiveEvolutionServer } from './evolution-servers';
 import { mockNotFound } from './utils';
@@ -194,6 +195,17 @@ export function mockGetInstanceQr(id: string): InstanceQrResponse {
     qrCodeBase64: PLACEHOLDER_PNG,
     expiresInSeconds: Math.max(1, Math.round(remainingMs / 1000)),
   };
+}
+
+/**
+ * Espelha `getWhatsAppInstanceStatus` real: leitura PURA de `instance.status`
+ * — nunca chama nada equivalente a `connect`/emite QR. `mockGetInstanceQr`
+ * já é quem muta `instance.status` ao simular o "escaneio"; esta função só
+ * lê o que já está lá, exatamente como a rota de verdade.
+ */
+export function mockGetInstanceStatus(id: string): InstanceStatusResponse {
+  const instance = findInstance(id);
+  return { status: instance.status };
 }
 
 export function mockConnectInstance(id: string): ConnectInstanceResponse {

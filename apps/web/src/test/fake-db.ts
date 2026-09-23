@@ -87,6 +87,8 @@ export interface FakeWhatsAppInstance {
   /** 🆕 Fase 4.B — `lib/services/webhook.ts#resolveExpectedWebhookApiKey`/`lib/services/evolution-servers.ts`. Opcional/`null` = comportamento pré-Fase-4.B (nenhum teste existente antes desta rodada seta este campo). */
   evolutionServerId?: string | null;
   isActive?: boolean;
+  /** 🆕 correção do bug do QR (2026-09-23) — `lib/services/whatsapp-instances.test.ts#getWhatsAppInstanceQr/getWhatsAppInstanceStatus`. Opcional: nenhum teste anterior a esta rodada precisava do nome da instância na Evolution. */
+  evolutionInstanceName?: string;
 }
 
 /** 🆕 Fase 4.B — `lib/services/evolution-servers.ts` (CRUD de servidores Evolution API) e `lib/services/webhook.ts` (resolução do apikey esperado por instância). */

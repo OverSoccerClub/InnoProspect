@@ -273,9 +273,11 @@ export async function processEvolutionWebhookEvent(instance: WhatsAppInstance, r
     case 'qr_updated':
       // Decisão do Vega: não cacheamos o QR recebido aqui (a ARQUITETURA
       // sugere Redis com TTL 90s) — `GET /whatsapp/instances/:id/qr` busca
-      // direto na Evolution a cada poll, o que é funcionalmente equivalente
-      // sem precisar de um cliente Redis de cache genérico em `apps/web`. Ver
-      // `lib/services/whatsapp-instances.ts#getWhatsAppInstanceQr`.
+      // direto na Evolution quando o modal precisa de um QR novo, sem
+      // precisar de um cliente Redis de cache genérico em `apps/web`. Ver a
+      // nota de bug em `lib/services/whatsapp-instances.ts#getWhatsAppInstanceQr`
+      // (2026-09-23) — a cadência de quando buscar é o que importa, não
+      // onde o QR mora.
       return;
     case 'ignored':
       logger.info('webhook evolution: evento ignorado', { instanceId: instance.id, reason: event.reason });

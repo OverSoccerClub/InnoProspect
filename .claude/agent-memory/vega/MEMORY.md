@@ -21,3 +21,4 @@
 - [Convenção: cadência LIGADA no envio manual (Fase 4.C)](convention_cadencia_ligada_envio_manual.md) — ignorePaceLock sempre true no serviço, incremento atômico, details[nextSendAllowedAt/resetsAt] p/ Lyra.
 - [Convenção: servidores Evolution multi-servidor (Fase 4.B)](convention_evolution_servers_multiserver.md) — cifra AES-256-GCM, CRUD admin, teste de conexão, bootstrap, webhook por servidor, gotcha Buffer→Uint8Array<ArrayBuffer>, pendência que quebra 1 arquivo da Lyra.
 - [Bug: nextSendAllowedAt com SET cego recuava sob concorrência](bug_pace_lock_blind_set_regression.md) — achado do Órion; correção via UPDATE condicional no banco (monotonicidade), não em JS.
+- [Bug: poll de 2s em GET .../qr regenerava o QR e ninguém conseguia escanear](bug_qr_poll_invalidava_codigo.md) — separar status (puro, sonda 2s) de qr (connect, só no vencimento/manual); controller isolado sem React.
