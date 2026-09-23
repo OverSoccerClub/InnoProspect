@@ -26,6 +26,7 @@ export type {
   QrCode,
   CreateInstanceInput,
   CreateInstanceResult,
+  FetchedInstanceInfo,
   ConnectResult,
   SendTextInput,
   SendTextResult,

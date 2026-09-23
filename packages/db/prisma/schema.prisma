@@ -798,6 +798,40 @@ model WhatsAppInstance {
   /// "409 X_IN_USE" já usado em outras entidades referenciadas).
   evolutionServer   EvolutionServer? @relation(fields: [evolutionServerId], references: [id], onDelete: Restrict)
 
+  // ── 🆕 Correção do incidente 2026-09-23 — CREDENCIAL DE WEBHOOK PRÓPRIA
+  // DA INSTÂNCIA ────────────────────────────────────────────────────────
+  // Achado do dono no painel da Evolution: na v2, cada instância tem a SUA
+  // PRÓPRIA `apikey` (mascarada no card da instância), distinta da chave
+  // GLOBAL do servidor (`EvolutionServer.apiKey*` acima). O webhook
+  // `POST /api/webhooks/evolution/:instanceKey` só validava contra a chave
+  // global — se a Evolution assina o webhook com a chave DA INSTÂNCIA
+  // (não confirmado com certeza qual delas a v2.3.7 usa, ver
+  // `apps/web/src/lib/services/webhook.ts#resolveExpectedWebhookApiKeys`),
+  // TODO evento voltava rejeitado em silêncio (404 fail-closed), inclusive
+  // status de entrega e opt-out por resposta. Estas 4 colunas guardam essa
+  // credencial cifrada — MESMO formato/cifra de `EvolutionServer.apiKey*`
+  // (AES-256-GCM, `lib/evolution-server-crypto.ts`, reusado, não duplicado).
+  // NULLABLE de propósito, em dois cenários que NUNCA podem bloquear o
+  // webhook por falta desta credencial extra:
+  //   1. Instância criada ANTES desta migração (inclusive a já pareada do
+  //      dono) — preenchida por comando operacional
+  //      (`apps/web/scripts/sync-instance-api-keys.ts`, lê
+  //      `GET /instance/fetchInstances`, NUNCA reconecta/gera QR novo).
+  //   2. `POST /instance/create` não devolveu nenhum campo reconhecido
+  //      (parsing defensivo, `packages/messaging/src/client/wire.ts`) —
+  //      capturado como `null`, instância criada normalmente mesmo assim.
+  // Em QUALQUER um dos dois casos, o webhook continua aceito pela chave do
+  // SERVIDOR/env (fallback pré-existente) — estas colunas são um segundo
+  // candidato ACEITO, nunca uma segunda exigência.
+  instanceApiKeyCiphertext Bytes?
+  instanceApiKeyIv         Bytes?
+  instanceApiKeyAuthTag    Bytes?
+  /// Mesma semântica de `EvolutionServer.apiKeyKeyVersion` (versão da
+  /// CHAVE-MESTRE, não do algoritmo) — SEM `@default(1)`: um valor default
+  /// aqui sugeriria falsamente que toda linha tem credencial cifrada; a
+  /// leitura correta é sempre "as 4 colunas presentes juntas, ou nenhuma".
+  instanceApiKeyKeyVersion Int?
+
   status WhatsAppInstanceStatus @default(disconnected)
 
   /// Setado pelo health-check.job quando taxa de falha/resposta indica

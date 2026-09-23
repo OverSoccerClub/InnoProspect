@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle2, MessageSquare, PlusCircle, ShieldOff, Tag 
 import { EmptyState } from '@/components/common/empty-state';
 import { formatDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { LEAD_STATUS_LABEL, type LeadActivity, type LeadActivityType } from '@/types/lead';
+import { isOptOutActivity, LEAD_STATUS_LABEL, type LeadActivity, type LeadActivityType } from '@/types/lead';
 
 const ICON: Record<LeadActivityType, typeof CheckCircle2> = {
   created: PlusCircle,
@@ -38,10 +38,12 @@ const LABEL: Record<LeadActivityType, string> = {
  * página que não abre.
  */
 function iconePara(type: string): typeof CheckCircle2 {
+  if (isOptOutActivity(type)) return ICON.opted_out;
   return ICON[type as LeadActivityType] ?? CheckCircle2;
 }
 
 function rotuloPara(type: string): string {
+  if (isOptOutActivity(type)) return LABEL.opted_out;
   return LABEL[type as LeadActivityType] ?? type.replace(/_/g, ' ');
 }
 

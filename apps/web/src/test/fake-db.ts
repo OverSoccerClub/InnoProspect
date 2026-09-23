@@ -84,11 +84,21 @@ export interface FakeWhatsAppInstance {
   lastConnectionAt: Date | null;
   lastErrorAt: Date | null;
   lastErrorMessage: string | null;
-  /** 🆕 Fase 4.B — `lib/services/webhook.ts#resolveExpectedWebhookApiKey`/`lib/services/evolution-servers.ts`. Opcional/`null` = comportamento pré-Fase-4.B (nenhum teste existente antes desta rodada seta este campo). */
+  /** 🆕 Fase 4.B — `lib/services/webhook.ts#resolveExpectedWebhookApiKeys`/`lib/services/evolution-servers.ts`. Opcional/`null` = comportamento pré-Fase-4.B (nenhum teste existente antes desta rodada seta este campo). */
   evolutionServerId?: string | null;
   isActive?: boolean;
   /** 🆕 correção do bug do QR (2026-09-23) — `lib/services/whatsapp-instances.test.ts#getWhatsAppInstanceQr/getWhatsAppInstanceStatus`. Opcional: nenhum teste anterior a esta rodada precisava do nome da instância na Evolution. */
   evolutionInstanceName?: string;
+  /** 🆕 correção do webhook mudo (2026-09-23) — `lib/services/webhook.ts#resolveExpectedWebhookApiKeys` (credencial PRÓPRIA da instância, cifrada) e `lib/services/whatsapp-instances.ts#createWhatsAppInstance` (quem grava). `null`/ausente = instância legada ou captura falhou — mesmo comportamento de antes desta correção (cai no fallback do servidor). */
+  instanceApiKeyCiphertext?: Uint8Array | null;
+  instanceApiKeyIv?: Uint8Array | null;
+  instanceApiKeyAuthTag?: Uint8Array | null;
+  instanceApiKeyKeyVersion?: number | null;
+  /** Campos usados por `createWhatsAppInstance` (`lib/services/whatsapp-instances.ts`) — opcionais: nenhum teste antes desta rodada exercitava a CRIAÇÃO de instância no fake db. */
+  name?: string;
+  instanceKey?: string;
+  createdById?: string;
+  warmupStartedAt?: Date | null;
 }
 
 /** 🆕 Fase 4.B — `lib/services/evolution-servers.ts` (CRUD de servidores Evolution API) e `lib/services/webhook.ts` (resolução do apikey esperado por instância). */
@@ -366,8 +376,34 @@ export const fakePrismaClient = {
 
   whatsAppInstance: {
     findUnique: vi.fn(async ({ where }: { where: { id?: string; instanceKey?: string } }) => {
-      if (where.instanceKey !== undefined) return store.whatsAppInstances.find((i) => (i as unknown as { instanceKey?: string }).instanceKey === where.instanceKey) ?? null;
+      if (where.instanceKey !== undefined) return store.whatsAppInstances.find((i) => i.instanceKey === where.instanceKey) ?? null;
       return store.whatsAppInstances.find((i) => i.id === where.id) ?? null;
+    }),
+    findMany: vi.fn(async ({ where }: { where?: { evolutionServerId?: string } } = {}) => {
+      let rows = store.whatsAppInstances;
+      if (where?.evolutionServerId !== undefined) rows = rows.filter((i) => i.evolutionServerId === where.evolutionServerId);
+      return rows.map((i) => ({ ...i }));
+    }),
+    findFirst: vi.fn(async ({ where }: { where?: { evolutionServerId?: string; evolutionInstanceName?: string } } = {}) => {
+      let rows = store.whatsAppInstances;
+      if (where?.evolutionServerId !== undefined) rows = rows.filter((i) => i.evolutionServerId === where.evolutionServerId);
+      if (where?.evolutionInstanceName !== undefined) rows = rows.filter((i) => i.evolutionInstanceName === where.evolutionInstanceName);
+      return rows[0] ? { ...rows[0] } : null;
+    }),
+    create: vi.fn(async ({ data }: { data: Partial<FakeWhatsAppInstance> & Record<string, unknown> }) => {
+      const created: FakeWhatsAppInstance = {
+        id: genId('instance'),
+        status: 'qr_pending',
+        isDegraded: false,
+        consecutiveFailures: 0,
+        lastConnectionAt: null,
+        lastErrorAt: null,
+        lastErrorMessage: null,
+        isActive: true,
+        ...data,
+      } as FakeWhatsAppInstance;
+      store.whatsAppInstances.push(created);
+      return { ...created };
     }),
     count: vi.fn(async ({ where }: { where?: { evolutionServerId?: string | { in: string[] }; isActive?: boolean } } = {}) => {
       let rows = store.whatsAppInstances;

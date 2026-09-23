@@ -35,7 +35,7 @@ vi.mock('@/lib/alerts', () => ({ sendAlert: sendAlertMock }));
 // `webhook.ts` só é avaliado depois dos mocks de `@inno/db`/`lib/logger`
 // estarem registrados (o `vi.mock` já é hoisted para o topo do arquivo pelo
 // Vitest, mas isso deixa a ordem de dependência óbvia na leitura).
-const { processEvolutionWebhookEvent, resolveExpectedWebhookApiKey } = await import('./webhook');
+const { processEvolutionWebhookEvent, resolveExpectedWebhookApiKeys, isWebhookApiKeyAccepted } = await import('./webhook');
 const { encryptEvolutionApiKey } = await import('@/lib/evolution-server-crypto');
 
 const instance = { id: 'inst-1' } as WhatsAppInstance;
@@ -338,7 +338,32 @@ describe('processEvolutionWebhookEvent — connection_update (kill switch)', () 
   });
 });
 
-describe('resolveExpectedWebhookApiKey — 🆕 Fase 4.B (multi-servidor, achado que substitui EVOLUTION_API_KEY global)', () => {
+/** Instância com credencial PRÓPRIA já cifrada — helper para não repetir os 4 campos em cada teste do bloco de correção do webhook mudo. */
+function instanceWithOwnApiKey(overrides: { id: string; evolutionServerId?: string | null }, apiKey: string): WhatsAppInstance {
+  const encrypted = encryptEvolutionApiKey(apiKey);
+  return {
+    evolutionServerId: null,
+    ...overrides,
+    instanceApiKeyCiphertext: encrypted.ciphertext,
+    instanceApiKeyIv: encrypted.iv,
+    instanceApiKeyAuthTag: encrypted.authTag,
+    instanceApiKeyKeyVersion: encrypted.keyVersion,
+  } as unknown as WhatsAppInstance;
+}
+
+/** Mesma instância, mas SEM credencial própria (legado/captura falhou) — os 4 campos nascem `null` no Postgres real. */
+function instanceWithoutOwnApiKey(overrides: { id: string; evolutionServerId?: string | null }): WhatsAppInstance {
+  return {
+    evolutionServerId: null,
+    ...overrides,
+    instanceApiKeyCiphertext: null,
+    instanceApiKeyIv: null,
+    instanceApiKeyAuthTag: null,
+    instanceApiKeyKeyVersion: null,
+  } as unknown as WhatsAppInstance;
+}
+
+describe('resolveExpectedWebhookApiKeys — 🆕 correção do webhook mudo (2026-09-23): aceita a chave PRÓPRIA da instância E a do servidor', () => {
   const MASTER_KEY = randomBytes(32).toString('base64');
 
   beforeEach(() => {
@@ -352,42 +377,43 @@ describe('resolveExpectedWebhookApiKey — 🆕 Fase 4.B (multi-servidor, achado
     delete process.env.EVOLUTION_API_KEY;
   });
 
-  it('instância COM evolutionServerId — decifra a credencial do servidor e devolve a chave em texto puro', async () => {
-    const encrypted = encryptEvolutionApiKey('chave-secreta-do-servidor-1');
+  it('instância COM credencial própria E servidor — devolve as DUAS chaves como candidatas (nunca escolhe uma só)', async () => {
+    const encryptedServer = encryptEvolutionApiKey('chave-secreta-do-servidor-1');
     resetFakeDb({
       evolutionServers: [
         evolutionServer({
           id: 'srv-1',
-          apiKeyCiphertext: encrypted.ciphertext,
-          apiKeyIv: encrypted.iv,
-          apiKeyAuthTag: encrypted.authTag,
-          apiKeyKeyVersion: encrypted.keyVersion,
+          apiKeyCiphertext: encryptedServer.ciphertext,
+          apiKeyIv: encryptedServer.iv,
+          apiKeyAuthTag: encryptedServer.authTag,
+          apiKeyKeyVersion: encryptedServer.keyVersion,
         }),
       ],
     });
 
-    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' } as WhatsAppInstance);
+    const result = await resolveExpectedWebhookApiKeys(instanceWithOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' }, 'chave-propria-da-instancia'));
 
-    expect(result).toBe('chave-secreta-do-servidor-1');
+    expect(result).toEqual(expect.arrayContaining(['chave-propria-da-instancia', 'chave-secreta-do-servidor-1']));
+    expect(result).toHaveLength(2);
   });
 
   it('instância SEM evolutionServerId (legada) — cai no fallback EVOLUTION_API_KEY (env), mesmo comportamento pré-Fase-4.B', async () => {
     process.env.EVOLUTION_API_KEY = 'chave-global-legada';
 
-    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: null } as WhatsAppInstance);
+    const result = await resolveExpectedWebhookApiKeys(instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: null }));
 
-    expect(result).toBe('chave-global-legada');
+    expect(result).toEqual(['chave-global-legada']);
   });
 
-  it('instância SEM evolutionServerId e SEM EVOLUTION_API_KEY configurada — devolve null (fail-closed, nunca deixa passar por falta de configuração)', async () => {
+  it('instância SEM evolutionServerId e SEM EVOLUTION_API_KEY configurada — devolve [] (fail-closed, nunca deixa passar por falta de configuração)', async () => {
     delete process.env.EVOLUTION_API_KEY;
 
-    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: null } as WhatsAppInstance);
+    const result = await resolveExpectedWebhookApiKeys(instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: null }));
 
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
   });
 
-  it('servidor referenciado está DESATIVADO — devolve null (mesmo com a credencial existindo e sendo decifrável)', async () => {
+  it('servidor referenciado está DESATIVADO e instância SEM credencial própria — devolve [] (mesmo com a credencial do servidor existindo e sendo decifrável)', async () => {
     const encrypted = encryptEvolutionApiKey('chave-servidor-desativado');
     resetFakeDb({
       evolutionServers: [
@@ -402,38 +428,44 @@ describe('resolveExpectedWebhookApiKey — 🆕 Fase 4.B (multi-servidor, achado
       ],
     });
 
-    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' } as WhatsAppInstance);
+    const result = await resolveExpectedWebhookApiKeys(instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' }));
 
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
   });
 
-  it('evolutionServerId aponta para um servidor que não existe (inconsistência de dados) — devolve null, não lança', async () => {
+  it('servidor DESATIVADO mas instância TEM credencial própria — a própria ainda é aceita (uma fonte falhar nunca derruba a outra)', async () => {
+    resetFakeDb({ evolutionServers: [evolutionServer({ id: 'srv-1', isActive: false })] });
+
+    const result = await resolveExpectedWebhookApiKeys(instanceWithOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' }, 'chave-propria-sobrevive'));
+
+    expect(result).toEqual(['chave-propria-sobrevive']);
+  });
+
+  it('evolutionServerId aponta para um servidor que não existe (inconsistência de dados) — devolve [], não lança', async () => {
     resetFakeDb({ evolutionServers: [] });
 
-    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-inexistente' } as WhatsAppInstance);
+    const result = await resolveExpectedWebhookApiKeys(instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-inexistente' }));
 
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
   });
 
-  it('chave-mestre ERRADA (rotação mal feita) — decifra falha, devolve null em vez de lançar (a rota trata como apikey não bate, 404 fail-closed)', async () => {
-    const encrypted = encryptEvolutionApiKey('chave-qualquer');
-    resetFakeDb({
-      evolutionServers: [
-        evolutionServer({
-          id: 'srv-1',
-          apiKeyCiphertext: encrypted.ciphertext,
-          apiKeyIv: encrypted.iv,
-          apiKeyAuthTag: encrypted.authTag,
-          apiKeyKeyVersion: encrypted.keyVersion,
-        }),
-      ],
-    });
+  it('chave-mestre ERRADA (rotação mal feita) na credencial da instância — decifra falha, OMITIDA da lista (não lança, não derruba a chave do servidor)', async () => {
+    const encryptedInstance = encryptEvolutionApiKey('chave-instancia-qualquer');
+    const badInstance = {
+      id: 'inst-1',
+      evolutionServerId: null,
+      instanceApiKeyCiphertext: encryptedInstance.ciphertext,
+      instanceApiKeyIv: encryptedInstance.iv,
+      instanceApiKeyAuthTag: encryptedInstance.authTag,
+      instanceApiKeyKeyVersion: encryptedInstance.keyVersion,
+    } as unknown as WhatsAppInstance;
     // Troca a chave-mestre DEPOIS de cifrar — simula "EVOLUTION_MASTER_KEY errada no ambiente".
     process.env.EVOLUTION_MASTER_KEY = randomBytes(32).toString('base64');
+    process.env.EVOLUTION_API_KEY = 'chave-global-ainda-valida';
 
-    const result = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' } as WhatsAppInstance);
+    const result = await resolveExpectedWebhookApiKeys(badInstance);
 
-    expect(result).toBeNull();
+    expect(result).toEqual(['chave-global-ainda-valida']);
   });
 
   it('dois servidores DIFERENTES têm chaves DIFERENTES — a chave de um nunca resolve para outro (webhook de um servidor não pode ser aceito com a chave de outro)', async () => {
@@ -446,11 +478,67 @@ describe('resolveExpectedWebhookApiKey — 🆕 Fase 4.B (multi-servidor, achado
       ],
     });
 
-    const key1 = await resolveExpectedWebhookApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' } as WhatsAppInstance);
-    const key2 = await resolveExpectedWebhookApiKey({ id: 'inst-2', evolutionServerId: 'srv-2' } as WhatsAppInstance);
+    const key1 = await resolveExpectedWebhookApiKeys(instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' }));
+    const key2 = await resolveExpectedWebhookApiKeys(instanceWithoutOwnApiKey({ id: 'inst-2', evolutionServerId: 'srv-2' }));
 
-    expect(key1).toBe('chave-servidor-1');
-    expect(key2).toBe('chave-servidor-2');
-    expect(key1).not.toBe(key2);
+    expect(key1).toEqual(['chave-servidor-1']);
+    expect(key2).toEqual(['chave-servidor-2']);
+  });
+});
+
+describe('isWebhookApiKeyAccepted — decisão real que a rota usa (@inno/messaging#constantTimeEqual contra cada candidata)', () => {
+  const MASTER_KEY = randomBytes(32).toString('base64');
+
+  beforeEach(() => {
+    resetFakeDb();
+    process.env.EVOLUTION_MASTER_KEY = MASTER_KEY;
+  });
+
+  afterEach(() => {
+    delete process.env.EVOLUTION_MASTER_KEY;
+    delete process.env.EVOLUTION_API_KEY;
+  });
+
+  it('webhook ACEITO com a chave da INSTÂNCIA (servidor tem uma credencial DIFERENTE) — cenário central do incidente', async () => {
+    const encryptedServer = encryptEvolutionApiKey('chave-do-servidor');
+    resetFakeDb({
+      evolutionServers: [
+        evolutionServer({ id: 'srv-1', apiKeyCiphertext: encryptedServer.ciphertext, apiKeyIv: encryptedServer.iv, apiKeyAuthTag: encryptedServer.authTag, apiKeyKeyVersion: encryptedServer.keyVersion }),
+      ],
+    });
+    const instance = instanceWithOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' }, 'chave-da-instancia');
+
+    await expect(isWebhookApiKeyAccepted(instance, 'chave-da-instancia')).resolves.toBe(true);
+  });
+
+  it('webhook ACEITO com a chave GLOBAL do servidor (instância sem credencial própria — legada)', async () => {
+    const encryptedServer = encryptEvolutionApiKey('chave-do-servidor');
+    resetFakeDb({
+      evolutionServers: [
+        evolutionServer({ id: 'srv-1', apiKeyCiphertext: encryptedServer.ciphertext, apiKeyIv: encryptedServer.iv, apiKeyAuthTag: encryptedServer.authTag, apiKeyKeyVersion: encryptedServer.keyVersion }),
+      ],
+    });
+    const instance = instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' });
+
+    await expect(isWebhookApiKeyAccepted(instance, 'chave-do-servidor')).resolves.toBe(true);
+  });
+
+  it('webhook RECUSADO com chave ERRADA (não bate com a própria nem com a do servidor)', async () => {
+    const encryptedServer = encryptEvolutionApiKey('chave-do-servidor');
+    resetFakeDb({
+      evolutionServers: [
+        evolutionServer({ id: 'srv-1', apiKeyCiphertext: encryptedServer.ciphertext, apiKeyIv: encryptedServer.iv, apiKeyAuthTag: encryptedServer.authTag, apiKeyKeyVersion: encryptedServer.keyVersion }),
+      ],
+    });
+    const instance = instanceWithOwnApiKey({ id: 'inst-1', evolutionServerId: 'srv-1' }, 'chave-da-instancia');
+
+    await expect(isWebhookApiKeyAccepted(instance, 'chave-completamente-errada')).resolves.toBe(false);
+  });
+
+  it('instância LEGADA sem chave própria guardada continua funcionando pela chave global (env, evolutionServerId null)', async () => {
+    process.env.EVOLUTION_API_KEY = 'chave-global-legada-env';
+    const instance = instanceWithoutOwnApiKey({ id: 'inst-1', evolutionServerId: null });
+
+    await expect(isWebhookApiKeyAccepted(instance, 'chave-global-legada-env')).resolves.toBe(true);
   });
 });

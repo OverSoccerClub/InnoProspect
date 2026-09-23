@@ -40,7 +40,7 @@ describe('evolutionConfigFromEnv', () => {
 });
 
 describe('EvolutionClient.createInstance', () => {
-  it('cria a instância e devolve o QR já na criação', async () => {
+  it('cria a instância e devolve o QR já na criação (sem credencial própria no corpo — apiKey null)', async () => {
     const { fetchImpl, calls } = fakeFetch([
       jsonResponse(201, {
         instance: { instanceName: 'vendas-01', instanceId: 'abc123', status: 'created' },
@@ -55,10 +55,45 @@ describe('EvolutionClient.createInstance', () => {
       instanceId: 'abc123',
       state: 'disconnected',
       qr: { base64: 'data:image/png;base64,AAA', pairingCode: '2@xyz' },
+      apiKey: null,
     });
     expect(calls[0]?.url).toBe('https://evolution.example.com/instance/create');
     expect(calls[0]?.init?.method).toBe('POST');
     expect((calls[0]?.init?.headers as Record<string, string>).apikey).toBe('test-key');
+  });
+
+  // 🆕 achado do dono (2026-09-23): a Evolution v2 devolve uma `apikey`
+  // PRÓPRIA da instância no `hash` da resposta de criação — distinta da
+  // chave global do servidor. Formato documentado publicamente: `hash` como
+  // OBJETO `{ apikey: "..." }`.
+  it('captura a credencial própria quando `hash` vem como OBJETO `{ apikey }` (formato v2 documentado)', async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse(201, {
+        instance: { instanceName: 'vendas-01', instanceId: 'abc123', status: 'created' },
+        hash: { apikey: 'chave-propria-da-instancia' },
+        qrcode: { base64: 'data:image/png;base64,AAA', code: '2@xyz' },
+      }),
+    ]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+    const result = await client.createInstance({ instanceName: 'vendas-01' });
+
+    expect(result.apiKey).toBe('chave-propria-da-instancia');
+  });
+
+  it('captura a credencial própria quando `hash` vem como STRING direta (formato v1)', async () => {
+    const { fetchImpl } = fakeFetch([jsonResponse(201, { instance: { instanceName: 'vendas-01' }, hash: 'chave-v1-string' })]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+    const result = await client.createInstance({ instanceName: 'vendas-01' });
+
+    expect(result.apiKey).toBe('chave-v1-string');
+  });
+
+  it('captura a credencial própria a partir de `token` na raiz, quando não há `hash`', async () => {
+    const { fetchImpl } = fakeFetch([jsonResponse(201, { instance: { instanceName: 'vendas-01' }, token: 'chave-via-token' })]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+    const result = await client.createInstance({ instanceName: 'vendas-01' });
+
+    expect(result.apiKey).toBe('chave-via-token');
   });
 
   it('rejeita instanceName curto sem chamar a rede', async () => {
@@ -66,6 +101,49 @@ describe('EvolutionClient.createInstance', () => {
     const client = new EvolutionClient({ ...config, fetchImpl });
     await expect(client.createInstance({ instanceName: 'a' })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     expect(calls.length).toBe(0);
+  });
+});
+
+describe('EvolutionClient.fetchInstances', () => {
+  it('lista instâncias achatadas, com `token` como credencial própria', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      jsonResponse(200, [
+        { name: 'vendas-01', token: 'chave-1' },
+        { instanceName: 'suporte-02', token: 'chave-2' },
+      ]),
+    ]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+    const result = await client.fetchInstances();
+
+    expect(result).toEqual([
+      { instanceName: 'vendas-01', apiKey: 'chave-1' },
+      { instanceName: 'suporte-02', apiKey: 'chave-2' },
+    ]);
+    expect(calls[0]?.url).toBe('https://evolution.example.com/instance/fetchInstances');
+  });
+
+  it('lista instâncias aninhadas em `instance` (mesma convenção de parseCreateInstanceResponse), com `hash.apikey`', async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse(200, [{ instance: { instanceName: 'vendas-01' }, hash: { apikey: 'chave-aninhada' } }]),
+    ]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+    const result = await client.fetchInstances();
+
+    expect(result).toEqual([{ instanceName: 'vendas-01', apiKey: 'chave-aninhada' }]);
+  });
+
+  it('instância sem nenhum campo de credencial reconhecido — apiKey null, não lança', async () => {
+    const { fetchImpl } = fakeFetch([jsonResponse(200, [{ name: 'vendas-01' }])]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+    const result = await client.fetchInstances();
+
+    expect(result).toEqual([{ instanceName: 'vendas-01', apiKey: null }]);
+  });
+
+  it('resposta vazia — devolve []', async () => {
+    const { fetchImpl } = fakeFetch([jsonResponse(200, [])]);
+    const client = new EvolutionClient({ ...config, fetchImpl });
+    await expect(client.fetchInstances()).resolves.toEqual([]);
   });
 });
 

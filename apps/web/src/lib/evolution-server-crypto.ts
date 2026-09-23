@@ -156,3 +156,20 @@ export function decryptEvolutionApiKey(
     throw new EvolutionCryptoError('Falha ao decifrar a credencial do servidor Evolution (chave-mestre incorreta ou dado corrompido).');
   }
 }
+
+/**
+ * `Buffer` (Node) é `Uint8Array<ArrayBufferLike>` — inclui `SharedArrayBuffer`
+ * na união; o campo `Bytes` gerado pelo Prisma Client 6.19 exige
+ * especificamente `Uint8Array<ArrayBuffer>` (exclui `SharedArrayBuffer`) —
+ * `tsc` rejeita passar um `Buffer` direto num `create`/`update`. `new
+ * Uint8Array(buf)` copia para um `ArrayBuffer` novo e satisfaz o tipo sem
+ * `as any` (`randomBytes`/`cipher.*` nunca alocam sobre `SharedArrayBuffer`
+ * em tempo de execução — é só desencontro de TIPOS, não de dado real).
+ * Centralizado aqui (antes vivia só em `lib/services/evolution-servers.ts`)
+ * porque agora DOIS services gravam campos `Bytes` cifrados com este módulo
+ * (`evolution-servers.ts` e `whatsapp-instances.ts`, credencial própria da
+ * instância) — uma cópia só, não duas.
+ */
+export function toPrismaBytes(buf: Buffer): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(buf);
+}

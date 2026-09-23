@@ -29,6 +29,7 @@ import {
   getEvolutionClientForServer,
   requireActiveEvolutionServer,
 } from '@/lib/evolution';
+import { encryptEvolutionApiKey, toPrismaBytes } from '@/lib/evolution-server-crypto';
 import { haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
 import { sendAlert } from '@/lib/alerts';
 import { logger } from '@/lib/logger';
@@ -110,6 +111,29 @@ function rethrowAsUpstream(err: unknown, action: string): never {
   throw err;
 }
 
+/**
+ * 🆕 Correção do incidente 2026-09-23 — captura a credencial de webhook
+ * PRÓPRIA da instância (achado do dono: a Evolution v2 dá uma `apikey` por
+ * instância, distinta da global do servidor) a partir da resposta de
+ * `POST /instance/create` (`CreateInstanceResult.apiKey`, parsing defensivo
+ * em `@inno/messaging`) e cifra ANTES de qualquer chamada Prisma — mesma
+ * regra de `evolution-servers.ts` (nunca persistir/logar texto puro).
+ * `apiKey: null` (a Evolution não devolveu nenhum campo reconhecido) NÃO é
+ * erro — devolve `{}` (nenhuma coluna preenchida) e a instância nasce
+ * normalmente, aceitando o webhook só pela chave do servidor/env (mesmo
+ * comportamento de antes desta correção).
+ */
+function encryptedInstanceApiKeyColumns(apiKey: string | null): Partial<Prisma.WhatsAppInstanceUncheckedCreateInput> {
+  if (!apiKey) return {};
+  const encrypted = encryptEvolutionApiKey(apiKey);
+  return {
+    instanceApiKeyCiphertext: toPrismaBytes(encrypted.ciphertext),
+    instanceApiKeyIv: toPrismaBytes(encrypted.iv),
+    instanceApiKeyAuthTag: toPrismaBytes(encrypted.authTag),
+    instanceApiKeyKeyVersion: encrypted.keyVersion,
+  };
+}
+
 export async function createWhatsAppInstance(
   body: CreateWhatsAppInstanceBody,
   createdById: string,
@@ -127,11 +151,22 @@ export async function createWhatsAppInstance(
   const client = getEvolutionClientForServer(server);
 
   let created: WhatsAppInstance;
+  let capturedApiKey: string | null = null;
   try {
-    await client.createInstance({ instanceName: evolutionInstanceName });
+    const createResult = await client.createInstance({ instanceName: evolutionInstanceName });
+    capturedApiKey = createResult.apiKey;
     await client.setWebhook(evolutionInstanceName, { url: buildWebhookUrl(instanceKey) });
   } catch (err) {
     rethrowAsUpstream(err, 'criar a instância');
+  }
+
+  if (!capturedApiKey) {
+    // Não é erro (a instância já foi criada do lado da Evolution nesta
+    // chamada) — só um sinal de que esta instância vai depender da chave do
+    // SERVIDOR/env para o webhook (fallback pré-existente, ver
+    // `lib/services/webhook.ts#resolveExpectedWebhookApiKeys`). Registrado
+    // para não ficar invisível se a Evolution mudar o shape da resposta.
+    logger.warn('whatsapp_instance.sem_apikey_propria_na_criacao', { evolutionInstanceName });
   }
 
   try {
@@ -144,6 +179,7 @@ export async function createWhatsAppInstance(
         status: 'qr_pending',
         warmupStartedAt: body.startWarmup ? new Date() : null,
         createdById,
+        ...encryptedInstanceApiKeyColumns(capturedApiKey),
       },
     });
   } catch (err) {

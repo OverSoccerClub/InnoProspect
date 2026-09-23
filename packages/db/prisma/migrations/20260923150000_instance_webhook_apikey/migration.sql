@@ -1,0 +1,69 @@
+-- InnoProspect — correção do incidente de produção 2026-09-23: webhook da
+-- Evolution voltava recusado em silêncio (404 fail-closed) para TODO evento
+-- de retorno (status de entrega, resposta do lead, opt-out por "SAIR").
+--
+-- POR QUE EXISTE: até esta migração, `POST /api/webhooks/evolution/
+-- :instanceKey` validava o header `apikey` só contra a chave GLOBAL do
+-- `EvolutionServer` (ou `EVOLUTION_API_KEY`, fallback legado). O dono
+-- confirmou no painel da Evolution que, na v2, CADA instância tem a sua
+-- PRÓPRIA `apikey` (mascarada no card da instância), distinta da global —
+-- se a Evolution assina o webhook com essa chave (não confirmado com
+-- certeza contra a v2.3.7 real, ver `apps/web/src/lib/services/webhook.ts`),
+-- não havia com o que comparar. Esta migração acrescenta 4 colunas
+-- NULLABLE em `whatsapp_instances` para guardar essa segunda credencial,
+-- cifrada com a MESMA implementação (AES-256-GCM) já usada para
+-- `evolution_servers.apiKey*` — não uma segunda cifra.
+--
+-- ⚠️ 100% ADITIVA: só `ADD COLUMN` nullable (sem DEFAULT) em tabela
+-- existente. Nenhuma linha existente é lida, nenhuma coluna/tabela existente
+-- é alterada em significado. Em Postgres ≥11, `ADD COLUMN` nullable sem
+-- DEFAULT é operação de METADADO (lock ACCESS EXCLUSIVE de milissegundos,
+-- independente do volume de `whatsapp_instances` — hoje dezenas de linhas
+-- de qualquer forma) — não precisa de estratégia expand/contract.
+--
+-- ⚠️ NÃO aplicada contra um Postgres real (mesma limitação de sempre nesta
+-- máquina de desenvolvimento — ver memória `innoprospect-bloqueio-docker`).
+-- Escrita à mão seguindo o mesmo padrão de `20260923140000_evolution_servers`
+-- (que também não pôde ser confirmada contra banco vivo) — é o primeiro
+-- `migrate deploy` real quem prova que este SQL bate com o datamodel atual.
+--
+-- ── POR QUE NÃO PRECISA DE BACKFILL NESTA MIGRAÇÃO ──────────────────────
+-- Diferente da coluna `evolutionServerId` (migração anterior), aqui NÃO
+-- existe um valor "certo" para preencher via UPDATE em massa — a credencial
+-- de cada instância só existe na Evolution, uma consulta HTTP por linha.
+-- Por isso o preenchimento é um COMANDO OPERACIONAL separado
+-- (`apps/web/scripts/sync-instance-api-keys.ts`, chama
+-- `GET /instance/fetchInstances` e casa por `evolutionInstanceName`),
+-- não uma migração SQL. Enquanto ele não roda (ou para instância cuja
+-- captura na criação falhou), as 4 colunas ficam NULL — e isso é seguro:
+-- `resolveExpectedWebhookApiKeys` trata ausência aqui como "sem esta fonte
+-- extra", nunca como bloqueio; o webhook continua aceito pela chave do
+-- SERVIDOR/env (comportamento pré-existente, intocado).
+--
+-- ── FORMATO DA CIFRA (implementação: Vega, `lib/evolution-server-crypto.ts`,
+-- REUSADA — não duplicada) ────────────────────────────────────────────────
+-- Mesmo formato de `evolution_servers.apiKey*`: `BYTEA` (não base64),
+-- AES-256-GCM, IV de 12 bytes, auth tag de 16 bytes, um IV novo por
+-- cifragem. `instanceApiKeyKeyVersion` é INTEGER NULLABLE, SEM
+-- `DEFAULT 1` (diferente de `evolution_servers.apiKeyKeyVersion`) — de
+-- propósito: aqui a leitura correta é "as 4 colunas presentes juntas, ou
+-- nenhuma"; um DEFAULT sugeriria falsamente versão conhecida sem
+-- credencial cifrada de fato.
+--
+-- ── ROLLBACK ────────────────────────────────────────────────────────────
+-- Reversível a qualquer momento (não há FK/índice novo, só colunas soltas):
+--   ALTER TABLE "whatsapp_instances" DROP COLUMN "instanceApiKeyCiphertext";
+--   ALTER TABLE "whatsapp_instances" DROP COLUMN "instanceApiKeyIv";
+--   ALTER TABLE "whatsapp_instances" DROP COLUMN "instanceApiKeyAuthTag";
+--   ALTER TABLE "whatsapp_instances" DROP COLUMN "instanceApiKeyKeyVersion";
+-- Perda de dado no rollback: a credencial própria capturada por instância
+-- some — o webhook passa a aceitar só a chave do servidor/env de novo
+-- (comportamento pré-incidente, não quebra nada que já funcionava antes
+-- desta rodada).
+
+-- AlterTable
+ALTER TABLE "whatsapp_instances"
+  ADD COLUMN     "instanceApiKeyCiphertext" BYTEA,
+  ADD COLUMN     "instanceApiKeyIv" BYTEA,
+  ADD COLUMN     "instanceApiKeyAuthTag" BYTEA,
+  ADD COLUMN     "instanceApiKeyKeyVersion" INTEGER;

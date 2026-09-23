@@ -1261,7 +1261,11 @@ Rate limit: 10 req/min por IP. Token é HMAC do `phoneE164` + segredo (não enum
 
 - **`:instanceKey`** é um segredo por instância gerado por nós (não o nome da instância). Configurado
   na Evolution API na criação. Se não bater → `404` (**não** `401`, para não confirmar existência).
-- Validação adicional: header `apikey` conferido contra `EVOLUTION_API_KEY` em tempo constante.
+- Validação adicional: header `apikey` conferido em tempo constante. 🆕 Correção 2026-09-23 (webhook mudo em
+  produção — a v2 da Evolution dá uma `apikey` PRÓPRIA por instância, distinta da global do servidor): a
+  chave esperada aceita DUAS candidatas — a credencial própria da instância (`WhatsAppInstance.
+  instanceApiKey*`, quando capturada) E a do `EvolutionServer`/`EVOLUTION_API_KEY` (fallback legado, Fase
+  4.B) — nunca escolhe uma só, ver `lib/services/webhook.ts#resolveExpectedWebhookApiKeys`.
 - **Sempre responde `200 { received: true }` rapidamente**, mesmo em erro de processamento — a
   Evolution API reenvia em não-200 e pode entrar em loop. Processamento pesado vai para a fila.
 - **Idempotência:** `data.key.id` é chave única; evento repetido é ignorado silenciosamente.

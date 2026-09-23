@@ -15,6 +15,7 @@ import {
   parseConnectResponse,
   parseConnectionStateResponse,
   parseCreateInstanceResponse,
+  parseFetchInstancesResponse,
   parseSendTextResponse,
   type CheckNumbersRequestBody,
   type CreateInstanceRequestBody,
@@ -28,6 +29,7 @@ import type {
   ConnectionState,
   CreateInstanceInput,
   CreateInstanceResult,
+  FetchedInstanceInfo,
   NumberCheckResult,
   QrCode,
   SendTextInput,
@@ -110,6 +112,21 @@ export class EvolutionClient {
     await evolutionRequest(this.config, { method: 'GET', path: EVOLUTION_PATHS.fetchInstances(), retryable: false });
   }
 
+  /**
+   * `GET /instance/fetchInstances` — lista as instâncias do servidor JUNTO
+   * com a credencial de webhook PRÓPRIA de cada uma (achado do dono,
+   * 2026-09-23 — ver `client/wire.ts#parseFetchInstancesResponse`). Único
+   * chamador hoje: `apps/web/scripts/sync-instance-api-keys.ts` (comando
+   * operacional que preenche a credencial de instâncias JÁ PAREADAS, sem
+   * reconectar/gerar QR novo — este endpoint é uma LEITURA pura, mesmo
+   * espírito de `testConnection`, que usa o mesmo caminho mas descarta o
+   * corpo).
+   */
+  async fetchInstances(): Promise<FetchedInstanceInfo[]> {
+    const raw = await evolutionRequest(this.config, { method: 'GET', path: EVOLUTION_PATHS.fetchInstances(), retryable: false });
+    return parseFetchInstancesResponse(raw);
+  }
+
   /** `POST /instance/create` — cria a instância na Evolution e já pede o QR (`qrcode:true`). */
   async createInstance(input: CreateInstanceInput): Promise<CreateInstanceResult> {
     if (!input.instanceName || input.instanceName.trim().length < 2) {
@@ -127,6 +144,7 @@ export class EvolutionClient {
       instanceId: parsed.instanceId,
       state: toConnectionState(parsed.state),
       qr: toQr(parsed.qr),
+      apiKey: parsed.apiKey,
     };
   }
 

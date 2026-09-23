@@ -23,7 +23,7 @@ import type {
   UpdateEvolutionServerResponse,
 } from '@inno/contracts';
 import { conflict, notFound } from '@/lib/api-handler';
-import { decryptEvolutionApiKey, encryptEvolutionApiKey, EvolutionCryptoError } from '@/lib/evolution-server-crypto';
+import { decryptEvolutionApiKey, encryptEvolutionApiKey, EvolutionCryptoError, toPrismaBytes } from '@/lib/evolution-server-crypto';
 import { logger } from '@/lib/logger';
 
 /**
@@ -37,18 +37,6 @@ const TEST_CONNECTION_TIMEOUT_MS = 6_000;
 /** Sem barra final — mesma normalização documentada em `EvolutionServer.baseUrl` (schema Prisma): sem isto, "https://x.com" e "https://x.com/" passam como servidores diferentes para o `@unique`. */
 function normalizeBaseUrl(raw: string): string {
   return raw.trim().replace(/\/+$/, '');
-}
-
-/**
- * `Buffer` (Node) é `Uint8Array<ArrayBufferLike>` — inclui `SharedArrayBuffer`
- * na união; o campo `Bytes` gerado pelo Prisma Client espera especificamente
- * `Uint8Array<ArrayBuffer>` (exclui `SharedArrayBuffer`). Isto é só um
- * desencontro de TIPOS (`randomBytes`/`cipher.update`/`Buffer.concat` nunca
- * alocam sobre `SharedArrayBuffer` em tempo de execução) — `new Uint8Array(buf)`
- * copia para um `ArrayBuffer` novo e satisfaz o tipo exigido sem `as any`.
- */
-function toPrismaBytes(buf: Buffer): Uint8Array<ArrayBuffer> {
-  return new Uint8Array(buf);
 }
 
 function toItem(row: EvolutionServer, instancesCount: number): EvolutionServerItem {

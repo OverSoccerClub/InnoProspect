@@ -24,6 +24,21 @@ export type CreateInstanceResult = {
   instanceId: string | null;
   state: ConnectionState;
   qr: QrCode | null;
+  /**
+   * 🆕 Credencial de webhook PRÓPRIA desta instância (distinta da chave
+   * global do `EvolutionServer`) — achado do dono, 2026-09-23: a Evolution
+   * v2 dá uma `apikey` por instância. `null` se a resposta não trouxe
+   * nenhum campo reconhecido (`client/wire.ts#readInstanceApiKey`, parsing
+   * defensivo — NÃO CONFIRMADO contra servidor real). Quem chama decide o
+   * que fazer com `null` (cai no fallback da chave do servidor/env).
+   */
+  apiKey: string | null;
+};
+
+/** Ver `client/wire.ts#parseFetchInstancesResponse` — usado pelo comando operacional que preenche a credencial própria de instâncias já pareadas. */
+export type FetchedInstanceInfo = {
+  instanceName: string | null;
+  apiKey: string | null;
 };
 
 export type ConnectResult = {

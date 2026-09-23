@@ -8,6 +8,7 @@
  */
 import { prisma, type Prisma, type WhatsAppInstance } from '@inno/db';
 import {
+  constantTimeEqual,
   parseEvolutionWebhookEvent,
   type ConnectionUpdateEvent,
   type InboundMessageEvent,
@@ -23,42 +24,97 @@ import { sendAlert } from '@/lib/alerts';
 import { decryptEvolutionApiKey } from '@/lib/evolution-server-crypto';
 import { logger } from '@/lib/logger';
 
+type WebhookAuthInstance = Pick<
+  WhatsAppInstance,
+  'id' | 'evolutionServerId' | 'instanceApiKeyCiphertext' | 'instanceApiKeyIv' | 'instanceApiKeyAuthTag' | 'instanceApiKeyKeyVersion'
+>;
+
 /**
- * 🆕 Fase 4.B — resolve a chave `apikey` ESPERADA para esta instância, pela
- * cadeia `instância → EvolutionServer → chave decifrada`. Cai no fallback
- * de `EVOLUTION_API_KEY` (env) SÓ enquanto `evolutionServerId` for `null`
- * (instância legada, ANTES do bootstrap — `packages/db/prisma/
- * evolution-servers.ts`) — mesma regra de `lib/evolution.ts#
- * getEvolutionClientForInstance`.
- *
- * Devolve `null` (NUNCA lança) quando não há como resolver de forma segura
- * — servidor inexistente/inativo, ou falha ao decifrar (chave-mestre
- * errada/ausente). A ROTA trata `null` exatamente como "apikey não bate"
- * (`404`, fail-closed): um erro de CONFIGURAÇÃO nunca pode relaxar a
- * validação para "deixa passar mesmo assim" — o inverso (rejeitar tudo por
- * engano) é grave (derruba a atualização de status de mensagens em
- * produção), mas ainda assim menos grave que aceitar um webhook não
- * autenticado.
+ * 🆕 Correção do incidente 2026-09-23 (webhook mudo em produção — nenhum
+ * retorno da Evolution era aceito: status de entrega, resposta do lead,
+ * opt-out por "SAIR"). Achado do dono no painel da Evolution: na v2 CADA
+ * instância tem a sua PRÓPRIA `apikey`, distinta da chave GLOBAL do
+ * `EvolutionServer` que `resolveExpectedWebhookApiKey` (Fase 4.B) validava
+ * — SEM CERTEZA de qual das duas a v2.3.7 usa para assinar o webhook (não
+ * confirmável sem um servidor real disponível, mesma ressalva de sempre em
+ * `packages/messaging`), esta função devolve as DUAS como candidatas
+ * ACEITAS em vez de escolher uma:
+ *   1. A credencial PRÓPRIA da instância (`WhatsAppInstance.
+ *      instanceApiKey*`, cifrada — capturada em `POST /instance/create` ou
+ *      preenchida pelo comando operacional `apps/web/scripts/
+ *      sync-instance-api-keys.ts` para instância já pareada). Ausente
+ *      (`null`) em instância legada ou cuja captura falhou — OMITIDA da
+ *      lista, nunca tratada como bloqueio.
+ *   2. A chave do `EvolutionServer` (ou `EVOLUTION_API_KEY`/env, fallback
+ *      enquanto `evolutionServerId` for `null` — mesma regra de
+ *      `lib/evolution.ts#getEvolutionClientForInstance`, intocada).
+ * Cada fonte que falhar (decifra, servidor inexistente/inativo) é OMITIDA
+ * da lista SEM derrubar a outra — nunca lança. Pode devolver `[]` (nenhuma
+ * fonte resolvível, erro de CONFIGURAÇÃO): `isWebhookApiKeyAccepted` trata
+ * lista vazia exatamente como "nenhuma bateu" (fail-closed) — um erro de
+ * configuração nunca pode relaxar a validação para "deixa passar mesmo
+ * assim".
  */
-export async function resolveExpectedWebhookApiKey(instance: Pick<WhatsAppInstance, 'id' | 'evolutionServerId'>): Promise<string | null> {
+export async function resolveExpectedWebhookApiKeys(instance: WebhookAuthInstance): Promise<string[]> {
+  const keys: string[] = [];
+
+  if (instance.instanceApiKeyCiphertext && instance.instanceApiKeyIv && instance.instanceApiKeyAuthTag && instance.instanceApiKeyKeyVersion != null) {
+    try {
+      keys.push(
+        decryptEvolutionApiKey({
+          apiKeyCiphertext: instance.instanceApiKeyCiphertext,
+          apiKeyIv: instance.instanceApiKeyIv,
+          apiKeyAuthTag: instance.instanceApiKeyAuthTag,
+          apiKeyKeyVersion: instance.instanceApiKeyKeyVersion,
+        }),
+      );
+    } catch (err) {
+      logger.error('webhook evolution: falha ao decifrar a credencial PRÓPRIA da instância — omitida (a chave do servidor ainda pode aceitar)', {
+        instanceId: instance.id,
+        err: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  }
+
   if (!instance.evolutionServerId) {
     const envKey = process.env.EVOLUTION_API_KEY ?? '';
-    return envKey.length > 0 ? envKey : null;
+    if (envKey.length > 0) keys.push(envKey);
+    return keys;
   }
 
   const server = await prisma.evolutionServer.findUnique({ where: { id: instance.evolutionServerId } });
-  if (!server || !server.isActive) return null;
-
-  try {
-    return decryptEvolutionApiKey(server);
-  } catch (err) {
-    logger.error('webhook evolution: falha ao decifrar a credencial do servidor', {
-      instanceId: instance.id,
-      evolutionServerId: instance.evolutionServerId,
-      err: err instanceof Error ? err : new Error(String(err)),
-    });
-    return null;
+  if (server && server.isActive) {
+    try {
+      keys.push(decryptEvolutionApiKey(server));
+    } catch (err) {
+      logger.error('webhook evolution: falha ao decifrar a credencial do servidor — omitida (a credencial própria da instância ainda pode aceitar)', {
+        instanceId: instance.id,
+        evolutionServerId: instance.evolutionServerId,
+        err: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
   }
+
+  return keys;
+}
+
+/**
+ * Decide se `receivedApiKey` (header `apikey` do webhook) bate com QUALQUER
+ * uma das chaves aceitáveis desta instância (`resolveExpectedWebhookApiKeys`
+ * acima) — chamada única da rota (`app/api/webhooks/evolution/
+ * [instanceKey]/route.ts`), mantém a rota fina (convenção #2 de
+ * `convention-api-routes-fase1`).
+ *
+ * Comparação em TEMPO CONSTANTE contra CADA candidata, SEM short-circuit
+ * que revele qual bateu: `Array.prototype.map` sempre avalia a comparação
+ * para TODAS as chaves antes do `.some` decidir — não há `||`/`return`
+ * antecipado no meio do array que pare na primeira igual e vaze timing de
+ * "qual fonte é a certa" para quem está medindo o servidor.
+ */
+export async function isWebhookApiKeyAccepted(instance: WebhookAuthInstance, receivedApiKey: string): Promise<boolean> {
+  const expectedApiKeys = await resolveExpectedWebhookApiKeys(instance);
+  const matches = expectedApiKeys.map((key) => constantTimeEqual(receivedApiKey, key));
+  return matches.some(Boolean);
 }
 
 /** `remoteJid` da Evolution vem como `"5511987654321@s.whatsapp.net"` — a parte antes do `@` já é o telefone em dígitos (com DDI), então a MESMA normalização BR usada no scraping (`@inno/core/leads/phone.ts`) resolve para E.164 sem precisar de um parser de JID dedicado. */

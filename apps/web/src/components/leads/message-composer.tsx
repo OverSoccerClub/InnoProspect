@@ -60,6 +60,24 @@ function describeError(err: ApiRequestError): { message: string; action?: React.
       return { message: err.message };
     case 'DUPLICATE_SEND':
       return { message: err.message };
+    // 🆕 Fase 4.C (ARQUITETURA §4.9.10) — o requisito de produto do dono é
+    // explícito: quem bate no gate precisa saber QUANDO pode enviar de novo,
+    // não só que está bloqueado. `details[]` traz o instante exato (ver
+    // `lib/services/messages.ts#throwForBlockedVerdict`, Vega).
+    case 'SEND_PACE_LOCKED': {
+      const nextSendAllowedAt = findDetail(err.details, 'nextSendAllowedAt');
+      return {
+        message: nextSendAllowedAt
+          ? `${err.message} O envio libera automaticamente às ${formatDateTime(nextSendAllowedAt)}.`
+          : err.message,
+      };
+    }
+    case 'LEAD_CONTACT_COOLDOWN': {
+      const resetsAt = findDetail(err.details, 'resetsAt');
+      return {
+        message: resetsAt ? `${err.message} Você pode insistir a partir de ${formatDateTime(resetsAt)}.` : err.message,
+      };
+    }
     case 'MISSING_OPTOUT_NOTICE':
     case 'MISSING_COMPANY_NAME':
     case 'UNKNOWN_VARIABLE':
@@ -119,7 +137,12 @@ export function MessageComposer({
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm>(null);
   const [lastSuccess, setLastSuccess] = useState<SendLeadMessageResponse | null>(null);
 
-  const isColdFirstContact = lead.messages.length === 0;
+  // Mesmo critério do backend (`lib/services/messages.ts`: `isColdFirstContact
+  // = lastOutbound === null`) — é a AUSÊNCIA de envio nosso anterior que conta,
+  // não o total de mensagens (uma conversa só com mensagens recebidas, sem
+  // nunca termos respondido, ainda seria "1º contato" para o gate de cadência).
+  const hasPriorOutbound = lead.messages.some((m) => m.direction === 'outbound');
+  const isColdFirstContact = !hasPriorOutbound;
   const blockReason = lead.isOptedOut
     ? 'Envio bloqueado — este lead está descadastrado (ver aviso no topo da página).'
     : !lead.phoneE164
@@ -436,10 +459,12 @@ export function MessageComposer({
       </div>
       </fieldset>
 
-      <div className="flex items-center justify-between gap-2">
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Clock className="size-3.5" aria-hidden="true" />
-          Envios respeitam o horário comercial e a cota diária da instância.
+      <div className="flex flex-col-reverse items-start justify-between gap-2 sm:flex-row sm:items-center">
+        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+          <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          {isColdFirstContact
+            ? 'Primeiro contato: respeita o intervalo mínimo entre envios desta instância, além do horário comercial e da cota diária.'
+            : 'Resposta a uma conversa em aberto: sai sem esperar o intervalo mínimo entre envios — só o horário comercial e a cota diária continuam valendo.'}
         </p>
         <Button onClick={() => submit()} disabled={!canSubmit}>
           {isSending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}

@@ -23,3 +23,5 @@
 - [Cookie de teste falha silencioso se o NEXTAUTH_SECRET do dev compartilhado mudou](bug_shared_dev_secret_unknown_blocks_test_cookie.md) — redireciona pro /login, parece "esqueci o cookie" mas é secret desatualizado
 - [Dois mocks relacionados (whatsapp x evolution-servers) importam só numa direção](convention_one_way_mock_module_coupling.md) — evita ciclo ESM entre módulos com estado mutável
 - [turbo generate trava (EPERM) com next dev compartilhado de pé](bug_turbo_generate_lock_blocks_typecheck.md) — usar `pnpm --filter <pkg> run typecheck/lint/test` pacote a pacote, nunca matar o dev server
+- [Redesenho da conversa do lead após a 1ª mensagem real](project_lead_conversation_redesign.md) — polling silencioso resolveu "não mostra resposta"; timeline infiel é gap do webhook (Vega); chat virou protagonista
+- [`LeadActivity.type` texto livre: backend grava 'opt_out', UI só reconhecia 'opted_out'](bug_lead_activity_type_spelling_mismatch.md) — usar `isOptOutActivity()`, nunca comparar a string direto

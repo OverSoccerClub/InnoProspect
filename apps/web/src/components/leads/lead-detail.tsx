@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Globe, Loader2, MapPin, Phone, Star } from 'lucide-react';
+import { ArrowLeft, CircleAlert, Globe, Loader2, MapPin, MessageSquare, Phone, Star } from 'lucide-react';
 
 import { ErrorState } from '@/components/common/error-state';
 import { LeadConversation } from '@/components/leads/lead-conversation';
@@ -18,10 +18,22 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { getLead, patchLead } from '@/lib/api/leads';
 import { ApiRequestError } from '@/lib/fetcher';
 import { formatDateTime, formatPhone } from '@/lib/format';
-import { LEAD_STATUS_LABEL, type LeadDetail as LeadDetailType, type LeadStatus } from '@/types/lead';
+import { isOptOutActivity, LEAD_STATUS_LABEL, type LeadDetail as LeadDetailType, type LeadStatus } from '@/types/lead';
 import type { SendLeadMessageResponse } from '@/types/lead-message';
 
 const ALL_STATUSES = Object.keys(LEAD_STATUS_LABEL) as LeadStatus[];
+
+/**
+ * A ficha não tinha NENHUMA forma de saber, sem o operador recarregar a
+ * página manualmente, que o lead respondeu — motivo direto do pedido do
+ * dono ("não está mostrando a resposta do lead") depois da 1ª conversa real
+ * em produção. `GET /leads/:id` é leitura pura (idempotente), então
+ * revalidar em segundo plano é seguro; 8s segue o mesmo espírito do
+ * `useQueueStatus` (20s, "banner de saúde") mas mais rápido, porque aqui é
+ * uma conversa ao vivo — perto do `useSearchJob` (3s), sem ir tão rápido
+ * porque não há uma condição de parada natural (a conversa nunca "termina").
+ */
+const LEAD_LIVE_POLL_MS = 8000;
 
 export function LeadDetail({ id }: { id: string }) {
   const [lead, setLead] = useState<LeadDetailType | null>(null);
@@ -29,6 +41,7 @@ export function LeadDetail({ id }: { id: string }) {
   const [error, setError] = useState<Error | null>(null);
   const [isSavingStatus, setIsSavingStatus] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [liveUpdateFailed, setLiveUpdateFailed] = useState(false);
 
   function fetchLead() {
     setIsLoading(true);
@@ -42,6 +55,30 @@ export function LeadDetail({ id }: { id: string }) {
   useEffect(() => {
     fetchLead();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // Revalidação silenciosa em segundo plano — nunca reativa `isLoading` (sem
+  // piscar o skeleton) e pula o tick por completo enquanto uma troca de
+  // status está em voo, para não sobrescrever o valor otimista com o dado
+  // antigo do servidor no meio da corrida. Um envio de mensagem não precisa
+  // do mesmo cuidado: `sendLeadMessage` já retornou (o servidor já persistiu)
+  // antes de `handleMessageSent` tocar o estado local.
+  const isSavingStatusRef = useRef(isSavingStatus);
+  isSavingStatusRef.current = isSavingStatus;
+  const hasLoadedRef = useRef(false);
+  hasLoadedRef.current = Boolean(lead) && !error;
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      if (!hasLoadedRef.current || isSavingStatusRef.current) return;
+      getLead(id)
+        .then((fresh) => {
+          setLead(fresh);
+          setLiveUpdateFailed(false);
+        })
+        .catch(() => setLiveUpdateFailed(true));
+    }, LEAD_LIVE_POLL_MS);
+    return () => clearInterval(intervalId);
   }, [id]);
 
   function handleMessageSent(response: SendLeadMessageResponse) {
@@ -175,13 +212,16 @@ export function LeadDetail({ id }: { id: string }) {
       {statusError && <ErrorState message={statusError} />}
 
       {lead.isOptedOut && (
-        <OptedOutBanner optedOutAt={lead.activities.find((a) => a.type === 'opted_out')?.createdAt ?? null} />
+        <OptedOutBanner optedOutAt={lead.activities.find((a) => isOptOutActivity(a.type))?.createdAt ?? null} />
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* `elevated`: esta é a única informação de identidade/contato da
-            ficha — ganha um degrau de destaque sobre a Linha do tempo/
-            Conversa (`flat`), que são histórico, não a referência primária. */}
+        {/* `elevated`: identidade/contato do lead — referência primária da
+            ficha. Redesenho de 2026-09-23 (pedido do dono, 1ª conversa real):
+            a Conversa também virou `elevated` (é onde o trabalho acontece
+            agora), só a Linha do tempo (histórico) ficou `flat` — as 4 caixas
+            de mesmo peso que existiam antes eram parte da reclamação de
+            "tela sem vida". */}
         <Card variant="elevated" className="lg:col-span-1">
           <CardHeader>
             <CardTitle className="text-base">Contato</CardTitle>
@@ -236,25 +276,25 @@ export function LeadDetail({ id }: { id: string }) {
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Conversa</CardTitle>
-          </CardHeader>
-          <CardContent className="max-h-[520px] overflow-y-auto">
-            <LeadConversation messages={lead.messages} activities={lead.activities} />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Enviar mensagem</CardTitle>
-          </CardHeader>
-          <CardContent>
+      {/* `elevated`: a conversa é onde o trabalho acontece agora que há
+          contato real — protagonista da ficha, não mais uma caixa de
+          histórico ao lado de um formulário separado. O compositor mora no
+          RODAPÉ deste mesmo card (chat), não num card paralelo. */}
+      <Card variant="elevated">
+        <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <MessageSquare className="size-4 text-primary" aria-hidden="true" />
+            Conversa
+          </CardTitle>
+          <LiveUpdateIndicator failed={liveUpdateFailed} />
+        </CardHeader>
+        <CardContent className="flex flex-col gap-0 p-0">
+          <LeadConversation messages={lead.messages} activities={lead.activities} />
+          <div className="border-t border-border bg-muted/30 px-4 py-4 sm:px-6">
             <MessageComposer lead={lead} onSent={handleMessageSent} />
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -276,6 +316,32 @@ function InfoRow({
         <p>{children}</p>
       </div>
     </div>
+  );
+}
+
+/**
+ * Não é `Alert` de propósito — uma falha de revalidação em segundo plano é
+ * transitória e não deve competir visualmente com o conteúdo (mesmo
+ * espírito do aviso inline de `SearchJobProgress` quando o polling de
+ * progresso falha uma vez: mostra o último dado bom, tenta de novo sozinho).
+ */
+function LiveUpdateIndicator({ failed }: { failed: boolean }) {
+  if (failed) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
+        <CircleAlert className="size-3.5 text-warning-foreground dark:text-warning" aria-hidden="true" />
+        Atualização automática falhou — tentando de novo
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className="relative flex size-2">
+        <span className="absolute inline-flex size-full rounded-full bg-success motion-safe:animate-ping" />
+        <span className="relative inline-flex size-2 rounded-full bg-success" />
+      </span>
+      Ao vivo
+    </span>
   );
 }
 

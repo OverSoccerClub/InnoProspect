@@ -12,6 +12,11 @@ const dateFormatter = new Intl.DateTimeFormat('pt-BR', {
   year: 'numeric',
 });
 
+const timeFormatter = new Intl.DateTimeFormat('pt-BR', {
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
 const relativeFormatter = new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' });
 
 export function formatDateTime(iso: string | null | undefined): string {
@@ -26,6 +31,32 @@ export function formatDate(iso: string | null | undefined): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '—';
   return dateFormatter.format(date);
+}
+
+/** Só hora:minuto — usado em bolhas de conversa, onde a data já aparece como separador de dia. */
+export function formatTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return timeFormatter.format(date);
+}
+
+/** "Hoje" / "Ontem" / data completa — separador de dia numa lista cronológica (ex.: conversa). */
+export function formatDayLabel(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  const today = new Date();
+  const diffDays = Math.round(
+    (startOfDay(today).getTime() - startOfDay(date).getTime()) / 86_400_000,
+  );
+  if (diffDays === 0) return 'Hoje';
+  if (diffDays === 1) return 'Ontem';
+  return dateFormatter.format(date);
+}
+
+function startOfDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 export function formatRelative(iso: string | null | undefined): string {

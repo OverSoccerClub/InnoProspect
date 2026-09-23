@@ -103,12 +103,46 @@ function readQr(root: Record<string, unknown>): ParsedQr | null {
   return { base64, code: readString(root.code) ?? readString(qrRaw?.code) };
 }
 
+/**
+ * Chave (`apikey`) ESPECÍFICA da instância — distinta da chave GLOBAL do
+ * servidor (`EvolutionServer`, cifrada em
+ * `apps/web/src/lib/evolution-server-crypto.ts`). Achado do dono
+ * (2026-09-23, painel da Evolution): cada instância v2 tem a SUA PRÓPRIA
+ * `apikey`. NÃO CONFIRMADO contra servidor real (mesma ressalva do arquivo
+ * inteiro) qual dos formatos abaixo a v2.3.7 realmente devolve — aceita
+ * todos os plausíveis, do mais específico (documentado publicamente para a
+ * v2: `hash.apikey`) ao mais genérico:
+ *   - `hash` como OBJETO: `{ apikey: "..." }` (formato v2 documentado)
+ *   - `hash` como STRING direta (formato v1, por segurança de versão antiga)
+ *   - `token`/`apikey` soltos na raiz ou dentro de `instance` (visto em
+ *     variações de fork/versão da Evolution API)
+ * Devolve `null` se nenhum campo reconhecido existir — quem chama (
+ * `EvolutionClient.createInstance`/`fetchInstances`) trata `null` como "sem
+ * credencial própria capturada", nunca lança por isso.
+ */
+function readInstanceApiKey(root: Record<string, unknown>, instance: Record<string, unknown> | null): string | null {
+  const hashRaw = root.hash;
+  if (typeof hashRaw === 'string' && hashRaw.length > 0) return hashRaw;
+  const hashRecord = asRecord(hashRaw);
+  return (
+    readString(hashRecord?.apikey) ??
+    readString(root.token) ??
+    readString(root.apikey) ??
+    readString(instance?.token) ??
+    readString(instance?.apikey) ??
+    readString(instance?.hash) ??
+    null
+  );
+}
+
 /** `POST /instance/create` — resposta traz instância criada e, com `qrcode:true`, o QR já na mesma chamada. */
 export function parseCreateInstanceResponse(body: unknown): {
   instanceName: string | null;
   instanceId: string | null;
   state: RawInstanceState | null;
   qr: ParsedQr | null;
+  /** 🆕 credencial própria da instância (ver `readInstanceApiKey` acima) — `null` se não capturada. */
+  apiKey: string | null;
 } {
   const root = asRecord(body) ?? {};
   const instance = asRecord(root.instance) ?? root;
@@ -117,7 +151,37 @@ export function parseCreateInstanceResponse(body: unknown): {
     instanceId: readString(instance.instanceId) ?? readString(root.instanceId),
     state: (readString(instance.status) ?? readString(instance.state)) as RawInstanceState | null,
     qr: readQr(root),
+    apiKey: readInstanceApiKey(root, instance),
   };
+}
+
+export type FetchedInstanceInfo = {
+  /** `evolutionInstanceName` (o nome dentro do container Evolution, não o `id`/`name` amigável nosso). */
+  instanceName: string | null;
+  /** Credencial própria desta instância — `null` se a Evolution não devolveu nenhum campo reconhecido para ela. */
+  apiKey: string | null;
+};
+
+/**
+ * `GET /instance/fetchInstances` — usado pelo comando operacional
+ * `apps/web/scripts/sync-instance-api-keys.ts` para preencher a credencial
+ * própria de instâncias JÁ PAREADAS (criadas antes desta correção, ou cuja
+ * captura em `parseCreateInstanceResponse` falhou). NÃO CONFIRMADO contra
+ * servidor real qual dos dois formatos abaixo a v2.3.7 usa — aceita os dois,
+ * mesma convenção de aninhamento de `parseCreateInstanceResponse`:
+ *   - achatado: `[{ name/instanceName, token/hash/apikey, ... }]`
+ *   - aninhado: `[{ instance: { instanceName, token/hash/apikey } }]`
+ */
+export function parseFetchInstancesResponse(body: unknown): FetchedInstanceInfo[] {
+  const root = asRecord(body);
+  const list: unknown[] = Array.isArray(body) ? body : Array.isArray(root?.instances) ? (root!.instances as unknown[]) : [];
+  return list.map((item) => {
+    const itemRoot = asRecord(item) ?? {};
+    const instance = asRecord(itemRoot.instance);
+    const instanceName =
+      readString(instance?.instanceName) ?? readString(instance?.name) ?? readString(itemRoot.instanceName) ?? readString(itemRoot.name);
+    return { instanceName, apiKey: readInstanceApiKey(itemRoot, instance) };
+  });
 }
 
 /** `GET /instance/connect/:name` — devolve QR (ainda conectando) OU `{instance:{state:'open'}}` se já pareado. */

@@ -141,6 +141,22 @@ padrão — só editei em 2026-09-23 porque o Atlas delegou explicitamente a rem
 extensão do enum `ScraperHealthEventType` nesta rodada; fora de uma delegação explícita como essa,
 relatar no handoff em vez de editar.
 
+**Meu escopo entregue (webhook mudo em produção, incidente 2026-09-23, mesmo
+dia — pedido direto do dono, 1ª mensagem real enviada):** webhook da
+Evolution recusava TODO retorno (status/resposta/opt-out) em silêncio —
+validava só a chave GLOBAL do `EvolutionServer`, mas a v2 dá uma `apikey`
+PRÓPRIA por instância (achado do dono no painel). Corrigido aceitando as
+DUAS candidatas em paralelo (nunca escolhendo uma só, já que não dá para
+confirmar qual a Evolution usa sem servidor real disponível) — 4 colunas
+novas cifradas em `WhatsAppInstance` (migração aditiva
+`20260923150000_instance_webhook_apikey`), captura na criação
+(`EvolutionClient.createInstance` agora devolve `apiKey`), comando
+operacional `apps/web/scripts/sync-instance-api-keys.ts` para a instância
+JÁ PAREADA do dono (só lê `fetchInstances`, nunca reconecta), e log
+distinguindo o motivo da recusa (nunca na resposta HTTP, que continua
+sempre `404`). Detalhe completo, causa raiz e o que não ficou provado em
+[[bug-webhook-apikey-instance-vs-global]].
+
 Ver também [[convention-api-routes-fase1]] (padrões de rota/serviço estabelecidos),
 [[convention-messaging-evolution-api]] (cliente Evolution API + webhook parser) e
 [[bug-nextauth-edge-prisma-split]]/[[bug-nextjs-workspace-ts-source-imports]]/

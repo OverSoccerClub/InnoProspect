@@ -163,6 +163,21 @@ export const PHONE_TYPE_LABEL: Record<PhoneType, string> = {
   unknown: 'Desconhecido',
 };
 
+/**
+ * `LeadActivity.type` é texto livre no contrato (`z.string()`,
+ * `packages/contracts/src/lead.contract.ts`) — o backend grava
+ * `'opt_out'` (ver `lib/services/optouts.ts`/`lib/services/webhook.ts`,
+ * território do Vega), enquanto esta tela padronizou `'opted_out'` desde a
+ * 1ª rodada. As duas grafias precisam ser reconhecidas como o MESMO evento
+ * aqui — nunca "corrigir" renomeando o dado real, só tolerar as duas na
+ * leitura. Achado real (2026-09-23): sem isto, o selo de opt-out na linha do
+ * tempo caía no fallback genérico (ícone neutro, texto cru "opt_out") em
+ * qualquer lead descadastrado por resposta automática em produção.
+ */
+export function isOptOutActivity(type: string): boolean {
+  return type === 'opted_out' || type === 'opt_out';
+}
+
 export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {
   new: 'Novo',
   validated: 'Validado',
