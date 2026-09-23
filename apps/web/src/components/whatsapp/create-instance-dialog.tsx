@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { Loader2, Server as ServerIcon } from 'lucide-react';
 
@@ -56,15 +56,36 @@ export function CreateInstanceDialog({ open, onOpenChange, onCreated }: CreateIn
       .finally(() => setIsLoadingServers(false));
   }
 
+  /**
+   * ⚠️ Carregar a lista AQUI, reagindo à prop `open`, e não dentro de
+   * `handleOpenChange`.
+   *
+   * `onOpenChange` do Radix só dispara quando o PRÓPRIO diálogo muda de
+   * estado (Esc, clique fora, botão de fechar). Quem abre este diálogo é o
+   * botão "Nova instância" da página, que altera o estado de fora
+   * (`setIsCreateOpen(true)` em `app/(dashboard)/whatsapp/page.tsx`) — nesse
+   * caminho o callback nunca é chamado com `true`.
+   *
+   * Foi assim que a tela chegou em produção com o select de servidor vazio e
+   * travado, sem erro e sem o aviso de "nenhum servidor": do ponto de vista
+   * do componente, a busca jamais tinha começado (`servers` seguia `null`, e
+   * os dois avisos dependem dela ter terminado). Achado em 2026-09-23, com o
+   * servidor já cadastrado e a API respondendo certo.
+   *
+   * Regra para o próximo diálogo controlado de fora: efeito colateral de
+   * abertura pertence a um efeito sobre a prop, nunca ao callback do Radix.
+   */
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    setName('');
+    setServers(null);
+    setEvolutionServerId('');
+    loadServers();
+  }, [open]);
+
   function handleOpenChange(next: boolean) {
     onOpenChange(next);
-    if (next) {
-      setError(null);
-      setName('');
-      setServers(null);
-      setEvolutionServerId('');
-      loadServers();
-    }
   }
 
   const activeServers = (servers ?? []).filter((s) => s.isActive);
