@@ -240,6 +240,33 @@ Mesmas de `DATABASE_URL`, `REDIS_URL`, `LOG_LEVEL`, `EVOLUTION_API_URL`, `EVOLUT
 
 ---
 
+## 7.2. Scripts operacionais do worker (backfill e afins)
+
+Rodam com **Node puro**, a partir de `/app` no shell do container do `worker`:
+
+```sh
+node dist/scripts/backfill-off-niche.js --dry-run   # mostra o que mudaria
+node dist/scripts/backfill-off-niche.js             # aplica
+```
+
+⚠️ **Nunca `pnpm run <script>` dentro do container.** A imagem final do worker
+não tem `pnpm`, não tem `tsx` e não copia `src/` — carrega só `dist/`, o
+`package.json` e o node_modules de produção. Em 2026-09-23 a primeira
+tentativa real de rodar o backfill falhou com `/bin/sh: 1: pnpm: not found`
+exatamente por isso.
+
+Por isso **todo script operacional novo precisa ser uma entrada do tsup**
+(`apps/worker/tsup.config.ts`). Um script que só existe como `.ts` executado
+por `tsx` funciona na máquina de quem escreveu e é impossível de rodar em
+produção — e isso só se descobre na hora em que ele é necessário.
+
+**Quando rodar o `backfill-off-niche`:** uma vez depois do deploy que
+introduziu `Lead.offNiche` (leads coletados antes disso ficam com o valor
+padrão, "dentro do nicho", sem terem sido avaliados), e de novo sempre que o
+critério em `packages/core/src/leads/niche.ts` mudar. É idempotente.
+
+---
+
 ## 7.5. Backup do Postgres — obrigatório antes de dado de cliente real
 
 Passo a passo completo, com o teste de restore, em `infra/backup/README.md`.

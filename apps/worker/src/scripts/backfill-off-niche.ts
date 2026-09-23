@@ -25,9 +25,19 @@
  * carregar a tabela inteira em memória de uma vez — ver nota de escala na
  * migração `20260923090000_lead_off_niche`.
  *
- * USO (dentro do container, a partir de apps/worker):
- *   pnpm run backfill:off-niche
- *   node ../../node_modules/.bin/tsx src/scripts/backfill-off-niche.ts [--dry-run]
+ * USO EM PRODUÇÃO (shell no container do worker, working dir `/app`):
+ *   node dist/scripts/backfill-off-niche.js [--dry-run]
+ *
+ * ⚠️ NÃO use `pnpm run backfill:off-niche` no container. A imagem final não
+ * tem `pnpm`, não tem `tsx` e não copia `src/` — ela carrega só `dist/`, o
+ * `package.json` e o node_modules de produção. O comando com `pnpm` falha
+ * com `/bin/sh: 1: pnpm: not found`, que foi o que aconteceu na primeira
+ * tentativa real (2026-09-23). É por isso que este arquivo é uma ENTRADA do
+ * tsup (ver `apps/worker/tsup.config.ts`) e não só um script de
+ * desenvolvimento.
+ *
+ * USO EM DESENVOLVIMENTO (a partir de apps/worker, com o fonte à mão):
+ *   pnpm run backfill:off-niche [-- --dry-run]
  */
 import { prisma } from '@inno/db';
 import { isOffNiche } from '@inno/core';

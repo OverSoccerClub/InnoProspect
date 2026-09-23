@@ -15,7 +15,19 @@ import { defineConfig } from 'tsup';
 // binário nativo, sem asset lido por caminho relativo em runtime — conferido
 // em 2026-09-22) — seguros para embutir dentro do bundle do worker.
 export default defineConfig({
-  entry: ['src/index.ts'],
+  // O segundo entry NÃO é conveniência: sem ele o backfill é impossível de
+  // rodar em produção. A imagem final (stage `runner` do Dockerfile) não tem
+  // `pnpm`, não tem `tsx` e não copia `src/` — só `dist/`, o `package.json` e
+  // o node_modules de produção. Um script que só existe como `.ts` executado
+  // por `tsx` funciona na máquina de quem escreveu e falha no container com
+  // `pnpm: not found`, que foi exatamente o que aconteceu em 2026-09-23
+  // quando o dono foi rodar o backfill de `offNiche`.
+  //
+  // Regra para o próximo script operacional (backfill, migração de dado,
+  // reprocessamento): ele entra AQUI, e a instrução de uso é
+  // `node dist/<nome>.js` — nunca `pnpm run <script>`, que pressupõe um
+  // ambiente de desenvolvimento que a imagem de produção não tem.
+  entry: ['src/index.ts', 'src/scripts/backfill-off-niche.ts'],
   format: ['esm'],
   target: 'node20',
   clean: true,
