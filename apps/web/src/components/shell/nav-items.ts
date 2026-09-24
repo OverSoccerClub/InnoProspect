@@ -31,7 +31,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/buscas', label: 'Buscas', icon: Search },
       { href: '/leads', label: 'Leads', icon: Users },
       { href: '/templates', label: 'Templates', icon: MessageSquareText },
-      { href: '/campanhas', label: 'Campanhas', icon: Megaphone, comingSoon: true },
+      { href: '/campanhas', label: 'Campanhas', icon: Megaphone },
     ],
   },
   {

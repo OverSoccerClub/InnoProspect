@@ -512,7 +512,21 @@ export function mockListLeads(filter: LeadFilter): LeadListResponse {
   const start = (page - 1) * pageSize;
   const pageItems = items.slice(start, start + pageSize);
 
-  const data: LeadListItem[] = pageItems.map((lead) => ({
+  const data: LeadListItem[] = pageItems.map(toLeadListItem);
+
+  return {
+    data,
+    page,
+    pageSize,
+    total: items.length,
+    totalPages,
+    facets,
+  };
+}
+
+/** Mesmo shape em todo lugar que expõe `MockLead` como `LeadListItem` — evita a lista paginada e a de audiência de campanha divergirem em algum campo. */
+function toLeadListItem(lead: MockLead): LeadListItem {
+  return {
     id: lead.id,
     name: lead.name,
     phoneE164: lead.phoneE164,
@@ -532,16 +546,29 @@ export function mockListLeads(filter: LeadFilter): LeadListResponse {
     searchJobId: lead.searchJobId,
     searchNiche: lead.searchNiche,
     offNiche: lead.offNiche,
-  }));
-
-  return {
-    data,
-    page,
-    pageSize,
-    total: items.length,
-    totalPages,
-    facets,
   };
+}
+
+/**
+ * `mocks/campaigns.ts` importa isto para montar a audiência de uma campanha
+ * (`CampaignAudienceInput`, `@inno/contracts`) — o MESMO filtro de `GET
+ * /leads`, sem paginação (a API real materializa todos os alvos elegíveis de
+ * uma vez, não uma página). Import de mão única (leads.ts → nunca importa de
+ * campaigns.ts) para não criar ciclo ESM entre os dois mocks — mesma
+ * convenção já usada entre `mocks/whatsapp.ts` e `mocks/leads.ts`.
+ *
+ * Ordenado por `createdAt` ascendente: é o que garante que `duplicatePhone`
+ * (ARQUITETURA §4.5.4, item 4 — "mantém o de `createdAt` mais antigo")
+ * exclua sempre o mesmo lead, e não dependa da ordem de inserção interna do
+ * array de mock.
+ */
+export function mockFindLeadsForAudience(input: { mode: 'ids'; leadIds: string[] } | { mode: 'filter'; filter: LeadFilter }): LeadListItem[] {
+  const items =
+    input.mode === 'ids'
+      ? getLeads().filter((l) => input.leadIds.includes(l.id))
+      : filterLeads(input.filter);
+
+  return [...items].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0)).map(toLeadListItem);
 }
 
 // ─────────────────────────────────────────────────────────────────────────

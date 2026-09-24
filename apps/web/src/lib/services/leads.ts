@@ -199,8 +199,16 @@ async function fetchTodosOptedOut(): Promise<string[]> {
  * `listLeads`) não precisam de facets, então sempre `includeStatus: true`.
  * Único ponto que decide "buscar `fetchTodosOptedOut` ou não" para os dois,
  * em vez de cada chamador reimplementar essa regra.
+ *
+ * 🆕 Fase 4.D — EXPORTADA para `lib/services/campaigns.ts#loadCandidateLeads`
+ * (`audience.mode === 'filter'`, ARQUITETURA §4.5.4). É literalmente o mesmo
+ * `LeadFilter` documentado como compartilhado em 3 lugares (`leadFilterSchema`,
+ * comentário no topo de `lead.contract.ts`) — reimplementar este `where` numa
+ * 2ª função seria o mesmo anti-padrão que a ARQUITETURA proíbe para o guard de
+ * envio ("segunda implementação = reprovação do Órion"), só que para o filtro
+ * de audiência.
  */
-async function resolveLeadWhere(filter: LeadFilter): Promise<Prisma.LeadWhereInput> {
+export async function resolveLeadWhere(filter: LeadFilter): Promise<Prisma.LeadWhereInput> {
   const todosOptedOut = filter.optedOut !== undefined ? await fetchTodosOptedOut() : null;
   return buildWhere(filter, { includeStatus: true, todosOptedOut });
 }

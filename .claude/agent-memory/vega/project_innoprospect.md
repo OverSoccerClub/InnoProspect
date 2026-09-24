@@ -132,6 +132,19 @@ decisão do Cronos, não editei território dela). No mesmo commit, corrigi o
 bug do Órion em `messages.ts` (`nextSendAllowedAt` gravado com `SET` cego —
 podia recuar sob concorrência): [[bug-pace-lock-blind-set-regression]].
 
+**Meu escopo entregue (Fase 4.D — API de campanha sem motor + disparo manual,
+2026-09-24, em paralelo com a Lyra montando as telas no mesmo dia):**
+`apps/web/src/app/api/v1/campaigns/**` (POST/GET/PATCH/DELETE, ações
+start/pause/resume/cancel, disparo manual por alvo) + `lib/services/
+campaigns.ts`. Estendi `sendLeadMessage` (`messages.ts`) com contexto de
+campanha opcional em vez de duplicar o guard. Preenchi 3 gaps do contrato
+(`alreadyTargeted`, `PATCH`, envio manual por alvo) que a Lyra já tinha
+documentado como pendentes no `types/campaign.ts` dela — coordenação ficou
+visível em tempo real (ela reagiu e já consumiu os nomes exatos que eu
+publiquei antes de eu terminar a rodada). Detalhe completo, decisões de
+escopo (sem `POST /campaigns/preview`) e o que não ficou provado em
+[[convention-campanhas-fase-4d]].
+
 **Como aplicar:** antes de tocar em `apps/web/src/app/api/**`, `lib/api-handler.ts`, `lib/auth*.ts`,
 `middleware.ts` ou `apps/worker/**`, ler este arquivo + [[convention-api-routes-fase1]] +
 [[bug-nextauth-edge-prisma-split]] + [[bug-nextjs-workspace-ts-source-imports]] antes de reabrir

@@ -51,9 +51,37 @@ import type { SendLeadMessageBody, SendLeadMessageResponse, SendLeadMessageWarni
 import { badRequest, conflict, notFound, rateLimited, upstreamError } from '@/lib/api-handler';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getEvolutionClientForInstance } from '@/lib/evolution';
-import { haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
+import { advanceCampaignTargetStatus, haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
 import { sendAlert } from '@/lib/alerts';
 import { logger } from '@/lib/logger';
+
+/**
+ * 🆕 Fase 4.D — contexto opcional passado por `lib/services/campaigns.ts`
+ * quando o envio é o disparo MANUAL alvo-a-alvo de uma campanha (nunca pelo
+ * futuro motor automático, que não existe ainda — ARQUITETURA §6.8/Fase 4.F).
+ * Passar isto é o que faz `sendLeadMessage` gravar `Message.campaignTargetId`
+ * (FK única) e avançar `CampaignTarget.status`/`CampaignInstance.sentCount|
+ * failedCount` NA MESMA transação do resultado do envio — em vez de criar um
+ * SEGUNDO caminho de guard/rede, que é exatamente o padrão que a ARQUITETURA
+ * proíbe ("segunda implementação do portão = reprovação do Órion"). Decisão
+ * registrada: campanha SEMPRE reusa este mesmo `sendLeadMessage`, nunca uma
+ * função paralela.
+ */
+export type CampaignSendContext = {
+  targetId: string;
+  campaignId: string;
+  /**
+   * Restringe a resolução AUTOMÁTICA de instância (quando `input.instanceId`
+   * não vem no corpo) às instâncias desta campanha — sem isto, o disparo
+   * manual de um alvo de campanha poderia escolher qualquer instância do
+   * sistema, ignorando a lista que o operador configurou no `POST
+   * /campaigns`. Rotação/afinidade "de verdade" (round-robin ponderado,
+   * ARQUITETURA §6.5) é território do `dispatch-tick.job` (Fase 4.F, ainda
+   * não existe) — aqui é só um filtro do conjunto elegível, reusando a MESMA
+   * ordenação por cota/afinidade que o envio unitário já tinha.
+   */
+  allowedInstanceIds: readonly string[];
+};
 
 const APP_TIMEZONE = () => process.env.APP_TIMEZONE || DEFAULT_SEND_WINDOW_CONFIG.timezone;
 
@@ -305,8 +333,10 @@ function buildLeadTemplateValues(lead: Lead & { city: { name: string } | null })
 
 type InstanceCandidate = { instance: WhatsAppInstance; sentToday: number; dailyLimit: number; remaining: number };
 
-async function loadInstanceCandidates(): Promise<InstanceCandidate[]> {
-  const instances = await prisma.whatsAppInstance.findMany();
+async function loadInstanceCandidates(allowedInstanceIds?: readonly string[]): Promise<InstanceCandidate[]> {
+  const instances = await prisma.whatsAppInstance.findMany(
+    allowedInstanceIds ? { where: { id: { in: [...allowedInstanceIds] } } } : undefined,
+  );
   if (instances.length === 0) return [];
 
   const today = todayDateKey();
@@ -329,8 +359,18 @@ function describeInstanceUnavailability(candidate: InstanceCandidate): string {
   return `${candidate.instance.name}: cota diária esgotada (${candidate.sentToday}/${candidate.dailyLimit}).`;
 }
 
-async function resolveInstanceForSend(leadId: string, requestedInstanceId: string | undefined): Promise<InstanceCandidate> {
+async function resolveInstanceForSend(
+  leadId: string,
+  requestedInstanceId: string | undefined,
+  allowedInstanceIds?: readonly string[],
+): Promise<InstanceCandidate> {
   if (requestedInstanceId) {
+    // 🆕 Fase 4.D — disparo manual de campanha só pode escolher UMA das
+    // instâncias que o operador colocou na campanha (`POST /campaigns`),
+    // nunca qualquer instância do sistema.
+    if (allowedInstanceIds && !allowedInstanceIds.includes(requestedInstanceId)) {
+      conflict('Esta instância não faz parte da campanha.', [{ path: 'instanceId', message: requestedInstanceId }], 'INSTANCE_NOT_IN_CAMPAIGN');
+    }
     const instance = await prisma.whatsAppInstance.findUnique({ where: { id: requestedInstanceId } });
     if (!instance) notFound('Instância de WhatsApp não encontrada.', 'INSTANCE_NOT_FOUND');
     const today = todayDateKey();
@@ -342,7 +382,7 @@ async function resolveInstanceForSend(leadId: string, requestedInstanceId: strin
 
   const [lastMessageWithInstance, allCandidates] = await Promise.all([
     prisma.message.findFirst({ where: { leadId }, orderBy: { createdAt: 'desc' }, select: { instanceId: true } }),
-    loadInstanceCandidates(),
+    loadInstanceCandidates(allowedInstanceIds),
   ]);
 
   const eligible = allCandidates.filter((c) => c.instance.status === 'connected' && c.remaining > 0);
@@ -439,9 +479,11 @@ async function recordSendFailure(
     /** 🆕 Fase 4.C — a cadência avança mesmo em falha CONFIRMADA (§6.8.7: "depois de TODO envio"). */
     paceMode: PaceAdvanceMode;
     paceResult: AdvanceSendPaceResult;
+    /** 🆕 Fase 4.D — presente só quando este envio é o disparo manual de um alvo de campanha. */
+    campaignContext?: CampaignSendContext;
   },
 ): Promise<void> {
-  const { messageId, instanceId, instanceName, instanceDate, effect, errorMessage, previousStatus, paceMode, paceResult } = params;
+  const { messageId, instanceId, instanceName, instanceDate, effect, errorMessage, previousStatus, paceMode, paceResult, campaignContext } = params;
 
   await tx.message.update({
     where: { id: messageId },
@@ -452,6 +494,18 @@ async function recordSendFailure(
     where: { instanceId_date: { instanceId, date: instanceDate } },
     data: { sentCount: { decrement: 1 }, failedCount: { increment: 1 } },
   });
+
+  // 🆕 Fase 4.D — falha CONFIRMADA no alvo de campanha: `failed`, terminal
+  // (nunca reaberto — ARQUITETURA §4.5.1 invariante 2), e o contador
+  // `CampaignInstance.failedCount` sobe NA MESMA transação (regra de ouro do
+  // §4.5.0: "nenhuma rota escreve `campaignTarget.status` direto").
+  if (campaignContext) {
+    await advanceCampaignTargetStatus(tx, campaignContext.targetId, 'failed', { skipReason: effect.reason });
+    await tx.campaignInstance.update({
+      where: { campaignId_instanceId: { campaignId: campaignContext.campaignId, instanceId } },
+      data: { failedCount: { increment: 1 } },
+    });
+  }
 
   // ⚠️ Este `update` roda SEMPRE agora (antes só rodava quando a falha
   // afetava `consecutiveFailures`/`status`) — a cadência (`sendsSinceMicroPause`)
@@ -538,15 +592,30 @@ async function recordSendUncertain(
     /** 🆕 Fase 4.C — a cadência avança mesmo em resultado incerto (§6.8.7: "depois de TODO envio", é o caso mais importante — a mensagem pode ter saído). */
     paceMode: PaceAdvanceMode;
     paceResult: AdvanceSendPaceResult;
+    /** 🆕 Fase 4.D — presente só quando este envio é o disparo manual de um alvo de campanha. */
+    campaignContext?: CampaignSendContext;
   },
 ): Promise<void> {
-  const { messageId, instanceId, effect, errorMessage, paceMode, paceResult } = params;
+  const { messageId, instanceId, effect, errorMessage, paceMode, paceResult, campaignContext } = params;
   const humanMessage = `Resultado incerto — a mensagem PODE ter sido entregue antes da falha de comunicação. Verifique a conversa antes de reenviar. (${errorMessage})`;
 
   await tx.message.update({
     where: { id: messageId },
     data: { status: 'failed', errorCode: effect.reason, errorMessage: humanMessage },
   });
+
+  // 🆕 Fase 4.D — ARQUITETURA A25/§6.8.6: resultado incerto na campanha vira
+  // `failed` (NUNCA retentado, cota não volta — `sentCount` já foi debitado
+  // no write-ahead e não é revertido aqui, igual ao envio unitário) e soma em
+  // `CampaignInstance.failedCount` (comentário do campo no schema: "incerto
+  // também entra no funil de falha aqui, coerente com `Campaign.failedCount`").
+  if (campaignContext) {
+    await advanceCampaignTargetStatus(tx, campaignContext.targetId, 'failed', { skipReason: effect.reason });
+    await tx.campaignInstance.update({
+      where: { campaignId_instanceId: { campaignId: campaignContext.campaignId, instanceId } },
+      data: { failedCount: { increment: 1 } },
+    });
+  }
 
   // 🆕 Fase 4.C — `consecutiveUncertain` (distinto de `consecutiveFailures`,
   // ver comentário do campo no schema) sobe em incerto e só zera em SUCESSO
@@ -583,14 +652,25 @@ async function recordSendUncertain(
  */
 async function revertExpiredReservation(
   tx: Prisma.TransactionClient,
-  params: { messageId: string; instanceId: string; instanceDate: Date },
+  params: { messageId: string; instanceId: string; instanceDate: Date; hasCampaignTarget?: boolean },
 ): Promise<void> {
-  const { messageId, instanceId, instanceDate } = params;
+  const { messageId, instanceId, instanceDate, hasCampaignTarget } = params;
   const errorMessage = 'A decisão de envio expirou antes de a mensagem ser efetivamente enviada (write-ahead demorou demais).';
 
   await tx.message.update({
     where: { id: messageId },
-    data: { status: 'failed', errorCode: 'SEND_WINDOW_EXPIRED', errorMessage },
+    data: {
+      status: 'failed',
+      errorCode: 'SEND_WINDOW_EXPIRED',
+      errorMessage,
+      // 🆕 Fase 4.D — desvincula do alvo de campanha (`campaignTargetId` é
+      // `@unique`): não houve TENTATIVA de envio (`sendText` nem foi
+      // chamado), então o alvo continua `pending` (nunca tocado por
+      // `advanceCampaignTargetStatus` aqui) e precisa poder gerar uma NOVA
+      // `Message` num retry — com a FK antiga presa a este registro morto,
+      // a 2ª tentativa estouraria a constraint única.
+      ...(hasCampaignTarget ? { campaignTargetId: null } : {}),
+    },
   });
   await tx.instanceDailyStat.update({
     where: { instanceId_date: { instanceId, date: instanceDate } },
@@ -613,6 +693,8 @@ export async function sendLeadMessage(
   leadId: string,
   input: SendLeadMessageBody,
   actor: { id: string; role: string },
+  /** 🆕 Fase 4.D — só presente quando `lib/services/campaigns.ts#sendCampaignTargetMessage` chama isto para o disparo manual de um alvo. */
+  campaignContext?: CampaignSendContext,
 ): Promise<SendLeadMessageResponse> {
   // Rate limit por USUÁRIO (ARQUITETURA §10 `MANUAL_SEND_RATE_PER_MIN`) — antes
   // de qualquer leitura de banco, mesmo espírito do rate limit por IP do
@@ -658,7 +740,7 @@ export async function sendLeadMessage(
 
   // G4/G7/G8 — dados de telefone/instância/cota
   const phoneType = lead.phoneType;
-  const candidate = await resolveInstanceForSend(lead.id, input.instanceId);
+  const candidate = await resolveInstanceForSend(lead.id, input.instanceId, campaignContext?.allowedInstanceIds);
   const { instance } = candidate;
 
   // 🆕 Fase 4.B — resolve o cliente Evolution do SERVIDOR desta instância
@@ -762,7 +844,18 @@ export async function sendLeadMessage(
   const reservedMessage = await prisma.$transaction(
     async (tx) => {
       const created = await tx.message.create({
-        data: { leadId: lead.id, instanceId: instance.id, direction: 'outbound', body: finalText, status: 'queued' },
+        data: {
+          leadId: lead.id,
+          instanceId: instance.id,
+          direction: 'outbound',
+          body: finalText,
+          status: 'queued',
+          // 🆕 Fase 4.D — liga a Message ao CampaignTarget (FK única) desde a
+          // criação — é o que o webhook usa para achar "este delivery/read/
+          // responded pertence a qual alvo de campanha" (`Message.
+          // campaignTargetId`, comentário no schema).
+          campaignTargetId: campaignContext?.targetId,
+        },
       });
       await tx.instanceDailyStat.upsert({
         where: { instanceId_date: { instanceId: instance.id, date: today } },
@@ -785,7 +878,9 @@ export async function sendLeadMessage(
   // leitura entre a decisão e `sendText`" que o Órion audita.
   const decisionAgeMs = Date.now() - guardNow.getTime();
   if (decisionAgeMs > MAX_DECISION_TO_SEND_MS) {
-    await prisma.$transaction((tx) => revertExpiredReservation(tx, { messageId: reservedMessage.id, instanceId: instance.id, instanceDate: today }));
+    await prisma.$transaction((tx) =>
+      revertExpiredReservation(tx, { messageId: reservedMessage.id, instanceId: instance.id, instanceDate: today, hasCampaignTarget: Boolean(campaignContext) }),
+    );
     logger.warn('sendLeadMessage: decisão expirou antes do envio (write-ahead demorou demais)', {
       leadId: lead.id,
       instanceId: instance.id,
@@ -823,6 +918,7 @@ export async function sendLeadMessage(
       previousStatus: instance.status,
       paceMode,
       paceResult,
+      campaignContext,
     });
     throw mapSendErrorToApiError(err);
   }
@@ -850,6 +946,17 @@ export async function sendLeadMessage(
     });
     await advanceNextSendAllowedAt(tx, instance.id, paceResult.nextSendAllowedAt);
     await advanceLeadToContacted(tx, lead.id, lead.status);
+    // 🆕 Fase 4.D — sucesso confirmado no alvo de campanha: avança o funil
+    // (`sent`) e soma em `CampaignInstance.sentCount`, na MESMA transação —
+    // regra de ouro do §4.5.0 ("nenhuma rota escreve `campaignTarget.status`
+    // direto", sempre por `advanceCampaignTargetStatus`).
+    if (campaignContext) {
+      await advanceCampaignTargetStatus(tx, campaignContext.targetId, 'sent', { sentAt });
+      await tx.campaignInstance.update({
+        where: { campaignId_instanceId: { campaignId: campaignContext.campaignId, instanceId: instance.id } },
+        data: { sentCount: { increment: 1 } },
+      });
+    }
     await tx.leadActivity.create({
       data: {
         leadId: lead.id,
@@ -887,7 +994,7 @@ export async function sendLeadMessage(
     message: {
       id: reservedMessage.id,
       leadId: lead.id,
-      campaignTargetId: null,
+      campaignTargetId: campaignContext?.targetId ?? null,
       instanceId: instance.id,
       direction: 'outbound',
       body: finalText,
@@ -977,6 +1084,8 @@ async function handleSendFailure(
     /** 🆕 Fase 4.C */
     paceMode: PaceAdvanceMode;
     paceResult: AdvanceSendPaceResult;
+    /** 🆕 Fase 4.D */
+    campaignContext?: CampaignSendContext;
   },
 ): Promise<void> {
   const messagingError = err instanceof MessagingError ? err : null;
@@ -1002,7 +1111,15 @@ async function handleSendFailure(
 
   if (effect.outcome === 'uncertain') {
     await prisma.$transaction((tx) =>
-      recordSendUncertain(tx, { messageId: ctx.messageId, instanceId: ctx.instanceId, effect, errorMessage, paceMode: ctx.paceMode, paceResult: ctx.paceResult }),
+      recordSendUncertain(tx, {
+        messageId: ctx.messageId,
+        instanceId: ctx.instanceId,
+        effect,
+        errorMessage,
+        paceMode: ctx.paceMode,
+        paceResult: ctx.paceResult,
+        campaignContext: ctx.campaignContext,
+      }),
     );
     return;
   }
@@ -1017,6 +1134,7 @@ async function handleSendFailure(
       errorMessage,
       paceMode: ctx.paceMode,
       paceResult: ctx.paceResult,
+      campaignContext: ctx.campaignContext,
     }),
   );
 }

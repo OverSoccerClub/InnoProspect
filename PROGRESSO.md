@@ -34,9 +34,9 @@ funcionar; é **volume** (campanhas) e **saber quando quebra** (alertas).
 
 **Mensagem fria enviada para um lead real, entregue, e resposta chegando de
 volta ao sistema.** Isso encerra a condição principal da objeção da Nova à
-Fase 4 (ver `ARQUITETURA.md §8`). Falta confirmar a última perna: **responder
-"SAIR" criando o registro de descadastro** — até isso ser visto, o motor
-automático não deve estrear.
+Fase 4 (ver `ARQUITETURA.md §8`). A última perna foi confirmada em **24/09**:
+**responder "SAIR" criou o registro de descadastro**. O portão está fechado —
+o motor pode ser construído.
 
 Custou três incidentes em sequência, todos na mesma integração, e vale ler os
 três juntos porque o padrão é mais útil que cada um:

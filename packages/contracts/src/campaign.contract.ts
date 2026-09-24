@@ -14,6 +14,7 @@ import {
   paginationQuerySchema,
 } from './common.js';
 import { leadFilterSchema } from './lead.contract.js';
+import { sendLeadMessageResponseSchema } from './whatsapp.contract.js';
 
 // ─────────────────────────────────────────────────────────────────────────
 // POST /api/v1/campaigns
@@ -70,13 +71,21 @@ export const campaignSettingsSchema = z.object({
 });
 export type CampaignSettings = z.infer<typeof campaignSettingsSchema>;
 
-/** `audience.excluded` — motivos pelos quais `totalMatched` virou `eligible`. */
+/**
+ * `audience.excluded` — motivos pelos quais `totalMatched` virou `eligible`.
+ * 🆕 `alreadyTargeted` (Fase 4.D, ARQUITETURA §4.5.4 item 6) — gap do
+ * rascunho v1.1 (Nova/Cronos), preenchido aqui pelo mesmo motivo do `reason`
+ * em `common.ts`: implementar sem o campo deixaria o "buraco" documentado no
+ * ARQUITETURA ("duas campanhas criadas no mesmo dia com públicos que se
+ * cruzam" abordam o mesmo lead duas vezes) sem contagem nenhuma na resposta.
+ */
 export const campaignAudienceExcludedSchema = z.object({
   optedOut: z.number().int().min(0),
   landline: z.number().int().min(0),
   noPhone: z.number().int().min(0),
   recentlyContacted: z.number().int().min(0),
   duplicatePhone: z.number().int().min(0),
+  alreadyTargeted: z.number().int().min(0),
 });
 export type CampaignAudienceExcluded = z.infer<typeof campaignAudienceExcludedSchema>;
 
@@ -242,3 +251,48 @@ export const cancelCampaignResponseSchema = z.object({
   cancelledTargets: z.number().int().min(0),
 });
 export type CancelCampaignResponse = z.infer<typeof cancelCampaignResponseSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────
+// PATCH /api/v1/campaigns/:id — 🆕 Fase 4.D (ARQUITETURA §4.5.5). Gap do
+// contrato original (Nova/Cronos não tinham escrito o body de PATCH ainda —
+// só a tabela normativa em prosa) preenchido aqui pelo mesmo motivo do
+// `alreadyTargeted` acima: a rota não existe sem ele.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const patchCampaignBodySchema = z
+  .object({
+    name: z.string().trim().min(3).max(120).optional(),
+    templateId: idSchema.optional(),
+    instanceIds: z.array(idSchema).min(1).optional(),
+    audience: campaignAudienceInputSchema.optional(),
+    settings: campaignSettingsInputSchema.optional(),
+    scheduledFor: isoDateTimeSchema.optional(),
+  })
+  .refine((body) => Object.keys(body).length > 0, { message: 'Informe ao menos um campo para atualizar' });
+export type PatchCampaignBody = z.infer<typeof patchCampaignBodySchema>;
+
+/** `200` de `PATCH /api/v1/campaigns/:id` — devolve o detalhe atualizado, igual a `GET /campaigns/:id`. */
+export const patchCampaignResponseSchema = campaignDetailSchema;
+export type PatchCampaignResponse = CampaignDetail;
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /api/v1/campaigns/:id/targets/:targetId/send — 🆕 Fase 4.D. Disparo
+// MANUAL, alvo-a-alvo (ARQUITETURA: "nenhum laço automático nesta rodada — o
+// motor é a Fase 4.F"). Não existia rota nem contrato — o operador escolhe
+// UM alvo `pending` de uma campanha `running` e dispara; o texto sai do
+// `renderedTemplateSnapshot` congelado no `start`, nunca do `MessageTemplate`
+// vivo. Reaproveita `sendLeadMessageResponseSchema` (`whatsapp.contract.ts`)
+// de propósito — é o MESMO formato de resposta do envio unitário da ficha do
+// lead (`message`/`instance`/`quota`/`warnings`), porque por baixo é a MESMA
+// função de serviço (`lib/services/messages.ts#sendLeadMessage`) que
+// processa os dois: o portão de envio é único, e a resposta reflete isso.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const sendCampaignTargetBodySchema = z.object({
+  /** Opcional — se omitido, escolhe entre as instâncias DA CAMPANHA por afinidade/cota (mesma regra do envio unitário, restrita a `instanceIds` da campanha). */
+  instanceId: idSchema.optional(),
+});
+export type SendCampaignTargetBody = z.infer<typeof sendCampaignTargetBodySchema>;
+
+export const sendCampaignTargetResponseSchema = sendLeadMessageResponseSchema;
+export type SendCampaignTargetResponse = z.infer<typeof sendCampaignTargetResponseSchema>;
