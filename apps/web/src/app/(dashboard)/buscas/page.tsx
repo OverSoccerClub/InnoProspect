@@ -7,10 +7,12 @@ import { Plus, Search } from 'lucide-react';
 import { EmptyState } from '@/components/common/empty-state';
 import { ErrorState } from '@/components/common/error-state';
 import { PageHeader } from '@/components/common/page-header';
+import { PendingBand, type PendingBandItem } from '@/components/common/pending-band';
 import { SearchJobsFilters, type SearchJobsFilterState } from '@/components/searches/search-jobs-filters';
 import { SearchJobsTable } from '@/components/searches/search-jobs-table';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useSearchJobPendingSignals } from '@/hooks/useSearchJobPendingSignals';
 import { useSearchJobs } from '@/hooks/useSearchJobs';
 
 export default function SearchJobsPage() {
@@ -20,8 +22,26 @@ export default function SearchJobsPage() {
     uf: filters.uf || undefined,
     q: filters.q || undefined,
   });
+  const { signals: pendingSignals, error: pendingSignalsError } = useSearchJobPendingSignals();
 
   const hasAnyFilter = Boolean(filters.status || filters.uf || filters.q);
+
+  // "Buscas que falharam" — um dos 5 candidatos reais listados pelo dono
+  // para a fila de trabalho; o único, dos cinco, que mora neste domínio.
+  // Ação reaproveita o MESMO filtro de status já existente na barra, nunca
+  // um atalho paralelo.
+  const pendingBandItems: PendingBandItem[] = pendingSignals
+    ? [
+        {
+          key: 'failed',
+          label: 'Buscas que falharam',
+          count: pendingSignals.failed,
+          tone: 'destructive',
+          actionLabel: 'Ver buscas',
+          onAction: () => setFilters((current) => ({ ...current, status: 'failed' })),
+        },
+      ]
+    : [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -37,6 +57,8 @@ export default function SearchJobsPage() {
           </Button>
         }
       />
+
+      {!pendingSignalsError && (pendingSignals ? <PendingBand items={pendingBandItems} /> : <Skeleton className="h-16 w-full" />)}
 
       <SearchJobsFilters value={filters} onChange={setFilters} />
 

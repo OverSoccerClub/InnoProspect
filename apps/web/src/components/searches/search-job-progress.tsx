@@ -9,15 +9,17 @@ import { SearchProgressBar } from '@/components/searches/search-progress-bar';
 import { SearchTaskList } from '@/components/searches/search-task-list';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState } from '@/components/common/empty-state';
 import { ErrorState } from '@/components/common/error-state';
+import { RecordHeader, type RecordHeaderField } from '@/components/common/record-header';
+import { TabsWithCount } from '@/components/common/tabs-with-count';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSearchJob } from '@/hooks/useSearchJob';
 import { cancelSearchJob, retryFailedTasks } from '@/lib/api/searches';
 import { ApiRequestError } from '@/lib/fetcher';
 import { formatDateTime } from '@/lib/format';
 import { getSearchJobOutcome } from '@/lib/search-job-outcome';
-import { cn } from '@/lib/utils';
 
 export function SearchJobProgress({ id }: { id: string }) {
   const { data: job, error, isLoading, isPolling, refetch } = useSearchJob(id);
@@ -82,19 +84,35 @@ export function SearchJobProgress({ id }: { id: string }) {
   const canRetryFailed = failedTasks.length > 0 && (job.status === 'failed' || job.status === 'completed');
   const outcome = getSearchJobOutcome(job);
 
+  // Cabeçalho de registro em colunas (mesma linguagem de `/leads/[id]`,
+  // pedido do dono, 2026-09-24) — substitui os 4 `Stat` soltos que este
+  // componente tinha à mão, formalizados no primitivo compartilhado.
+  const recordFields: RecordHeaderField[] = [
+    { key: 'status', label: 'Status', value: <SearchJobStatusBadge job={job} /> },
+    { key: 'niche', label: 'Nicho', value: job.niche },
+    { key: 'uf', label: 'UF', value: job.uf },
+    {
+      key: 'progress',
+      label: 'Progresso',
+      value: (
+        <span className="tabular-nums">
+          {job.progress.done}/{job.progress.total}
+          {job.progress.failed > 0 && <span className="ml-1 text-destructive">({job.progress.failed} falha)</span>}
+        </span>
+      ),
+    },
+    { key: 'leads-found', label: 'Leads encontrados', value: <span className="tabular-nums">{job.leadsFound}</span> },
+    { key: 'leads-new', label: 'Leads novos', value: <span className="tabular-nums">{job.leadsNew}</span> },
+    { key: 'created-at', label: 'Criada em', value: formatDateTime(job.createdAt) },
+  ];
+
   return (
     <div className="flex flex-col gap-6">
       <BackLink />
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl font-semibold tracking-tight">{job.name}</h1>
-            <SearchJobStatusBadge job={job} />
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {job.niche} · {job.uf} · criada em {formatDateTime(job.createdAt)}
-          </p>
+          <h1 className="font-display text-xl font-semibold tracking-tight">{job.name}</h1>
         </div>
         <div className="flex gap-2">
           {canRetryFailed && (
@@ -160,30 +178,39 @@ export function SearchJobProgress({ id }: { id: string }) {
       )}
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Progresso</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="flex items-center gap-3">
+        <CardContent className="flex flex-col gap-4 pt-4">
+          <RecordHeader fields={recordFields} />
+          <div className="flex items-center gap-3 border-t border-border pt-4">
             <SearchProgressBar progress={job.progress} className="flex-1" />
-            <span className="whitespace-nowrap text-sm text-muted-foreground">
-              {job.progress.done}/{job.progress.total} municípios
-              {job.progress.failed > 0 && <span className="text-destructive"> · {job.progress.failed} falha(s)</span>}
+            <span className="whitespace-nowrap text-xs text-muted-foreground">
+              {isPolling ? 'atualizando…' : 'parado'}
             </span>
-          </div>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <Stat label="Leads encontrados" value={job.leadsFound} />
-            <Stat label="Leads novos" value={job.leadsNew} />
-            <Stat label="Municípios com falha" value={job.progress.failed} tone={job.progress.failed > 0 ? 'destructive' : undefined} />
-            <Stat label="Status" value={isPolling ? 'atualizando…' : 'parado'} isText />
           </div>
         </CardContent>
       </Card>
 
-      <div>
-        <h2 className="mb-3 text-base font-semibold">Municípios ({job.tasks.length})</h2>
-        <SearchTaskList tasks={job.tasks} />
-      </div>
+      {/* Abas com contador (pedido do dono, referência Altezza) — "Com
+          falha" é a MESMA lista de municípios, filtrada, não um 2º
+          endpoint: zero dado novo pedido ao backend. */}
+      <TabsWithCount
+        items={[
+          { key: 'all', label: 'Municípios', count: job.tasks.length, content: <SearchTaskList tasks={job.tasks} /> },
+          {
+            key: 'failed',
+            label: 'Com falha',
+            count: failedTasks.length,
+            content:
+              failedTasks.length > 0 ? (
+                <SearchTaskList tasks={failedTasks} />
+              ) : (
+                <EmptyState
+                  title="Nenhum município com falha"
+                  description="Todos os municípios processados até agora tiveram sucesso."
+                />
+              ),
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -197,31 +224,5 @@ function BackLink() {
       <ArrowLeft className="size-4" aria-hidden="true" />
       Voltar para buscas
     </Link>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  isText,
-  tone,
-}: {
-  label: string;
-  value: number | string;
-  isText?: boolean;
-  tone?: 'destructive';
-}) {
-  return (
-    <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p
-        className={cn(
-          isText ? 'text-sm font-medium' : 'text-lg font-semibold',
-          tone === 'destructive' && 'text-destructive',
-        )}
-      >
-        {value}
-      </p>
-    </div>
   );
 }

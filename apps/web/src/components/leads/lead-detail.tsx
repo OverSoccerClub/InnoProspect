@@ -2,10 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, CircleAlert, Globe, Loader2, MapPin, MessageSquare, Phone, Star } from 'lucide-react';
+import { ArrowLeft, CircleAlert, Globe, Loader2, MapPin, MessageSquare, Star } from 'lucide-react';
 
 import { ErrorState } from '@/components/common/error-state';
+import { LabeledField } from '@/components/common/labeled-field';
+import { RecordHeader, type RecordHeaderField } from '@/components/common/record-header';
 import { LeadConversation } from '@/components/leads/lead-conversation';
+import { LeadOrigin } from '@/components/leads/lead-origin';
 import { LeadStatusBadge } from '@/components/leads/lead-status-badge';
 import { LeadTimeline } from '@/components/leads/lead-timeline';
 import { MessageComposer } from '@/components/leads/message-composer';
@@ -20,6 +23,16 @@ import { ApiRequestError } from '@/lib/fetcher';
 import { formatDateTime, formatPhone } from '@/lib/format';
 import { isOptOutActivity, LEAD_STATUS_LABEL, type LeadDetail as LeadDetailType, type LeadStatus } from '@/types/lead';
 import type { SendLeadMessageResponse } from '@/types/lead-message';
+
+/**
+ * `message_sent`/`message_received`/`message_failed` já aparecem, de forma
+ * muito mais rica (bolha de chat, não uma linha "Mensagem enviada"), no card
+ * Conversa abaixo — deixá-los TAMBÉM na Linha do tempo duplicava o mesmo
+ * evento duas vezes na mesma tela (achado desta rodada de acabamento,
+ * 2026-09-24). A Linha do tempo agora é só o que NÃO tem representação em
+ * outro lugar da ficha: criação, mudança de status, notas, tags, opt-out.
+ */
+const MESSAGE_ACTIVITY_TYPES = new Set(['message_sent', 'message_received', 'message_failed']);
 
 const ALL_STATUSES = Object.keys(LEAD_STATUS_LABEL) as LeadStatus[];
 
@@ -159,11 +172,60 @@ export function LeadDetail({ id }: { id: string }) {
     );
   }
 
+  const timelineActivities = lead.activities.filter((activity) => !MESSAGE_ACTIVITY_TYPES.has(activity.type));
+
+  // Cabeçalho de registro em colunas (pedido do dono, referência Altezza,
+  // 2026-09-24) — o que antes eram 4 linhas espalhadas (badge ao lado do
+  // nome, InfoRow "Telefone"/"Avaliação" dentro do card Contato, "Última
+  // vez visto" solto no rodapé do mesmo card) virou uma tira rotulada única,
+  // legível num único olhar. `RecordHeader` não decide cor nenhuma — cada
+  // valor chega pronto (`LeadStatusBadge`, `LeadOrigin`) da lógica de cor que
+  // já existia.
+  const recordFields: RecordHeaderField[] = [
+    { key: 'status', label: 'Status', value: <LeadStatusBadge status={lead.status} /> },
+    {
+      key: 'phone',
+      label: 'Telefone',
+      value: (
+        <span className="tabular-nums">
+          {formatPhone(lead.phoneE164)}
+          {lead.phoneType === 'landline' && (
+            <span className="ml-1 text-xs font-normal text-muted-foreground">(fixo)</span>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: 'rating',
+      label: 'Avaliação',
+      value:
+        lead.rating !== null ? (
+          <span className="inline-flex items-center gap-1 tabular-nums">
+            <Star className="size-3.5 fill-warning text-warning" aria-hidden="true" />
+            {lead.rating.toFixed(1)}
+            <span className="text-xs font-normal text-muted-foreground">({lead.reviewCount ?? 0})</span>
+          </span>
+        ) : (
+          '—'
+        ),
+    },
+    {
+      key: 'origin',
+      label: 'Origem',
+      value: lead.searchNiche ? <LeadOrigin searchNiche={lead.searchNiche} offNiche={lead.offNiche} /> : '—',
+    },
+    {
+      key: 'last-activity',
+      label: 'Última atividade',
+      value: formatDateTime(lead.lastContactedAt ?? lead.lastSeenAt),
+    },
+  ];
+
   return (
     <div className="flex flex-col gap-6">
       <BackLink />
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
           <span
             aria-hidden="true"
@@ -177,10 +239,7 @@ export function LeadDetail({ id }: { id: string }) {
               .join('')}
           </span>
           <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-display text-xl font-semibold tracking-tight sm:text-2xl">{lead.name}</h1>
-              <LeadStatusBadge status={lead.status} />
-            </div>
+            <h1 className="font-display text-xl font-semibold tracking-tight sm:text-2xl">{lead.name}</h1>
             <p className="text-sm text-muted-foreground">
               {lead.category ?? 'Sem categoria'} {lead.city && `· ${lead.city} — ${lead.uf}`}
             </p>
@@ -209,6 +268,12 @@ export function LeadDetail({ id }: { id: string }) {
         </div>
       </div>
 
+      <Card variant="flat">
+        <CardContent className="pt-4">
+          <RecordHeader fields={recordFields} />
+        </CardContent>
+      </Card>
+
       {statusError && <ErrorState message={statusError} />}
 
       {lead.isOptedOut && (
@@ -222,21 +287,19 @@ export function LeadDetail({ id }: { id: string }) {
             agora), só a Linha do tempo (histórico) ficou `flat` — as 4 caixas
             de mesmo peso que existiam antes eram parte da reclamação de
             "tela sem vida". */}
+        {/* Telefone e Avaliação saíram deste card — já aparecem no
+            `RecordHeader` acima, mostrar os dois de novo aqui era a mesma
+            informação duplicada duas vezes na mesma tela. Este card guarda só
+            o que É exclusivo de "Contato": endereço, site, tags, proveniência. */}
         <Card variant="elevated" className="lg:col-span-1">
           <CardHeader>
             <CardTitle className="text-base">Contato</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm">
-            <InfoRow icon={Phone} label="Telefone">
-              {formatPhone(lead.phoneE164)}
-              {lead.phoneType === 'landline' && (
-                <span className="ml-1 text-xs text-muted-foreground">(fixo — não recebe WhatsApp)</span>
-              )}
-            </InfoRow>
-            <InfoRow icon={MapPin} label="Endereço">
+            <LabeledField icon={MapPin} label="Endereço">
               {lead.address ?? '—'}
-            </InfoRow>
-            <InfoRow icon={Globe} label="Site">
+            </LabeledField>
+            <LabeledField icon={Globe} label="Site">
               {lead.website ? (
                 <a href={lead.website} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                   {lead.website}
@@ -244,10 +307,7 @@ export function LeadDetail({ id }: { id: string }) {
               ) : (
                 '—'
               )}
-            </InfoRow>
-            <InfoRow icon={Star} label="Avaliação">
-              {lead.rating !== null ? `${lead.rating.toFixed(1)} (${lead.reviewCount ?? 0} avaliações)` : '—'}
-            </InfoRow>
+            </LabeledField>
 
             {lead.tags.length > 0 && (
               <div className="flex flex-wrap gap-1 pt-1">
@@ -267,11 +327,16 @@ export function LeadDetail({ id }: { id: string }) {
         </Card>
 
         <Card className="lg:col-span-2">
-          <CardHeader>
+          <CardHeader className="flex-row items-center gap-2 space-y-0">
             <CardTitle className="text-base">Linha do tempo</CardTitle>
+            {timelineActivities.length > 0 && (
+              <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold tabular-nums text-secondary-foreground">
+                {timelineActivities.length}
+              </span>
+            )}
           </CardHeader>
           <CardContent>
-            <LeadTimeline activities={lead.activities} />
+            <LeadTimeline activities={timelineActivities} />
           </CardContent>
         </Card>
       </div>
@@ -295,26 +360,6 @@ export function LeadDetail({ id }: { id: string }) {
           </div>
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-function InfoRow({
-  icon: Icon,
-  label,
-  children,
-}: {
-  icon: typeof Phone;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-start gap-2">
-      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <div>
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p>{children}</p>
-      </div>
     </div>
   );
 }

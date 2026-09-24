@@ -708,3 +708,58 @@ só aparece quando o conteúdo excede), textura visível e texto legível nos
 dois temas por captura de tela real. Contraste calculado analiticamente
 (mesmo método já em uso neste arquivo desde §7 — "não no olho"), não
 estimado.
+
+### 9.6 Primitivos "estilo Altezza" — registro em colunas, abas com contador, fila de pendências (2026-09-24)
+
+Pedido do dono: duas telas de referência de um CRM de turismo (Altezza
+Travel), "quero nesse estilo, mantendo a nossa paleta, mas PREMIUM". Cinco
+padrões extraídos, quatro viraram primitivo novo em `components/common/*`
+(o quinto, "pílulas de status consistentes", já existia — `components/
+ui/badge.tsx`, usado por `LeadStatusBadge`/`InstanceHealthBadge`/
+`SearchJobStatusBadge`/etc., nenhum componente novo criado para isso):
+
+- **`record-header.tsx`** — cabeçalho de registro em colunas rotuladas
+  (rótulo pequeno maiúsculo + valor destacado embaixo). Recebe
+  `fields: { key, label, value: ReactNode }[]` e **não decide cor
+  nenhuma** — quem chama compõe o `value` já pronto (ex.: um
+  `LeadStatusBadge`). Zero token de cor novo: só reusa `text-muted-
+  foreground`/`text-foreground`, os dois pares já verificados em §7.
+  `flex-wrap` no container de desktop é obrigatório (mesmo raciocínio de
+  §"kebab overflow": várias colunas de largura variável sem wrap estoura
+  a página).
+- **`labeled-field.tsx`** — ícone (sempre neutro) + rótulo + valor, formaliza
+  o `InfoRow` que `lead-detail.tsx` já tinha copiado à mão.
+- **`tabs-with-count.tsx`** — abas com contador no rótulo (`Municípios 12 ·
+  Com falha 2`). Feito à mão (ARIA tabs completo: roving tabindex, setas/
+  Home/End) — não Radix, diferente do `DropdownMenu` que precisa de
+  portal/foco preso: um painel de abas simples não paga o custo de uma
+  dependência nova. Pílula de contagem usa só os 2 pares já verificados
+  (fill sólido `primary`/`primary-foreground` na aba ativa,
+  `secondary`/`secondary-foreground` na inativa) — nunca texto colorido
+  sobre fundo tintado.
+- **`pending-band.tsx`** — faixa de pendências ACIONÁVEL (não KPI
+  decorativo): só renderiza itens com `count > 0`, cada um com o botão que
+  resolve/investiga aquele grupo. Quando não há nenhuma pendência, mostra
+  uma linha calma de confirmação (nunca desaparece em silêncio). Cor só no
+  ícone (piso 3:1), nunca no número.
+
+**Aplicado em:** `/leads` (lista — `PendingBand` com "sem telefone"/"fora do
+nicho", sinais reais via `hooks/useLeadPendingSignals.ts`) e `/leads/[id]`
+(`RecordHeader` no topo da ficha — Status/Telefone/Avaliação/Origem/Última
+atividade; a Linha do tempo passou a excluir `message_sent`/
+`message_received`/`message_failed`, que já aparecem, mais ricos, no card
+Conversa — era duplicação real, não hipotética); `/buscas` (lista —
+`PendingBand` com "buscas que falharam", `hooks/
+useSearchJobPendingSignals.ts`) e `/buscas/[id]` (`RecordHeader` no lugar
+dos `Stat` soltos + `TabsWithCount` "Municípios"/"Com falha" sobre a MESMA
+lista de tasks, filtrada client-side).
+
+**Fora desta rodada, por decisão consciente, não só falta de tempo:**
+Campanhas e Painel. Painel precisaria de um campo agregado cross-domínio
+novo em `dashboard.contract.ts` (território do Vega) para uma `PendingBand`
+honesta (instâncias desconectadas/campanhas paradas são de outros
+domínios); Campanhas tem os badges de status prontos, mas o candidato
+óbvio de pendência (`halted`) ainda não tem ação de tela associada — aplicar
+a faixa sem uma ação real por trás repetiria o erro que o dono pediu para
+evitar ("não é KPI decorativo"). Ver `convention_altezza_record_primitives`
+na memória da Lyra para o detalhe completo.

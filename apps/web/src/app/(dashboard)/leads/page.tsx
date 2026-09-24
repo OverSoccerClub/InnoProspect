@@ -9,14 +9,17 @@ import { EmptyState } from '@/components/common/empty-state';
 import { ErrorState } from '@/components/common/error-state';
 import { LoadingRows } from '@/components/common/loading-rows';
 import { Pagination } from '@/components/common/pagination';
+import { PendingBand, type PendingBandItem } from '@/components/common/pending-band';
 import { LeadBulkToolbar } from '@/components/leads/lead-bulk-toolbar';
 import { LeadFilters } from '@/components/leads/lead-filters';
 import { LeadTable } from '@/components/leads/lead-table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useLeadPendingSignals } from '@/hooks/useLeadPendingSignals';
 import { useLeads } from '@/hooks/useLeads';
 import { exportLeads } from '@/lib/api/leads';
 import { EMPTY_LEADS_FILTER, hasAnyLeadFilter, toApiLeadFilter, type LeadsFilterState } from '@/lib/lead-filter-state';
@@ -45,6 +48,35 @@ export default function LeadsPage() {
   );
 
   const { response, isLoading, error, refetch } = useLeads(apiFilter);
+  const { signals: pendingSignals, error: pendingSignalsError } = useLeadPendingSignals();
+
+  // Fila de trabalho, não KPI decorativo (pedido do dono, referência
+  // Altezza): os dois sinais são reais do próprio domínio de leads — "sem
+  // telefone" (não há como nem tentar WhatsApp) e "fora do nicho" (o Google
+  // Maps devolveu vizinho de categoria, decisão de marcar é do dono, nunca
+  // descartar sozinho — ver `types/lead.ts#offNiche`). Cada ação aplica o
+  // MESMO atalho de filtro que já existe no painel avançado — nunca um 3º
+  // caminho de filtro paralelo.
+  const pendingBandItems: PendingBandItem[] = pendingSignals
+    ? [
+        {
+          key: 'no-phone',
+          label: 'Leads sem telefone',
+          count: pendingSignals.noPhone,
+          tone: 'warning',
+          actionLabel: 'Ver leads',
+          onAction: () => setFilters((current) => ({ ...current, hasPhone: 'false' })),
+        },
+        {
+          key: 'off-niche',
+          label: 'Leads fora do nicho buscado',
+          count: pendingSignals.offNiche,
+          tone: 'warning',
+          actionLabel: 'Ver leads',
+          onAction: () => setFilters((current) => ({ ...current, offNiche: 'true' })),
+        },
+      ]
+    : [];
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
@@ -160,6 +192,8 @@ export default function LeadsPage() {
       />
 
       {exportError && <ErrorState message={exportError} />}
+
+      {!pendingSignalsError && (pendingSignals ? <PendingBand items={pendingBandItems} /> : <Skeleton className="h-16 w-full" />)}
 
       <Card variant="flat">
         <CardContent className="pt-4">
