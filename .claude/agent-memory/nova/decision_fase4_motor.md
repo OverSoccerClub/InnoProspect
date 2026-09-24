@@ -57,6 +57,12 @@ testável entregue é exatamente como nasceram as quatro funções sem chamador 
 `warmup-roll` é obrigatório (sem ele `warmupDay` nunca avança e a tabela do §6.2 é decoração);
 `health-check` entra só na fatia que para; heurísticas de shadow-ban e `retention` ficam para depois.
 
+> ⚠️ **ESTADO EM 2026-09-24: o item 8 abaixo está CUMPRIDO e a objeção CAIU.** O ciclo completo foi
+> provado em produção (mensagem fria enviada → entregue → lead respondeu → "SAIR" criou o
+> descadastro), e 4.A–4.E estão entregues. A pré-condição (b) — canal de alerta — **não** foi
+> cumprida, e eu a rebaixei de bloqueio a condição de operação: ver [[innoprospect-onde-o-envio-mora]]
+> item 7. Mantido aqui como histórico do raciocínio, não como bloqueio vigente.
+
 **8. Minha objeção formal a começar a Fase 4 — condição exata de liberação (fechada em 2026-09-23).**
 A objeção NÃO é "espere a Fase 3 ser escrita" (já está, e em produção). É: **uma mensagem fria
 precisa ter chegado a um celular real por uma instância real, com o webhook voltando.** O aceite é o

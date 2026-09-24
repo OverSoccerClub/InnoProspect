@@ -1,8 +1,29 @@
 # InnoProspect — Documento de Arquitetura
 
-> Versão 1.2 · Autora: Nova (arquitetura) · Data: 2026-09-22 (v1.1: 2026-08-03 · v1.0: 2026-07-30)
+> Versão 1.3 · Autora: Nova (arquitetura) · Data: 2026-09-24 (v1.2: 2026-09-22 · v1.1: 2026-08-03 · v1.0: 2026-07-30)
 > Status: **fechado para implementação** nas partes marcadas como CONTRATO.
 > Alterações em seções CONTRATO exigem aviso ao Atlas antes de codificar (Vega/Lyra dependem delas).
+
+### O que mudou na v1.3 — "onde o envio mora, para o motor não ser uma segunda implementação"
+
+A v1.2 especificou o motor (§6.8) supondo que o worker conseguiria enviar. Ele não consegue: o envio
+inteiro (`sendLeadMessage`) vive em `apps/web/src/lib/services/messages.ts`, e `packages/*` é a única
+coisa que os dois processos compartilham. Esta revisão responde **onde cortar**, e fecha três lacunas
+que só apareceram quando desenhei o corte contra o código real.
+
+| # | Mudança | Seção | Tipo |
+|---|---|---|---|
+| 1 | **`packages/sending` (`@inno/sending`)**: o ato de enviar UMA mensagem — portão, write-ahead, `sendText`, contabilidade — sai de `apps/web` e passa a ser o único lugar onde isso existe. `apps/web` e `apps/worker` viram chamadores | **§6.8.0 (nova)**, §2 | 🔒 CONTRATO novo |
+| 2 | **O executor devolve resultado, não lança HTTP.** A tradução para `409/502` continua em `apps/web`; a tradução para estado do alvo (§6.8.5) é do worker. Uma decisão, dois vocabulários | **§6.8.0** | 🔒 CONTRATO novo |
+| 3 | **Worker chamando a rota HTTP do web: descartado**, com motivo escrito (§6.8.0.5) — não é preferência de estilo, é que um deploy do `web` no meio de uma campanha vira `EVOLUTION_SEND_UNCERTAIN` em massa | §6.8.0 | decisão |
+| 4 | 🔴 **Três configurações de campanha estavam gravadas, exibidas na tela e honradas por ninguém**: `sendWindowDaysOfWeek`, `jitterMin/MaxSeconds` e `dailyLimitPerInstance`. O motor é o primeiro consumidor delas | **§6.8.10 (nova)** | correção de fato |
+| 5 | **O motor nasce PAUSADO** — e o interruptor é a pausa global persistida (§4.10), não uma env. Chave ausente no Redis = pausado, ao contrário do scraper | §6.8.9 | 🔒 decisão travada |
+| 6 | Fase 4.F quebrada em 6 passos ordenados, com a fiação de build/bundle como **passo 0** | §8 Fase 4 | plano |
+
+**A regra que esta revisão acrescenta:** *duplicar é permitido para protocolo (nome de fila, chave de
+Redis, transporte de log/alerta); é proibido para qualquer coisa que decida **se** uma mensagem sai,
+**quando** ela sai, ou **o que** foi cobrado por ela.* A primeira classe diverge e alguém percebe na
+próxima leitura de log. A segunda diverge em silêncio, e a conta chega como número banido.
 
 ### O que mudou na v1.2 — "a Fase 4 desenhada contra o código que existe"
 
@@ -479,6 +500,17 @@ InnoProspect/
 │   │   │   └── errors.ts                     # classifica: retryable / ban / desconectado
 │   │   └── package.json
 │   │
+│   ├── sending/                     # 🔒 🆕 v1.3 — O ATO DE ENVIAR UMA MENSAGEM (§6.8.0)
+│   │   ├── src/                     #    Único lugar com Prisma + Evolution na mesma função.
+│   │   │   ├── index.ts             #    Importado por apps/web E apps/worker.
+│   │   │   ├── send-one.ts                   # 🔒 opt-out → guard → write-ahead → sendText → contabilidade
+│   │   │   ├── outcome.ts                    # EVOLUTION_ERROR_EFFECT: sucesso | falha confirmada | incerto
+│   │   │   ├── pace.ts                       # advanceNextSendAllowedAt (UPDATE monotônico) + micro-pausa
+│   │   │   ├── campaign-targets.ts           # advanceCampaignTargetStatus, halt por instância única
+│   │   │   ├── evolution-resolver.ts         # instância → EvolutionServer → client (com a cifra da chave)
+│   │   │   └── ports.ts                      # interfaces de logger e alerta (cada app injeta a sua)
+│   │   └── package.json
+│   │
 │   └── config/                      # tsconfig, eslint, prettier compartilhados
 │       ├── eslint-preset.js
 │       └── tsconfig.json
@@ -509,6 +541,16 @@ InnoProspect/
   linhas cada. É melhor do que projetei; vira regra. O `route.ts` faz auth + parse Zod + chamada ao
   serviço + resposta, e nada mais. Isso é o que torna auditável a afirmação "todo envio passa pelo
   guard" (§4.9.3): há um único lugar onde procurar.
+- 🆕 **v1.3 — `packages/sending` é a exceção declarada à regra "pacote não fala com o mundo".** Ele
+  importa `@inno/db` **e** `@inno/messaging` de propósito, porque a coisa que ele protege é
+  justamente a *sequência* entre ler o banco e chamar a rede (§6.8.0). O que ele **não** pode:
+  importar `next/*`, ler `process.env` (a política entra por parâmetro) ou lançar erro de HTTP.
+  Quem traduz o resultado em `409`/`502` é `apps/web`; quem traduz em estado do alvo é o worker.
+- 🆕 **v1.3 — o que pode ser duplicado entre os dois apps, e o que não pode.** Duplicar é permitido
+  quando o que se duplica é **protocolo** (nome de fila, chave de Redis, payload de alerta) — diverge
+  alto e alguém percebe. É proibido quando o que se duplica **decide se a mensagem sai, quando sai ou
+  o que foi cobrado por ela** (portão, gate de cadência, write-ahead/compensação, classificação de
+  incerto, chave do dia da cota, limites lidos da env) — esses divergem em silêncio.
 - **Regra pura + adaptador de I/O, quando a regra é de proteção.** A decisão mora em `packages/core`
   (sem I/O, testável); quem lê o banco e chama a rede é o adaptador em `apps/*`. Serve para o guard
   de envio (§4.9.3) exatamente como serve para warmup e sanidade do scraper — **e o adaptador tem
@@ -2185,6 +2227,138 @@ qual transação, e o que faz com **cada** resultado possível. Ela existe porqu
 como fluxograma, e fluxograma não responde "o que acontece se o processo morrer entre a reserva e o
 envio" — que é a pergunta que decide se um lead recebe a mensagem duas vezes.
 
+#### 6.8.0 🆕 v1.3 — Onde o envio mora (🔒 CONTRATO — Vega implementa antes de qualquer tick)
+
+A v1.2 escreveu "o worker envia" sem dizer **com qual código**. O código que envia existe, está em
+produção e está em `apps/web/src/lib/services/messages.ts` — do outro lado de uma fronteira que
+`apps/worker` não pode atravessar (§2: só `packages/*` são compartilhados). Esta seção é a resposta,
+e ela vem antes das outras porque nada em §6.8.2–§6.8.9 é implementável sem ela.
+
+##### 6.8.0.1 O que `sendLeadMessage` realmente é
+
+Ela parece uma função de rota e não é. Dentro dela convivem seis coisas com naturezas diferentes:
+
+| Bloco | Natureza | Destino |
+|---|---|---|
+| Rate limit por usuário, `templateId` XOR `body`, envelope da resposta | fronteira HTTP | **fica em `apps/web`** |
+| Resolução de instância (afinidade → maior cota restante) | política **do chamador** — o motor usa round-robin ponderado (§6.8.4), que é outra política | **fica em cada app** |
+| Render do texto (template/snapshot + variáveis + spintax) | puro | **`packages/core`** |
+| Leitura de opt-out → `evaluateSendGuard` → write-ahead → `sendText` → classificação → contabilidade → avanço do gate | **a sequência protegida** | 🔒 **`packages/sending`** |
+| Tradução do veredito em `409/502` com `details[]` | vocabulário HTTP | **fica em `apps/web`** |
+| Tradução do veredito em estado do alvo (§6.8.5) | vocabulário de campanha | **nasce no worker** |
+
+**O corte cai exatamente onde o comentário do topo de `messages.ts` já cortava.** O arquivo declara um
+invariante auditável ("entre a consulta de opt-out e `evaluateSendGuard` não há nenhum `await`; entre
+o guard e `sendText` só existe a transação de write-ahead"). Esse invariante é uma propriedade de um
+trecho contíguo de código — e é justamente esse trecho que vira o pacote. Não estou inventando uma
+fronteira: estou promovendo a que já estava escrita em prosa a fronteira de módulo.
+
+##### 6.8.0.2 A única mudança de forma: resultado em vez de exceção
+
+`packages/sending` **não lança `ApiHttpError`**. `executeSendAttempt` devolve uma união discriminada:
+
+```ts
+type SendAttemptResult =
+  | { outcome: 'blocked';   verdict: BlockedVerdict; optOutCreatedAt: Date | null }
+  | { outcome: 'expired';   messageId: string }            // decisão venceu; reserva revertida
+  | { outcome: 'sent';      messageId; providerMessageId; sentAt; pace; warnings }
+  | { outcome: 'failed';    messageId; code: MessagingErrorCode; reason: string }
+  | { outcome: 'uncertain'; messageId; code: MessagingErrorCode; reason: 'EVOLUTION_SEND_UNCERTAIN' }
+```
+
+Por que isto e não deixar o pacote lançar o erro de HTTP: um erro de HTTP é uma resposta a **um
+pedido de um humano**. O motor não tem pedido nem humano — para ele, `409 SEND_PACE_LOCKED` não é um
+erro, é a instrução "reagende este alvo para as 14h37". Fazer o worker aprender a ler status HTTP
+para descobrir o que fazer com um alvo é control flow por exceção atravessando um processo que nem
+HTTP fala. A união discriminada dá a mesma informação e obriga o `switch` a ser exaustivo dos dois
+lados — se um `outcome` novo nascer, os dois chamadores param de compilar, que é o comportamento que
+se quer de uma decisão que custa o número do dono.
+
+`apps/web` mantém `throwForBlockedVerdict` e `mapSendErrorToApiError` **sem uma linha alterada**,
+chamadas agora sobre o resultado devolvido. A superfície HTTP do §4.9 não muda em nada.
+
+##### 6.8.0.3 Portas injetadas — e por que só duas
+
+`executeSendAttempt(deps, input)` recebe `deps = { prisma, evolutionClient, logger, notify, now?, rng? }`.
+
+- `prisma` vem de `@inno/db` nos dois lados (mesmo singleton) — poderia ser importado direto; entra
+  como porta só para o teste poder passar o fake que `messages.test.ts` já tem.
+- `logger` e `notify` **precisam** ser portas: `apps/web` e `apps/worker` já têm implementações
+  próprias e **deliberadamente duplicadas** de log e alerta (uma com `console` JSON por causa do
+  bundle do Next, outra com `pino`), com vocabulários de evento diferentes. Unificá-las agora é uma
+  refatoração que não tem nada a ver com o motor.
+- `now`/`rng` existem para a Íris testar distribuição de jitter e expiração de decisão sem relógio real.
+
+Nada além disso é injetado. Toda porta a mais é um lugar onde os dois apps podem se comportar
+diferente — que é exatamente o que este desenho existe para impedir.
+
+##### 6.8.0.4 O que **não** pode ser reescrito no worker, item a item
+
+Cada linha abaixo é uma duplicação plausível e o estrago específico que ela causa. Esta tabela é o
+roteiro de revisão do Órion na 4.H:
+
+| Se for duplicado | O que quebra, e quando se descobre |
+|---|---|
+| `advanceNextSendAllowedAt` (o `UPDATE ... WHERE nextSendAllowedAt < $novo`) | O motor é **o segundo escritor concorrente** que essa correção previu. Uma cópia sem a cláusula `WHERE` faz o gate anti-ban **recuar** quando um envio manual e um tick se cruzam. Não dá erro, não dá log: só sai uma rajada |
+| Write-ahead + compensação de cota | Cota conta diferente nos dois caminhos → o teto de warmup é furado sem ninguém ver. É o modo de falha que o §6.2 inteiro existe para impedir |
+| `EVOLUTION_ERROR_EFFECT` (falha confirmada × incerto) | Uma cópia que classifique `TIMEOUT` como retentável manda a **mesma abordagem duas vezes** para a mesma pessoa. É o pior resultado possível deste sistema (§6.8.6) |
+| `advanceCampaignTargetStatus` | Contador de campanha dessincroniza no dia 1 — a regra que o Cronos pediu por escrito |
+| A chave do dia da cota (`todayDateKey`) | Web e worker em fusos diferentes = **duas linhas de `InstanceDailyStat` por dia** = teto diário dobrado em silêncio |
+| Os `*FromEnv` (clamps de janela, piso de jitter de 30s, micro-pausa, cooldown) | Uma cópia sem o clamp manda às 3h da manhã ou com 5s de intervalo. Os clamps **são** a regra; a env é só o parâmetro |
+
+##### 6.8.0.5 Alternativas descartadas (e o que cada uma tinha de bom)
+
+1. **Worker chama `POST /api/v1/leads/:id/messages` do `web`.** É a opção mais barata hoje: zero
+   refatoração, uma implementação só, e funciona. Descartada por três motivos, em ordem de peso:
+   (a) um restart/deploy do `web` no meio de uma campanha devolve erro de rede ao worker, e erro de
+   rede no envio é **incerto** por definição (§6.8.6) — o alvo morre `failed`, a cota não volta e
+   ninguém sabe se a mensagem saiu. Estaríamos **fabricando o pior caso do sistema em todo deploy**;
+   (b) a rota exige sessão Auth.js — seria preciso criar uma credencial de serviço com poder de
+   enviar, superfície nova que hoje não existe; (c) a rota tem rate limit por usuário
+   (`MANUAL_SEND_RATE_PER_MIN`, 10/min), desenhado para um humano clicando: o motor seria estrangulado
+   por um limite que não é sobre ele. Some-se a isso a regra de §2 ("web e worker não se chamam por
+   HTTP") — que existe para o sistema continuar funcionando com um dos dois processos fora do ar.
+2. **Mover `sendLeadMessage` inteira, inclusive o `ApiHttpError`, para o pacote.** Descartada porque
+   `api-handler.ts` importa `next/server` e Auth.js: arrastar isso para `packages/*` coloca o Next no
+   bundle do worker. A variante barata dessa ideia — mover só a classe `ApiHttpError` para
+   `@inno/contracts` — foi considerada e descartada por §6.8.0.2: o worker passaria a ler status HTTP
+   para decidir o destino de um alvo.
+3. **Duplicar no worker e garantir a paridade com uma suíte de testes de contrato.** Descartada por
+   histórico próprio: este projeto já tem quatro funções puras, testadas e sem chamador, e três cópias
+   de `buildLeadTemplateValues`. Testes provam que as duas cópias concordam **hoje**; nada segura a
+   terceira correção feita com pressa só de um lado. E a divergência é silenciosa (tabela acima).
+4. **Rodar o motor dentro do `apps/web`** (rota de cron ou `setInterval`). Descartada: o worker já
+   tem selftest de boot, heartbeat, pausa persistida e BullMQ. Apostar o gate anti-ban no ciclo de
+   vida de um processo Next é trocar infraestrutura pronta por economia de import.
+5. **Extrair só o miolo (opt-out → `sendText`) e deixar contadores de campanha em cada app.**
+   Descartada por atomicidade: o status do alvo e `CampaignInstance.sentCount|failedCount` são
+   escritos **na mesma transação** do resultado do envio. Separá-los significa duas transações — a
+   janela exata que a regra do Cronos proíbe.
+
+##### 6.8.0.6 Custo de mexer no que está em produção, e como não quebrar
+
+`messages.ts` está em produção, auditado, e coberto por `messages.test.ts` (817 linhas, Prisma falso
+local, `@inno/core` real). Esse teste é o que torna a extração segura, e ele define o critério:
+
+> 🔒 **A extração é feita com zero mudança de comportamento, e `messages.test.ts` passa sem nenhuma
+> alteração além de caminho de import.** Se o teste precisar ser "ajustado" para passar, a extração
+> mudou comportamento e deve ser refeita — não reajustada.
+
+Duas armadilhas de empacotamento, ambas com incidente real no histórico (§2, `tsup.config.ts`):
+
+- **Worker:** `@inno/sending` precisa entrar nas `dependencies` de `apps/worker` **e** no
+  `noExternal` do `tsup`. Fora do `noExternal`, o bundle mantém `import '@inno/sending'`, o Node
+  resolve para o `.ts` fonte via symlink do pnpm e o processo morre no boot com
+  `ERR_UNKNOWN_FILE_EXTENSION` — o mesmo erro de 22/09. `@inno/db` **continua external** (o engine
+  nativo do Prisma é resolvido por `__dirname` do arquivo gerado): `@inno/sending` embutido
+  importando `@inno/db` external é exatamente o arranjo que já funciona hoje.
+- **Web:** acrescentar `@inno/sending` a `transpilePackages` no `next.config.ts`. Não assumir que
+  funciona sem isso porque `@inno/messaging` funciona — isso é observação, não garantia.
+
+**Nada disso se prova com `typecheck`, `lint` ou `build`.** Os cinco incidentes de 22–23/09 passaram
+pelos quatro e só apareceram no boot do container. Por isso a fiação é o **passo 0** da 4.F, com
+prova via `selftest` (§8), antes de existir uma linha do tick.
+
 #### 6.8.1 Estado que precisa estar no Postgres (pedido ao Cronos)
 
 Cadência é estado, e estado de cadência **não pode viver no Redis**: se ele se perde num restart, o
@@ -2409,6 +2583,48 @@ pausa **não pode** ser um `setTimeout` em memória, senão o restart do worker 
 **Pausa global ≠ `halted` ≠ `paused`:** a global não muda o status de nenhuma campanha (elas seguem
 `running`, só não são atendidas), e por isso é a única das três que não precisa de decisão por
 campanha para ser desfeita. A campanha volta exatamente de onde estava.
+
+> 🔒 **🆕 v1.3 — O motor nasce PAUSADO, e o interruptor é este.** Ausência da chave de pausa no Redis
+> significa **pausado**, ao contrário do scraper (onde ausência = rodando). A inversão é deliberada e
+> está escrita aqui para ninguém "corrigir" depois achando que é bug de simetria.
+>
+> **Por que a pausa persistida, e não um `DISPATCH_ENGINE_ENABLED` na env.** Uma env é invisível na
+> tela e só muda com redeploy. O motor é a primeira coisa deste sistema que age sem ninguém olhando;
+> quem precisa desligá-lo às 2h da manhã é o dono, do celular, sem terminal (§0). Um interruptor que
+> exige acesso ao painel de deploy não é um interruptor de incidente. A env pode existir como trava
+> adicional de build ("este deploy não dispara"), nunca como a única.
+>
+> **Consequência boa e intencional:** um Redis limpo (volátil por desenho, §1.3) devolve o sistema ao
+> estado *pausado*, não ao estado *disparando*. Default degradado é o default seguro.
+>
+> 🔴 **Ligar o motor com o canal de alerta desligado é uma decisão consciente, e ela tem um preço
+> exato:** um incidente noturno só será **descoberto** na manhã seguinte. O que sustenta que isso seja
+> aceitável não é otimismo — é que o sistema é desenhado para **parar sozinho** em vez de continuar às
+> cegas: instância desconectada → `halt` (§6.6), 3 incertos seguidos → fora da rotação, 5 → `halt`
+> (§6.8.6), cota e janela barram antes de qualquer envio. O canal de alerta muda a **duração** do
+> incidente, não o **tamanho** dele. Por isso ele não bloqueia a construção — mas enquanto estiver
+> desligado, **os patamares de parada não podem ser afrouxados** (`DISPATCH_UNCERTAIN_DEGRADE_AT`,
+> `DISPATCH_UNCERTAIN_HALT_AT`, `DISPATCH_MAX_ATTEMPTS`): o orçamento de autonomia está gasto em parar,
+> não em insistir. E a **primeira ativação** é com 1 instância, campanha curta, dentro da janela
+> comercial e com alguém olhando — mesmo princípio do §4.9.1, que fez a cadência estrear com volume 1.
+
+#### 6.8.10 🆕 v1.3 — Configuração de campanha que existe, aparece na tela e não é honrada por ninguém
+
+Achado ao desenhar o corte contra o código: três campos de `Campaign` são gravados pelo `POST`,
+devolvidos pelo `GET`, exibidos pela Lyra — e **nenhum código os lê na hora de enviar**. O motor é o
+primeiro consumidor de todos os três. Sem esta seção, 4.F "funciona" e a configuração da campanha
+continua sendo decoração — o mesmo modo de falha do `warmupDay` que nunca avançava (§6.9).
+
+| Campo | Situação hoje | O que a 4.F precisa fazer |
+|---|---|---|
+| `sendWindowDaysOfWeek` (`Int[]`, default seg–sex) | Usado **só** em `campaign-estimate.ts` para estimar a data de término. `SendWindowConfig` (`@inno/core`) **não tem** `daysOfWeek`: `isWithinBusinessWindow` fixa "sábado e domingo nunca" no código | Acrescentar `daysOfWeek` opcional a `SendWindowConfig.businessWindow` e um `resolveCampaignWindow(pisoDaEnv, campanha)` puro, que **interseca** (a campanha só estreita, nunca alarga o piso — mesma regra do §10). Sem isso, campanha configurada para sábado não envia e ninguém entende por quê; e `DISPATCH_ALLOW_SATURDAY` (§10) segue sem implementação |
+| `jitterMinSeconds` / `jitterMaxSeconds` | Gravados por campanha; `advanceSendPace` é alimentado pelos valores da **env** em `messages.ts` | O tick passa o intervalo **da campanha**, clampado por `MIN_JITTER_FLOOR_SECONDS` (30s) — o clamp mora no mesmo lugar do clamp da env, nunca numa segunda função |
+| `dailyLimitPerInstance` | Gravado por campanha; o guard só conhece `effectiveDailyLimit(warmupDay, override)` | A elegibilidade do passo 2.2 usa `min(effectiveDailyLimit, dailyLimitPerInstance)`. O warmup continua sendo o teto absoluto: a campanha só **estreita** |
+
+**Regra geral que os três casos instanciam:** configuração de campanha só pode **estreitar** um limite
+de segurança, nunca alargá-lo. Vale para janela, ritmo e cota, e é a mesma regra que o §10 já aplica à
+env. Onde essa regra não estiver implementada, a tela está prometendo ao operador um controle que ele
+não tem.
 
 ---
 
@@ -2719,7 +2935,7 @@ executar sem esperar a seguinte. É a regra §8.0 nº 1 aplicada dentro da fase,
 | **4.C** | **Cadência ligada no envio unitário** — §4.9.10 no caminho que já existe: manual passa a respeitar e empurrar `nextSendAllowedAt`, G9b e G9c ativos, `warnings[PACE_LOCK_BYPASSED_FOR_REPLY]` | **Vega + Lyra** | Dois envios frios seguidos pela ficha: o 2º devolve `409 / SEND_PACE_LOCKED` com o horário de liberação na tela. **Responder** a uma conversa aberta no mesmo intervalo **passa**, com o aviso visível. Fecha o achado médio do Órion |
 | **4.D** | **API de campanha sem motor**: `preview`, `POST`, `PATCH`, `DELETE`, `GET`s, `start`/`pause`/`resume`/`cancel` — tudo do §4.5, com o `start` congelando snapshot e agendando os alvos. O tick **ainda não existe** | **Vega** | Criar campanha de 50 alvos por filtro; `totalMatched = eligible + Σ excluded`; `start` congela o snapshot, marca os alvos com `scheduledFor` e **nada é enviado**; template sem "responda SAIR" recusa com `409 / MISSING_OPTOUT_NOTICE` |
 | **4.E** | **UI de campanha**: montagem com painel de exclusões clicável (consumindo `preview` com debounce), lista, acompanhamento ao vivo (poll 3s), pausar/retomar com o diálogo de `acknowledgeHalt`, saúde das instâncias | **Lyra** | Operador monta, vê "800 → 430" discriminado por motivo **antes** de criar, inicia, pausa e retoma sem tocar em API. `blockers[]` aparece na montagem, não só no clique de iniciar |
-| **4.F** | **O motor**: `dispatch-tick.job` completo (§6.8) + `warmup-roll.job` + fatia mínima do `health-check` + `regressWarmupDay` ligado no webhook + pausa global da fila de disparo | **Vega** | Aceite da fase (abaixo) |
+| **4.F** | **O motor** — 🆕 v1.3 quebrada em 6 passos ordenados (tabela abaixo): fiação do pacote compartilhado, extração do envio para `@inno/sending` (§6.8.0), adições puras ao `@inno/core`, pausa global + heartbeat, o `dispatch-tick.job` (§6.8), e os periódicos (`warmup-roll`, fatia mínima do `health-check`, `regressWarmupDay` no webhook) | **Vega** | Aceite da fase (abaixo) — e cada passo tem o seu próprio, para não voltar a ser "uma linha e três semanas" |
 | **4.G** | **Testes** | **Íris** | Ver "aceite" — e cada um dos 5 itens é um teste, não uma conferência visual |
 | **4.H** | **Revisão dedicada**: nenhum caminho de código envia sem passar pelo guard; `grep -rn "sendText("` continua com **um** call site de produção por caminho, e o do worker importa o mesmo `evaluateSendGuard` | **Órion** | Sem achado `high`/`critical` aberto |
 
@@ -2739,6 +2955,21 @@ executar sem esperar a seguinte. É a regra §8.0 nº 1 aplicada dentro da fase,
   hoje.
 - **4.C antes de 4.F, e isto não é negociável:** é o mesmo princípio do §4.9.1. A cadência estreia com
   volume 1 e um humano olhando, e o motor a **herda** exercitada.
+
+**🆕 v1.3 — A 4.F por dentro (ordem que o Vega segue; cada passo fecha sozinho):**
+
+| Passo | O que é | Critério de pronto (executável) |
+|---|---|---|
+| **4.F.0** | **Fiação, antes de qualquer lógica.** Criar `packages/sending` com **um** símbolo trivial; declarar em `apps/worker` (`dependencies` + `noExternal` do `tsup`) e em `apps/web` (`transpilePackages`); importar dos dois lados; acrescentar um passo ao `selftest` que importa o pacote | `pnpm --filter worker build && node apps/worker/dist/selftest.js` passa **no container**, não só na máquina. É o passo que existe porque typecheck/lint/build já deixaram passar 5 incidentes que só apareceram no boot |
+| **4.F.1** | **Extração do envio** para `@inno/sending` (§6.8.0), sem mudar comportamento: `send-one`, `outcome`, `pace`, `campaign-targets`, `evolution-resolver`, `ports`. `sendLeadMessage` vira o chamador que traduz o resultado em HTTP | 🔒 `messages.test.ts` passa **sem alteração além de caminho de import**. `grep -rn "sendText(" apps/ packages/` devolve **um** call site de produção. Envio manual real pela tela continua idêntico |
+| **4.F.2** | **Adições puras ao `@inno/core`**: `resolveSendPolicy(env)` (um único lugar com os clamps), `localDateKey(now, tz)`, `daysOfWeek` + `resolveCampaignWindow` (§6.8.10), `pickInstanceWeighted(candidates, rng)` (§6.8.4) | Testes: piso de jitter não é contornável por env; campanha só **estreita** a janela do piso; 10k sorteios de `pickInstanceWeighted` distribuem na proporção da cota restante. Zero `process.env` dentro de `packages/core` |
+| **4.F.3** | **Interruptor e sinais vitais, antes do motor existir**: pausa global persistida (§4.10/§6.8.9, **ausente = pausado**), heartbeat do tick (`lastTickAt`), rotas `GET/POST /api/v1/dispatch/queue` e `/resume`, telas | Operador pausa e retoma pela tela, e a pausa **sobrevive a restart do worker**. `GET` mostra `lastTickAt` mesmo sem nenhuma campanha rodando — "parado" e "quebrado" deixam de ser a mesma tela |
+| **4.F.4** | **O tick** (§6.8.2–§6.8.7): claim por lease, elegibilidade (incluindo `dailyLimitPerInstance` e a janela da campanha), rotação/afinidade, chamada ao executor, tradução `reason → estado do alvo` (§6.8.5), halts | Aceite da fase, itens 1–3 e 5–6. O `switch` da §6.8.5 é exaustivo em tipo (`reason` novo quebra a compilação, não vira decisão improvisada) |
+| **4.F.5** | **Periódicos**: `warmup-roll.job` (§6.9), fatia mínima do `health-check`, e `regressWarmupDay` ligado no webhook `connection.update` — este último é `apps/web`, não worker, e é o que mais escapa por "parecer parte do motor" | `warmupDay` visivelmente **maior** no dia seguinte a uma instância que enviou, e visivelmente **menor** na tela depois de uma reconexão. Teste unitário passando não conta (§8.0 regra 3) |
+
+**Por que 4.F.3 vem antes de 4.F.4, e não depois:** o freio é construído antes do acelerador. Se o
+tick existir primeiro, a única forma de pará-lo num incidente é derrubar o worker — que é exatamente
+a manobra que ninguém quer executar sob estresse, e que deixa o scraper parado junto.
 
 **Depende de:** Fase 3 **executada com número real** (não só escrita) e Fase 1. A dependência é dura:
 construir o motor sobre um acoplamento com a Evolution que nunca foi exercitado é empilhar em fundação
@@ -3051,7 +3282,11 @@ DISPATCH_MAX_DAILY_ABSOLUTE=300     # teto que nenhum override ultrapassa
 # Só pode ser ESTREITADO (start maior / end menor); alargar é ignorado pelo código.
 DISPATCH_QUIET_HOURS_START=20       # a partir desta hora, nenhum envio sai
 DISPATCH_QUIET_HOURS_END=8          # antes desta hora, nenhum envio sai
-DISPATCH_ALLOW_SATURDAY=true        # domingo e feriado nacional: nunca, não é configurável
+# DISPATCH_ALLOW_SATURDAY — REMOVIDA em 24/09/2026 por decisão do dono: envio
+# de campanha é seg-sex, ponto. Sábado e domingo nunca, e não é configurável.
+# Motivo: mensagem comercial fria no fim de semana incomoda mais e é
+# respondida menos — e resposta baixa é justamente o sinal que a plataforma
+# lê como spam. Não reintroduzir sem o dono pedir.
 
 # Envio unitário (§4.9)
 MANUAL_SEND_RATE_PER_MIN=10         # por usuário; 429 acima disso
@@ -3070,6 +3305,12 @@ DISPATCH_MICRO_PAUSE_MAX_S=720
 DISPATCH_UNCERTAIN_DEGRADE_AT=3     # incertos seguidos → instância sai da rotação + alerta high
 DISPATCH_UNCERTAIN_HALT_AT=5        # incertos seguidos → halt da campanha (§6.8.6)
 CAMPAIGN_MAX_TARGETS=5000           # teto de alvos por campanha no POST (§4.5.4)
+
+# 🆕 v1.3 — NÃO existe DISPATCH_ENGINE_ENABLED aqui, e isso é decisão, não esquecimento.
+# O motor nasce pausado pela pausa GLOBAL persistida no Redis (§4.10/§6.8.9): chave ausente
+# = pausado. O interruptor precisa estar ao alcance do dono às 2h da manhã, pela tela, sem
+# terminal e sem redeploy (§0). Uma env como ÚNICA trava seria invisível e irreversível
+# no momento em que mais importa.
 
 # --- Identidade do remetente (§7.4) ---
 APP_COMPANY_NAME=                   # resolve {{minha_empresa}}. Sem isso, 1º contato frio é bloqueado
@@ -3120,3 +3361,6 @@ ALERT_WEBHOOK_URL=                  # opcional: Slack/Discord/Telegram
 | **A27** | **Alvos materializados no `POST`, não no `start`** — o operador confere *quais* leads entraram, não só quantos; `start` reavalia opt-out numa segunda passagem | **§4.5.2** |
 | **A28** | **Campanha `running` não é editável.** Pausar primeiro custa um clique e elimina a classe inteira de bug de cadência lida antes e gravada depois | **§4.5.5** |
 | **A29** | **`meta` não existe no envelope**: o mapa do guard viaja em `details[]` com `path` = nome da chave, e é propagado **sempre** que existir — não por lista de `reason` privilegiados | **§4.0, §4.9.7** |
+| **A30** | 🆕 **O ato de enviar mora em `packages/sending`**, importado por web e worker. O pacote devolve resultado, nunca erro de HTTP; `apps/web` traduz em `409/502`, o worker traduz em estado do alvo. Worker chamando rota HTTP do web foi descartado — deploy do `web` no meio da campanha viraria envio **incerto** em massa | **§6.8.0, §2** |
+| **A31** | 🆕 **O motor nasce PAUSADO**, e o interruptor é a pausa global persistida (chave ausente = pausado), não uma variável de ambiente. Ligar sem canal de alerta é aceitar descobrir incidente noturno no dia seguinte — aceitável só porque o sistema é desenhado para **parar sozinho**, e por isso os patamares de parada não podem ser afrouxados enquanto o alerta estiver desligado | **§6.8.9** |
+| **A32** | 🆕 **Configuração de campanha só estreita limite de segurança, nunca alarga.** Janela, ritmo e cota da campanha achatam contra o piso da env e contra o warmup. Três campos gravados e exibidos não eram lidos por ninguém — o motor é o primeiro consumidor deles | **§6.8.10** |

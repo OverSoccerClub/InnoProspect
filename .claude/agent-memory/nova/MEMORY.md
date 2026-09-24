@@ -8,3 +8,4 @@
 - [Lições de plano faseado](lesson_wiring_e_validacao_real.md) — Fase 0 com infra real, nada no plano sem contrato, wiring é a entrega, default degradado seguro.
 - [Uso próprio (decisão travada)](decision_uso_proprio.md) — D3 encerrada e D9 aceita; o que "uso próprio" NÃO relaxa (LGPD, auth, anti-ban).
 - [Fase 4: campanhas e motor](decision_fase4_motor.md) — cadência é do número, lease sem status `sending`, incerto nunca retentado, alvos no POST.
+- [Onde o envio mora (4.F)](decision_onde_o_envio_mora.md) — `packages/sending`, HTTP entre apps descartado, motor nasce pausado, config de campanha só estreita.
