@@ -40,7 +40,15 @@ const nextConfig: NextConfig = {
   // NUNCA incluir `@inno/scraper` aqui — carrega Playwright/Chromium no
   // import de nível de módulo, e isso não pode entrar no bundle do servidor
   // Next.js (ver lib/services/searches.ts para o motivo completo).
-  transpilePackages: ['@inno/contracts', '@inno/core', '@inno/db'],
+  //
+  // 🆕 Fase 4.F.0 — `@inno/sending` entrou aqui de propósito, mesmo padrão
+  // "exports: './src/index.ts', sem build próprio" dos outros três. Ao
+  // contrário de `@inno/messaging` (que a ARQUITETURA registra como "não
+  // está na lista e aparentemente funciona, mas isso é observação, não
+  // garantia") — este pacote É NOVO e não tem histórico de build real
+  // provando que funciona sem `transpilePackages`; não repetir a mesma
+  // suposição não-verificada duas vezes.
+  transpilePackages: ['@inno/contracts', '@inno/core', '@inno/db', '@inno/sending'],
   // Os pacotes internos importam entre si com extensão `.js` explícita
   // apontando pra arquivo `.ts` fonte (convenção ESM/NodeNext do monorepo,
   // ver tsconfig.base.json `moduleResolution: "Bundler"`) — o webpack do

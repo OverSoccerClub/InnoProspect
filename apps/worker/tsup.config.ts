@@ -14,6 +14,17 @@ import { defineConfig } from 'tsup';
 // `@inno/core`, `@inno/contracts` e `@inno/scraper` são só TypeScript (sem
 // binário nativo, sem asset lido por caminho relativo em runtime — conferido
 // em 2026-09-22) — seguros para embutir dentro do bundle do worker.
+//
+// 🆕 Fase 4.F.0 — `@inno/sending` (motor de disparo, ARQUITETURA §6.8.0)
+// entrou no `noExternal` pelo MESMO motivo: é só TypeScript, importa
+// `@inno/db`/`@inno/core`/`@inno/messaging` (nenhum dos três tem binário
+// nativo próprio — `@inno/db` continua external, ver comentário abaixo) e
+// NENHUM `next/*`/`process.env` (contrato do pacote, `packages/sending/
+// src/ports.ts`). Ficar FORA daqui repetiria, byte a byte, o incidente de
+// 22/09: o bundle mantém `import '@inno/sending'`, o Node resolve para o
+// `.ts` fonte via symlink do pnpm, e o processo morre no boot com
+// `ERR_UNKNOWN_FILE_EXTENSION` — só aparece no boot do CONTAINER, nunca em
+// `pnpm typecheck`/`lint`/`build` na máquina de quem escreveu.
 export default defineConfig({
   // O segundo entry NÃO é conveniência: sem ele o backfill é impossível de
   // rodar em produção. A imagem final (stage `runner` do Dockerfile) não tem
@@ -49,7 +60,7 @@ export default defineConfig({
   // `index.ts`/`client.ts` EM LUGAR, ao lado do `.ts`) e continua sendo
   // resolvido normalmente via `node_modules` — ver `packages/db/package.json`
   // (`exports`) e `packages/db/tsconfig.build.json`.
-  noExternal: [/^@inno\/(core|contracts|scraper)$/],
+  noExternal: [/^@inno\/(core|contracts|scraper|sending)$/],
   // `playwright` PRECISA ficar external de forma EXPLÍCITA (não basta o
   // default do tsup/esbuild): o default só marca como external o que já
   // está nas `dependencies` do PRÓPRIO package.json (apps/worker) — como

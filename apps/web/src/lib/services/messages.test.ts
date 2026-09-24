@@ -234,6 +234,19 @@ const prismaMock = vi.hoisted(() => ({
       return { id: genId('activity'), createdAt: new Date(), ...data };
     }),
   },
+  // 🆕 Fase 4.F.1 — `haltCampaignsSoleInstanceDisconnected` (kill switch de
+  // instância desconectada) mudou de casa para `@inno/sending` e agora é
+  // chamada DE DENTRO da sequência protegida (`executeSendAttempt`), nunca
+  // mais via `@/lib/services/campaign-targets` (o mock antigo dessa rota,
+  // removido abaixo, ficaria sem efeito — o caminho de execução real não
+  // passa mais por ali). Nenhum teste desta suíte semeia `store.campaigns`,
+  // então `findMany` sempre devolve `[]` — MESMO resultado do mock antigo
+  // (`async () => []`), pela mesma razão de sempre: nenhum destes cenários
+  // tem uma campanha para parar.
+  campaign: {
+    findMany: vi.fn(async () => []),
+    updateMany: vi.fn(async () => ({ count: 0 })),
+  },
 }));
 
 vi.mock('@inno/db', () => ({ prisma: prismaMock }));
@@ -246,7 +259,6 @@ vi.mock('@/lib/logger', async () => {
   return loggerMockFactory();
 });
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn(() => ({ allowed: true })) }));
-vi.mock('@/lib/services/campaign-targets', () => ({ haltCampaignsSoleInstanceDisconnected: vi.fn(async () => []) }));
 const sendAlertMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/alerts', () => ({ sendAlert: sendAlertMock }));
 

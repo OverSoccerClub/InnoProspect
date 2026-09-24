@@ -47,6 +47,9 @@ importers:
       '@inno/messaging':
         specifier: workspace:^
         version: link:../../packages/messaging
+      '@inno/sending':
+        specifier: workspace:^
+        version: link:../../packages/sending
       '@radix-ui/react-dialog':
         specifier: ^1.1.23
         version: 1.1.23(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
@@ -138,6 +141,9 @@ importers:
       '@inno/scraper':
         specifier: workspace:^
         version: link:../../packages/scraper
+      '@inno/sending':
+        specifier: workspace:^
+        version: link:../../packages/sending
       bullmq:
         specifier: ^5.34.4
         version: 5.81.3
@@ -263,6 +269,28 @@ importers:
       domhandler:
         specifier: ^5.0.3
         version: 5.0.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
+
+  packages/sending:
+    dependencies:
+      '@inno/core':
+        specifier: workspace:^
+        version: link:../core
+      '@inno/db':
+        specifier: workspace:^
+        version: link:../db
+      '@inno/messaging':
+        specifier: workspace:^
+        version: link:../messaging
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.1
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

@@ -170,6 +170,20 @@ distinguindo o motivo da recusa (nunca na resposta HTTP, que continua
 sempre `404`). Detalhe completo, causa raiz e o que não ficou provado em
 [[bug-webhook-apikey-instance-vs-global]].
 
+**Meu escopo entregue (Fase 4.F.0-4.F.3, 2026-09-24 — extração do envio para
+`@inno/sending` + freio do motor de disparo, ainda SEM o tick):** novo pacote
+`packages/sending` (executeSendAttempt + campaign-targets + pace, extraídos de
+`apps/web/src/lib/services/messages.ts`), empacotado nos dois apps
+(`tsup noExternal`/`transpilePackages`/`selftest`, provado com um probe
+isolado — sem Docker aqui). Pausa global persistida do motor
+(`inno:dispatch:queue:enabled-meta`, semântica INVERTIDA de propósito:
+presente=ligado) + heartbeat do tick + rotas `GET/POST /api/v1/dispatch/queue`
++ `/resume`. `messages.test.ts` passou intacto (30 testes, zero alteração de
+asserção). Detalhe completo, gaps do snippet da ARQUITETURA preenchidos e o
+que não ficou provado em [[convention-sending-extraction-fase4f]]. O tick
+propriamente dito (4.F.4) e as adições ao `@inno/core` (4.F.2) ficaram para a
+próxima rodada, por pedido explícito do Atlas.
+
 Ver também [[convention-api-routes-fase1]] (padrões de rota/serviço estabelecidos),
 [[convention-messaging-evolution-api]] (cliente Evolution API + webhook parser) e
 [[bug-nextauth-edge-prisma-split]]/[[bug-nextjs-workspace-ts-source-imports]]/

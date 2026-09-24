@@ -62,5 +62,12 @@ máquina) — a semântica do `WHERE` foi replicada fielmente no mock do teste,
 mas o comportamento definitivo sob concorrência REAL de duas conexões
 simultâneas só se prova em ambiente com Postgres de verdade.
 
+**Atualização 2026-09-24 (Fase 4.F.1):** `advanceNextSendAllowedAt` mudou de
+arquivo (`apps/web/src/lib/services/messages.ts` → `packages/sending/src/
+pace.ts`) na extração para o pacote compartilhado com o worker — a correção
+sobreviveu BYTE A BYTE (mesmo SQL, mesmo comentário de causa raiz) e ganhou
+um teste PRÓPRIO no pacote (`pace.test.ts`), além do teste ponta-a-ponta que
+já existia em `messages.test.ts`. Ver [[convention-sending-extraction-fase4f]].
+
 Ver também [[project-innoprospect]], [[convention-cadencia-ligada-envio-manual]]
 (o código que introduziu o bug, mesma rodada anterior).

@@ -184,10 +184,16 @@ export async function runSteps(steps: SelfTestStep[], stepTimeoutMs = DEFAULT_ST
  * este módulo existe para não deixar acontecer de novo.
  */
 async function checkModulosInternos(): Promise<string> {
-  const [core, db, scraper] = await Promise.all([
+  const [core, db, scraper, sending] = await Promise.all([
     import('@inno/core'),
     import('@inno/db'),
     import('@inno/scraper'),
+    // 🆕 Fase 4.F.0 — mesma prova que os outros três: se o bundle do worker
+    // não embutiu `@inno/sending` de verdade (`noExternal` do
+    // `tsup.config.ts`), o `import()` dinâmico aqui é exatamente o ponto
+    // onde isso aparece — `ERR_UNKNOWN_FILE_EXTENSION` tentando carregar o
+    // `.ts` fonte via symlink do pnpm, ANTES de qualquer Worker/Queue subir.
+    import('@inno/sending'),
   ]);
   if (typeof core.isOffNiche !== 'function') {
     throw new Error('@inno/core carregou, mas "isOffNiche" não é uma função — export quebrado ou tree-shaking indevido');
@@ -198,7 +204,10 @@ async function checkModulosInternos(): Promise<string> {
   if (typeof scraper.BrowserSession !== 'function') {
     throw new Error('@inno/scraper carregou, mas "BrowserSession" não é uma classe — export quebrado ou tree-shaking indevido');
   }
-  return '@inno/core, @inno/db e @inno/scraper carregaram e expõem os símbolos esperados';
+  if (typeof sending.executeSendAttempt !== 'function') {
+    throw new Error('@inno/sending carregou, mas "executeSendAttempt" não é uma função — export quebrado ou tree-shaking indevido');
+  }
+  return '@inno/core, @inno/db, @inno/scraper e @inno/sending carregaram e expõem os símbolos esperados';
 }
 
 /** Conexão real, consulta real — `new PrismaClient()` não lança sem `DATABASE_URL` (só na 1ª query), então só um `SELECT` prova conectividade. */

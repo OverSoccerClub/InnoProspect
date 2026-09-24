@@ -29,6 +29,8 @@ import { QUEUES, SCRAPE_SEARCH_JOB_NAME } from './queues.js';
 
 const AQUI = dirname(fileURLToPath(import.meta.url));
 const QUEUE_TS_DO_WEB = resolve(AQUI, '../../web/src/lib/queue.ts');
+/** 🆕 Fase 4.F.3 — `dispatch-tick` tem o nome duplicado num arquivo PRÓPRIO do lado do web (`dispatch-queue.ts`), não em `queue.ts` (que é só o produtor de `scrape-search`). */
+const DISPATCH_QUEUE_TS_DO_WEB = resolve(AQUI, '../../web/src/lib/dispatch-queue.ts');
 
 describe('nomes de fila', () => {
   it.each(Object.entries(QUEUES))('%s não contém ":" (BullMQ rejeita no construtor)', (_chave, nome) => {
@@ -55,5 +57,16 @@ describe('contrato duplicado com apps/web', () => {
     const encontrado = /SCRAPE_SEARCH_JOB_NAME\s*=\s*'([^']+)'/.exec(fonteDoWeb)?.[1];
     expect(encontrado, `não achei SCRAPE_SEARCH_JOB_NAME em ${QUEUE_TS_DO_WEB}`).toBeDefined();
     expect(encontrado).toBe(SCRAPE_SEARCH_JOB_NAME);
+  });
+
+  // 🆕 Fase 4.F.3 — mesmo risco, mesma prova: se o nome divergir, `apps/web`
+  // lê/escreve a pausa global num canal Redis diferente do que o futuro
+  // `dispatch-tick.job` (Fase 4.F.4) vai consumir — falha silenciosa, o
+  // operador acha que pausou e o motor nunca soube.
+  it('apps/web lê/escreve o estado da MESMA fila dispatch-tick que o worker consome', () => {
+    const fonteDispatchDoWeb = readFileSync(DISPATCH_QUEUE_TS_DO_WEB, 'utf8');
+    const encontrado = /DISPATCH_TICK_QUEUE_NAME\s*=\s*'([^']+)'/.exec(fonteDispatchDoWeb)?.[1];
+    expect(encontrado, `não achei DISPATCH_TICK_QUEUE_NAME em ${DISPATCH_QUEUE_TS_DO_WEB}`).toBeDefined();
+    expect(encontrado).toBe(QUEUES.dispatchTick);
   });
 });

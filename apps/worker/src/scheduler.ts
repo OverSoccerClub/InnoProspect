@@ -22,10 +22,19 @@ import {
   readQueuePauseMeta,
   recordHeartbeat,
 } from './lib/queue-state.js';
+import { DISPATCH_HEARTBEAT_INTERVAL_MS, recordDispatchTickHeartbeat } from './lib/dispatch-state.js';
 
 export type WorkerHandles = {
   scrapeSearchQueue: Queue<ScrapeSearchJobData>;
   scrapeSearchWorker: Worker<ScrapeSearchJobData>;
+  /**
+   * 🆕 Fase 4.F.3 — só um `Queue` (sem `Worker`/processor ainda): o tick de
+   * verdade (claim/eligibilidade/disparo, §6.8.2-§6.8.7) é Fase 4.F.4, fora
+   * de escopo aqui. Existe já para (a) dar um handle com `.client` para o
+   * heartbeat abaixo, e (b) o 4.F.4 anexar o `Worker` na MESMA fila sem
+   * precisar tocar neste arquivo de novo.
+   */
+  dispatchTickQueue: Queue;
   close: () => Promise<void>;
 };
 
@@ -91,14 +100,37 @@ export function startWorkers(): WorkerHandles {
   }, PAUSE_SWEEP_INTERVAL_MS);
   pauseSweepTimer.unref?.();
 
+  // 🆕 Fase 4.F.3 — heartbeat do dispatch, ANTES de o tick existir (§8 Fase
+  // 4.F: "o freio é construído antes do acelerador"). Só um `Queue` (sem
+  // processor) — grava `lastTickAt` incondicionalmente, pausado ou não, pela
+  // MESMA razão do heartbeat geral acima: "parado" (motor pausado de
+  // propósito) e "quebrado" (worker morto) não podem ser a mesma tela
+  // (ARQUITETURA §6.8.9/§8.0 regra 4). Ver o comentário de
+  // `dispatch-state.ts` sobre o que este heartbeat prova HOJE (processo de
+  // pé) e o que vai passar a provar na Fase 4.F.4 (o tick de fato rodou).
+  const dispatchTickQueue = new Queue(QUEUES.dispatchTick, { connection });
+  const dispatchHeartbeatTimer = setInterval(() => {
+    void recordDispatchTickHeartbeat(dispatchTickQueue).catch((err: unknown) => {
+      logger.error({ err }, 'falha ao gravar heartbeat do dispatch (Redis fora do ar?)');
+    });
+  }, DISPATCH_HEARTBEAT_INTERVAL_MS);
+  dispatchHeartbeatTimer.unref?.();
+  void recordDispatchTickHeartbeat(dispatchTickQueue).catch((err: unknown) => {
+    logger.error({ err }, 'falha ao gravar heartbeat inicial do dispatch');
+  });
+  logger.info({ queue: QUEUES.dispatchTick }, 'heartbeat do dispatch no ar (motor nasce PAUSADO — ARQUITETURA §6.8.9)');
+
   return {
     scrapeSearchQueue,
     scrapeSearchWorker,
+    dispatchTickQueue,
     async close() {
       clearInterval(heartbeatTimer);
       clearInterval(pauseSweepTimer);
+      clearInterval(dispatchHeartbeatTimer);
       await scrapeSearchWorker.close();
       await scrapeSearchQueue.close();
+      await dispatchTickQueue.close();
       await closeDefaultEngine();
     },
   };
