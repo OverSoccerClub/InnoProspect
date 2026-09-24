@@ -917,6 +917,34 @@ model WhatsAppInstance {
   lastErrorAt      DateTime?
   lastErrorMessage String?
 
+  /// 🆕 Reconciliação de status (2026-09-24, incidente do dono: "mesmo
+  /// desconectado, o sistema ainda mostra como conectado"). A ÚLTIMA VEZ que
+  /// este `status` foi CONFIRMADO contra a Evolution API — não confundir com
+  /// "a última vez que MUDOU" (isso já é `updatedAt`) nem com
+  /// `lastConnectionAt` (só avança quando o resultado confirmado É
+  /// `connected`; este campo avança em QUALQUER confirmação, inclusive as que
+  /// não mudam nada). `NULL` = "nunca confirmado desde que esta coluna
+  /// existe" — toda linha já existente nasce assim (migração aditiva, sem
+  /// backfill: não há Evolution real disponível nesta máquina para
+  /// perguntar). Gravado em 3 pontos, todos passando pela MESMA função
+  /// (`apps/web/src/lib/services/instance-connection.ts#
+  /// applyInstanceConnectionTransition`, ou o UPDATE avulso quando a
+  /// confirmação não muda nada digno de transação):
+  ///   1. Webhook `connection.update` (a Evolution nos avisou — um evento
+  ///      recebido também é uma confirmação, ARQUITETURA §4.8).
+  ///   2. `GET /whatsapp/instances` — reconciliação automática, só para
+  ///      instância `connected` cujo `statusCheckedAt` está `NULL` ou mais
+  ///      velho que o limite de frescor (`STATUS_FRESHNESS_MS`,
+  ///      `whatsapp-instances.ts`).
+  ///   3. `POST /whatsapp/instances/reconcile` — reconciliação FORÇADA, sob
+  ///      pedido explícito do operador, ignora o limite de frescor e cobre
+  ///      TODA instância (não só `connected`).
+  /// A causa raiz do incidente: antes desta coluna existir, só o webhook
+  /// conseguia tirar uma instância de `connected` — um evento perdido
+  /// (restart nosso, blip de rede, Evolution reiniciando) deixava o banco
+  /// mentindo PARA SEMPRE, porque nenhuma leitura jamais voltava a perguntar.
+  statusCheckedAt DateTime?
+
   isActive Boolean @default(true)
 
   createdById String

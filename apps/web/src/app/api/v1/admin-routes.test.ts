@@ -24,6 +24,8 @@ vi.mock('@/lib/services/whatsapp-instances', () => ({
   getWhatsAppInstanceStatus: vi.fn(async () => ({ status: 'qr_pending' })),
   connectWhatsAppInstance: vi.fn(async () => ({ id: 'inst-1', status: 'qr_pending' })),
   disconnectWhatsAppInstance: vi.fn(async () => ({ id: 'inst-1', status: 'disconnected' })),
+  // 🆕 Reconciliação de status (2026-09-24).
+  reconcileAllWhatsAppInstances: vi.fn(async () => ({ data: [] })),
 }));
 vi.mock('@/lib/services/scraper-health', () => ({
   resumeScraperQueue: vi.fn(async () => ({ ok: true, status: 'running', resolvedIncidents: 1 })),
@@ -192,6 +194,11 @@ describe('rotas admin-only — operador 403 / admin passa', () => {
       { id: 'ckzz1234567890abcdefghijk', action: 'connect' },
       202,
     );
+  });
+
+  it('POST /api/v1/whatsapp/instances/reconcile', async () => {
+    const { POST } = await import('./whatsapp/instances/reconcile/route');
+    await expectAdminOnly(POST, () => jsonReq('https://x.local/api/v1/whatsapp/instances/reconcile', 'POST'), {}, 200);
   });
 
   it('POST /api/v1/scraper/queue/resume', async () => {

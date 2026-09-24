@@ -184,6 +184,17 @@ que não ficou provado em [[convention-sending-extraction-fase4f]]. O tick
 propriamente dito (4.F.4) e as adições ao `@inno/core` (4.F.2) ficaram para a
 próxima rodada, por pedido explícito do Atlas.
 
+**Meu escopo entregue (reconciliação de status de instância, 2026-09-24 —
+incidente do dono: "mesmo desconectado, o sistema ainda mostra como
+conectado"): `WhatsAppInstance.statusCheckedAt` (migração nova) +
+`applyInstanceConnectionTransition` (extraído do webhook para ter UM corpo
+só, `webhook.ts` agora chama em vez de duplicar) + reconciliação automática
+em `listWhatsAppInstances` (limite de frescor 60s, timeout duro 5s, falha
+nunca quebra a lista) + `POST /whatsapp/instances/reconcile` (forçada,
+admin). Detalhe completo, a regra dos 3 casos (o que é seguro corrigir) e a
+decisão sobre `connecting` (pedida explicitamente pelo Atlas) em
+[[convention-reconciliacao-status-instancia]].
+
 Ver também [[convention-api-routes-fase1]] (padrões de rota/serviço estabelecidos),
 [[convention-messaging-evolution-api]] (cliente Evolution API + webhook parser) e
 [[bug-nextauth-edge-prisma-split]]/[[bug-nextjs-workspace-ts-source-imports]]/

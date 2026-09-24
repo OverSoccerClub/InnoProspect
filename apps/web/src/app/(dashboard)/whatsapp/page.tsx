@@ -1,99 +1,19 @@
-'use client';
+import { WhatsappPageClient } from '@/components/whatsapp/whatsapp-page-client';
+import { auth } from '@/lib/auth';
 
-import { useCallback, useState } from 'react';
-import { MessageCircle, Plus } from 'lucide-react';
+/**
+ * Server Component (async) só para ler `session.user.role` e decidir se o
+ * botão "Verificar agora" aparece — mesmo padrão de
+ * `configuracoes/usuarios/page.tsx`/`configuracoes/servidores-evolution/
+ * page.tsx`, mas aqui é PARCIAL: a tela inteira continua aberta pra
+ * qualquer papel (ver instâncias não é admin-only), só a ação de
+ * reconciliação forçada é (`POST /whatsapp/instances/reconcile`,
+ * `requireRole: 'admin'`). Cortesia de UI, não o gate de verdade — a API
+ * recusaria de qualquer forma.
+ */
+export default async function WhatsappPage() {
+  const session = await auth();
+  const isAdmin = session?.user.role === 'admin';
 
-import { CardGridSkeleton } from '@/components/common/card-grid-skeleton';
-import { EmptyState } from '@/components/common/empty-state';
-import { ErrorState } from '@/components/common/error-state';
-import { PageHeader } from '@/components/common/page-header';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { CreateInstanceDialog } from '@/components/whatsapp/create-instance-dialog';
-import { InstanceCard } from '@/components/whatsapp/instance-card';
-import { QrCodeDialog } from '@/components/whatsapp/qr-code-dialog';
-import { usePolling } from '@/hooks/usePolling';
-import { listInstances } from '@/lib/api/whatsapp';
-import type { InstanceListItem } from '@/types/whatsapp';
-
-export default function WhatsappPage() {
-  const { data: instances, error, isLoading, refetch } = usePolling<InstanceListItem[]>(listInstances, {
-    intervalMs: 15000,
-  });
-
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [qrTarget, setQrTarget] = useState<{ id: string; name: string } | null>(null);
-
-  const handleConnect = useCallback((instanceId: string, instanceName: string) => {
-    setQrTarget({ id: instanceId, name: instanceName });
-  }, []);
-
-  return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="WhatsApp"
-        description="Conecte números, acompanhe aquecimento e saúde da conexão antes de disparar campanhas."
-        action={
-          <Button size="sm" onClick={() => setIsCreateOpen(true)}>
-            <Plus />
-            Nova instância
-          </Button>
-        }
-      />
-
-      {error && !instances && <ErrorState message={error.message} onRetry={refetch} />}
-
-      {error && instances && (
-        <Alert variant="warning">
-          <AlertDescription>
-            Não foi possível atualizar as instâncias agora ({error.message}). Mostrando os últimos dados
-            conhecidos — tentando de novo automaticamente.
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {!error && isLoading && <CardGridSkeleton count={3} />}
-
-      {!isLoading && instances && instances.length === 0 && (
-        <EmptyState
-          icon={<MessageCircle className="size-8" aria-hidden="true" />}
-          title="Nenhuma instância conectada"
-          description="Crie uma instância e conecte um número de WhatsApp para começar a disparar campanhas."
-          action={
-            <Button size="sm" onClick={() => setIsCreateOpen(true)}>
-              <Plus />
-              Nova instância
-            </Button>
-          }
-        />
-      )}
-
-      {instances && instances.length > 0 && (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {instances.map((instance) => (
-            <InstanceCard key={instance.id} instance={instance} onConnect={handleConnect} onChanged={refetch} />
-          ))}
-        </div>
-      )}
-
-      <CreateInstanceDialog
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onCreated={(instanceId, instanceName) => {
-          refetch();
-          setQrTarget({ id: instanceId, name: instanceName });
-        }}
-      />
-
-      {qrTarget && (
-        <QrCodeDialog
-          instanceId={qrTarget.id}
-          instanceName={qrTarget.name}
-          open={qrTarget !== null}
-          onOpenChange={(open) => !open && setQrTarget(null)}
-          onConnected={refetch}
-        />
-      )}
-    </div>
-  );
+  return <WhatsappPageClient isAdmin={isAdmin} />;
 }

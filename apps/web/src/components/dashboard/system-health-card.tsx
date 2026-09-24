@@ -1,20 +1,22 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, MinusCircle, XCircle } from 'lucide-react';
 
 import { ErrorState } from '@/components/common/error-state';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useNow } from '@/hooks/useNow';
 import { getHealth } from '@/lib/api/health';
 import { formatRelative } from '@/lib/format';
 import { listInstances } from '@/lib/api/whatsapp';
+import { getStatusFreshnessLevel } from '@/lib/whatsapp-freshness';
 import type { HealthReport } from '@/types/health';
 import type { InstanceListItem } from '@/types/whatsapp';
 
 type RowStatus = 'ok' | 'warn' | 'error';
 
-type Row = { label: string; status: RowStatus; detail: string };
+type Row = { label: string; status: RowStatus; detail: string; detailTitle?: string };
 
 const ROW_ICON: Record<RowStatus, typeof CheckCircle2> = {
   ok: CheckCircle2,
@@ -28,9 +30,21 @@ const ROW_ICON_CLASS: Record<RowStatus, string> = {
   error: 'text-destructive',
 };
 
-/** Mesma lógica usada no fetch real e na versão fixa do primeiro acesso — um lugar só de verdade. */
-function buildHealthRows(health: HealthReport, instances: InstanceListItem[]): Row[] {
-  const connected = instances.filter((i) => i.status === 'connected').length;
+/**
+ * Mesma lógica usada no fetch real e na versão fixa do primeiro acesso — um
+ * lugar só de verdade. `now` vem de `useNow` (ver componente abaixo): não é
+ * usado pra buscar dado novo, só pra recalcular o frescor sem congelar
+ * "confirmado há X" no valor do render que buscou os dados.
+ */
+function buildHealthRows(health: HealthReport, instances: InstanceListItem[], now: number): Row[] {
+  const connected = instances.filter((i) => i.status === 'connected');
+  // Quantas das CONECTADAS estão com confirmação hesitante (`stale`/`unknown`
+  // — ver `lib/whatsapp-freshness.ts`) — é exatamente a combinação do
+  // incidente do dono (2026-09-24): "conectado" que ninguém confirma há um
+  // tempo. Aqui no dashboard isso rebaixa a linha pra `warn` (nunca `error`
+  // — é "não sei", não "quebrou"), porque é onde o dono olha de relance e
+  // acredita.
+  const staleConnected = connected.filter((i) => getStatusFreshnessLevel(i.statusCheckedAt, now) !== 'fresh').length;
   return [
     {
       label: 'Banco de dados',
@@ -54,8 +68,22 @@ function buildHealthRows(health: HealthReport, instances: InstanceListItem[]): R
     },
     {
       label: 'WhatsApp',
-      status: connected > 0 ? 'ok' : instances.length === 0 ? 'warn' : 'error',
-      detail: instances.length === 0 ? 'nenhuma instância' : `${connected} de ${instances.length} conectada${instances.length === 1 ? '' : 's'}`,
+      status:
+        connected.length === 0 ? (instances.length === 0 ? 'warn' : 'error') : staleConnected > 0 ? 'warn' : 'ok',
+      detail:
+        instances.length === 0
+          ? 'nenhuma instância'
+          : staleConnected > 0
+            // Curto de propósito (o card é um resumo, não a fonte da
+            // verdade) — o "há quanto tempo" de cada instância já vive em
+            // `/whatsapp` (`StatusFreshness` em cada card). Aqui só precisa
+            // dizer QUE existe algo pra reconferir.
+            ? `${connected.length} de ${instances.length} conectada${instances.length === 1 ? '' : 's'} · ${staleConnected} não confirmada${staleConnected === 1 ? '' : 's'}`
+            : `${connected.length} de ${instances.length} conectada${instances.length === 1 ? '' : 's'}`,
+      detailTitle:
+        staleConnected > 0
+          ? 'Ainda não reconfirmamos a conexão de uma ou mais instâncias com a Evolution API — veja o detalhe em /whatsapp.'
+          : undefined,
     },
   ];
 }
@@ -79,7 +107,7 @@ type SystemHealthCardProps = {
  * DESIGN-SYSTEM.md §9.3 — este card é o complemento operacional dele).
  */
 export function SystemHealthCard({ className, overrideData }: SystemHealthCardProps) {
-  const [rows, setRows] = useState<Row[] | null>(overrideData ? buildHealthRows(overrideData.health, overrideData.instances) : null);
+  const [source, setSource] = useState<{ health: HealthReport; instances: InstanceListItem[] } | null>(overrideData ?? null);
   const [error, setError] = useState<Error | null>(null);
   const [isLoading, setIsLoading] = useState(!overrideData);
   const [reloadKey, setReloadKey] = useState(0);
@@ -93,7 +121,7 @@ export function SystemHealthCard({ className, overrideData }: SystemHealthCardPr
 
     Promise.all([getHealth(), listInstances()])
       .then(([health, instances]) => {
-        if (!cancelled) setRows(buildHealthRows(health, instances));
+        if (!cancelled) setSource({ health, instances });
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err : new Error('Não foi possível carregar a saúde do sistema.'));
@@ -106,6 +134,12 @@ export function SystemHealthCard({ className, overrideData }: SystemHealthCardPr
       cancelled = true;
     };
   }, [reloadKey, overrideData]);
+
+  // Não busca dado novo — só recalcula o frescor (`buildHealthRows`) pra não
+  // congelar "sem confirmar há X" no valor do render que buscou os dados
+  // (mesmo motivo de `StatusFreshness`/`useNow`).
+  const now = useNow();
+  const rows = useMemo(() => (source ? buildHealthRows(source.health, source.instances, now) : null), [source, now]);
 
   return (
     <Card className={className}>
@@ -133,7 +167,9 @@ export function SystemHealthCard({ className, overrideData }: SystemHealthCardPr
                     <Icon className={`size-4 shrink-0 ${ROW_ICON_CLASS[row.status]}`} aria-hidden="true" />
                     {row.label}
                   </span>
-                  <span className="text-xs text-muted-foreground">{row.detail}</span>
+                  <span className="text-right text-xs text-muted-foreground" title={row.detailTitle}>
+                    {row.detail}
+                  </span>
                 </li>
               );
             })}

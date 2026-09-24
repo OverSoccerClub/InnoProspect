@@ -1,0 +1,45 @@
+-- InnoProspect — correção do incidente de produção reportado pelo dono:
+-- "mesmo o número estando desconectado o sistema ainda fica mostrando como
+-- se ele estivesse conectado".
+--
+-- CAUSA RAIZ: até esta migração, o ÚNICO caminho que conseguia tirar uma
+-- `WhatsAppInstance` de `status = 'connected'` era o webhook
+-- `connection.update` (`apps/web/src/lib/services/webhook.ts`). Toda LEITURA
+-- pura (`GET /whatsapp/instances`, `GET .../:id/status`) só sobrescrevia o
+-- banco NA TRANSIÇÃO PARA `connected` — nunca na direção contrária, de
+-- propósito (evitar dar kill switch nas campanhas fora da transação
+-- completa do webhook). Um evento de webhook perdido (restart nosso durante
+-- o evento, blip de rede, Evolution reiniciando) deixava o banco mentindo
+-- PARA SEMPRE: nenhuma leitura jamais voltava a perguntar à Evolution.
+--
+-- Esta coluna sustenta a reconciliação nova (`whatsapp-instances.ts`):
+-- "quando foi a última vez que este `status` foi CONFIRMADO contra a
+-- Evolution API" — permite decidir QUANDO vale a pena perguntar de novo
+-- (limite de frescor) em vez de confiar cegamente no banco para sempre. Ver
+-- o comentário completo no campo `statusCheckedAt` do model
+-- `WhatsAppInstance` em `schema.prisma`.
+--
+-- ⚠️ 100% ADITIVA: uma única coluna NULLABLE, SEM DEFAULT, SEM índice (nenhuma
+-- query filtra por ela — é lida junto da linha, nunca usada em WHERE). Em
+-- Postgres >= 11, `ADD COLUMN` nullable sem DEFAULT é operação de METADADO
+-- (lock ACCESS EXCLUSIVE de milissegundos, independente do volume da tabela
+-- — `whatsapp_instances` tem dezenas de linhas hoje de qualquer forma). Toda
+-- linha existente nasce com `NULL` ("nunca confirmado desde que esta coluna
+-- existe") — comportamento seguro e documentado, não um estado de erro.
+--
+-- ⚠️ NÃO aplicada contra um Postgres real (mesma limitação de sempre nesta
+-- máquina de desenvolvimento — ver memória `innoprospect-bloqueio-docker`).
+-- Escrita à mão seguindo o mesmo padrão das migrações anteriores da mesma
+-- família (`20260923150000_instance_webhook_apikey`) — é o primeiro
+-- `migrate deploy` real quem prova que este SQL bate com o datamodel atual.
+--
+-- ── ROLLBACK ────────────────────────────────────────────────────────────
+-- Reversível a qualquer momento (coluna solta, sem FK/índice novo):
+--   ALTER TABLE "whatsapp_instances" DROP COLUMN "statusCheckedAt";
+-- Perda de dado no rollback: só o timestamp de "última confirmação" —
+-- `status`/`lastConnectionAt`/`lastErrorAt` continuam intactos, e a
+-- reconciliação volta a se comportar como se nunca tivesse confirmado nada
+-- (mesma segurança de um `NULL`, nunca um bloqueio).
+
+-- AlterTable
+ALTER TABLE "whatsapp_instances" ADD COLUMN     "statusCheckedAt" TIMESTAMP(3);

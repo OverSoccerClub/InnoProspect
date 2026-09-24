@@ -84,6 +84,8 @@ export interface FakeWhatsAppInstance {
   lastConnectionAt: Date | null;
   lastErrorAt: Date | null;
   lastErrorMessage: string | null;
+  /** 🆕 Reconciliação de status (2026-09-24) — `lib/services/whatsapp-instances.test.ts`/`lib/services/instance-connection.test.ts`. `undefined`/`null` = nunca confirmado (mesmo default de produção, coluna nova sem backfill). */
+  statusCheckedAt?: Date | null;
   /** 🆕 Fase 4.B — `lib/services/webhook.ts#resolveExpectedWebhookApiKeys`/`lib/services/evolution-servers.ts`. Opcional/`null` = comportamento pré-Fase-4.B (nenhum teste existente antes desta rodada seta este campo). */
   evolutionServerId?: string | null;
   isActive?: boolean;
@@ -399,6 +401,7 @@ export const fakePrismaClient = {
         lastConnectionAt: null,
         lastErrorAt: null,
         lastErrorMessage: null,
+        statusCheckedAt: null,
         isActive: true,
         ...data,
       } as FakeWhatsAppInstance;
@@ -427,6 +430,31 @@ export const fakePrismaClient = {
       Object.assign(instance, data);
       return { ...instance };
     }),
+  },
+
+  /** 🆕 Reconciliação de status (2026-09-24) — `listWhatsAppInstances#countActiveCampaigns`. Modela `CampaignInstance` a partir de `FakeCampaign.instanceIds` (mesma fonte que `campaign.findMany` já usa para o kill switch — não duplica um segundo array). */
+  campaignInstance: {
+    count: vi.fn(
+      async ({
+        where,
+      }: {
+        where?: { instanceId?: string; campaign?: { status?: { in: string[] } } };
+      } = {}) => {
+        const instanceId = where?.instanceId;
+        const statusIn = where?.campaign?.status?.in;
+        return store.campaigns.filter((c) => {
+          if (instanceId !== undefined && !c.instanceIds.includes(instanceId)) return false;
+          if (statusIn && !statusIn.includes(c.status)) return false;
+          return true;
+        }).length;
+      },
+    ),
+  },
+
+  /** 🆕 Reconciliação de status (2026-09-24) — `listWhatsAppInstances`. Nenhum teste desta rodada precisa de estatística diária real; `[]` faz `todayStat` cair em `null` (comportamento já coberto pelo `?? 0` em `toInstanceItem`). */
+  instanceDailyStat: {
+    findMany: vi.fn(async () => []),
+    findUnique: vi.fn(async () => null),
   },
 
   evolutionServer: {

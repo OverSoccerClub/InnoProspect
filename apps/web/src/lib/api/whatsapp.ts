@@ -8,6 +8,7 @@ import {
   mockGetInstanceQr,
   mockGetInstanceStatus,
   mockListInstances,
+  mockReconcileInstances,
 } from '@/mocks/whatsapp';
 import { mockDelay } from '@/mocks/utils';
 import type {
@@ -18,6 +19,7 @@ import type {
   InstanceListItem,
   InstanceQrResponse,
   InstanceStatusResponse,
+  ReconcileInstancesResult,
 } from '@/types/whatsapp';
 
 export async function listInstances(): Promise<InstanceListItem[]> {
@@ -27,6 +29,32 @@ export async function listInstances(): Promise<InstanceListItem[]> {
   }
   const res = await apiGet<{ data: InstanceListItem[] }>('/api/v1/whatsapp/instances');
   return res.data;
+}
+
+/**
+ * `POST /whatsapp/instances/reconcile` — reconciliação FORÇADA sob pedido
+ * explícito do operador ("Verificar agora"), `requireRole: 'admin'`.
+ * Devolve o MESMO shape de `listInstances`: quem chamou troca os dados que
+ * já tem pelo resultado, em vez de esperar um novo `GET` (ver comentário
+ * grande em `apps/web/src/lib/services/whatsapp-instances.ts`).
+ *
+ * ⚠️ Esta rota NÃO devolve `502` quando a Evolution está fora do ar — ela
+ * responde `200` com o último estado conhecido, porque a reconciliação
+ * nunca quebra a leitura (mesma postura do `GET` da lista). Quem distingue
+ * "confirmei" de "tentei e não consegui" é `unconfirmed`: quantas instâncias
+ * desta rodada não puderam ser confirmadas. `0` = todas confirmadas. Ele
+ * também expressa o caso PARCIAL (3 de 4), que um código HTTP não
+ * conseguiria sem mentir sobre as outras 3. Um `ApiRequestError` daqui
+ * significa outra coisa (403 por papel, 500 nosso) — aí sim é falha da
+ * chamada, não do upstream.
+ */
+export async function reconcileInstances(): Promise<ReconcileInstancesResult> {
+  if (USE_MOCKS) {
+    await mockDelay(500);
+    return mockReconcileInstances();
+  }
+  const res = await apiPost<{ data: InstanceListItem[]; unconfirmed: number }>('/api/v1/whatsapp/instances/reconcile');
+  return { instances: res.data, unconfirmed: res.unconfirmed };
 }
 
 export async function createInstance(input: CreateInstanceRequest): Promise<CreateInstanceResponse> {

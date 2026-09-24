@@ -45,6 +45,17 @@ export const whatsAppInstanceItemSchema = z.object({
   lastErrorAt: isoDateTimeSchema.nullable(),
   lastError: z.string().nullable(),
   activeCampaigns: z.number().int().min(0),
+  /**
+   * 🆕 Reconciliação de status (incidente do dono, 2026-09-24: "mesmo
+   * desconectado, o sistema ainda mostra como conectado"). A última vez que
+   * este `status` foi CONFIRMADO contra a Evolution API — NUNCA "a última
+   * vez que mudou". `null` = nunca confirmado desde que esta coluna existe
+   * (instância antiga, ou reconciliação ainda não rodou para ela). A tela
+   * usa isto para dizer "não consigo confirmar desde X" quando a Evolution
+   * está fora do ar (a reconciliação falha em silêncio e NÃO avança este
+   * campo — ver `apps/web/src/lib/services/whatsapp-instances.ts`).
+   */
+  statusCheckedAt: isoDateTimeSchema.nullable(),
 });
 export type WhatsAppInstanceItem = z.infer<typeof whatsAppInstanceItemSchema>;
 
@@ -52,6 +63,38 @@ export const listWhatsAppInstancesResponseSchema = z.object({
   data: z.array(whatsAppInstanceItemSchema),
 });
 export type ListWhatsAppInstancesResponse = z.infer<typeof listWhatsAppInstancesResponseSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /api/v1/whatsapp/instances/reconcile
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reconciliação FORÇADA (sob pedido explícito do operador, `requireRole:
+ * 'admin'`) — ignora o limite de frescor e cobre TODA instância, não só as
+ * `connected` (diferente da reconciliação automática de `GET
+ * /whatsapp/instances`, que só olha para instância `connected` e obsoleta —
+ * ver o comentário grande em `whatsapp-instances.ts#reconcileOneInstance`).
+ * `data` tem o MESMO shape de `ListWhatsAppInstancesResponse` de propósito:
+ * a tela troca os dados que já tem pelo resultado, sem precisar de um
+ * segundo formato.
+ *
+ * `unconfirmed` NÃO é decoração. A reconciliação NUNCA falha a requisição:
+ * uma instância que não pôde ser consultada (Evolution fora do ar, servidor
+ * Evolution inativo, timeout) mantém o último estado conhecido e segue no
+ * `data` — é a postura correta para o `GET` da lista, que não pode quebrar
+ * por causa de um upstream. Mas quando o operador CLICA em "Verificar
+ * agora", "não deu erro" e "eu confirmei" deixam de ser a mesma coisa: com
+ * a Evolution inteira fora do ar a resposta seria um `200` idêntico ao de
+ * sucesso, e a tela diria em silêncio que verificou. Este contador é o que
+ * permite à tela dizer "tentei e não consegui confirmar N de M" — e ele
+ * também cobre o caso PARCIAL (3 de 4 confirmadas), que um código de erro
+ * HTTP não conseguiria expressar sem mentir sobre as outras 3.
+ */
+export const reconcileWhatsAppInstancesResponseSchema = listWhatsAppInstancesResponseSchema.extend({
+  /** Quantas instâncias desta rodada NÃO puderam ser confirmadas contra a Evolution (o `statusCheckedAt` delas não avançou). `0` = todas confirmadas. */
+  unconfirmed: z.number().int().min(0),
+});
+export type ReconcileWhatsAppInstancesResponse = z.infer<typeof reconcileWhatsAppInstancesResponseSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────
 // POST /api/v1/whatsapp/instances

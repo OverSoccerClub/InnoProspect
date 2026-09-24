@@ -6,6 +6,7 @@ import { AlertTriangle, Flame, Gauge, Loader2, Megaphone, MoreVertical, Plug, Tr
 import { ConfirmDialog } from '@/components/common/confirm-dialog';
 import { InstanceHealthBadge } from '@/components/whatsapp/instance-health-badge';
 import { InstanceStatusBadge } from '@/components/whatsapp/instance-status-badge';
+import { StatusFreshness } from '@/components/whatsapp/status-freshness';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -89,6 +90,7 @@ export function InstanceCard({ instance, onConnect, onChanged }: InstanceCardPro
             {/* `ok` é redundante com o status "Conectado" + a borda verde do card — só entra na
                 grade quando pede atenção de verdade (regra que evita 2 selos verdes empilhados). */}
             {instance.health !== 'ok' && <InstanceHealthBadge health={instance.health} />}
+            <StatusFreshness statusCheckedAt={instance.statusCheckedAt} isConnected={instance.status === 'connected'} />
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

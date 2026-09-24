@@ -17,6 +17,7 @@ import type {
   GetInstanceStatusResponse,
   GetQrCodeResponse,
   ListWhatsAppInstancesResponse,
+  ReconcileWhatsAppInstancesResponse,
   WhatsAppInstanceDetail,
   WhatsAppInstanceItem,
 } from '@inno/contracts';
@@ -31,6 +32,7 @@ import {
 } from '@/lib/evolution';
 import { encryptEvolutionApiKey, toPrismaBytes } from '@/lib/evolution-server-crypto';
 import { haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
+import { applyInstanceConnectionTransition, type InstanceConnectionStatus } from '@/lib/services/instance-connection';
 import { sendAlert } from '@/lib/alerts';
 import { logger } from '@/lib/logger';
 
@@ -72,11 +74,11 @@ async function toInstanceItem(
     lastErrorAt: instance.lastErrorAt?.toISOString() ?? null,
     lastError: instance.lastErrorMessage,
     activeCampaigns,
+    statusCheckedAt: instance.statusCheckedAt?.toISOString() ?? null,
   };
 }
 
-export async function listWhatsAppInstances(): Promise<ListWhatsAppInstancesResponse> {
-  const instances = await prisma.whatsAppInstance.findMany({ orderBy: { createdAt: 'asc' } });
+async function buildInstanceListResponse(instances: WhatsAppInstance[]): Promise<ListWhatsAppInstancesResponse> {
   if (instances.length === 0) return { data: [] };
 
   const today = todayDateKey();
@@ -90,6 +92,33 @@ export async function listWhatsAppInstances(): Promise<ListWhatsAppInstancesResp
     instances.map((instance, i) => toInstanceItem(instance, statsByInstance.get(instance.id) ?? null, campaignCounts[i] ?? 0)),
   );
   return { data };
+}
+
+export async function listWhatsAppInstances(): Promise<ListWhatsAppInstancesResponse> {
+  const instances = await prisma.whatsAppInstance.findMany({ orderBy: { createdAt: 'asc' } });
+  // A contagem de não-confirmadas é DESCARTADA aqui de propósito: o `GET` da
+  // lista não pediu confirmação a ninguém, ele só aproveitou a passagem. Quem
+  // precisa saber que não deu para confirmar é a tela, e ela descobre pelo
+  // `statusCheckedAt` de cada instância (que não avançou). Na reconciliação
+  // FORÇADA é diferente — ali o operador pediu, e a resposta precisa dizer.
+  await reconcileInstancesInPlace(instances, isStaleConnectedInstance);
+  return buildInstanceListResponse(instances);
+}
+
+/**
+ * `POST /whatsapp/instances/reconcile` — reconciliação FORÇADA (sob pedido
+ * explícito do operador): ignora o limite de frescor E cobre TODA
+ * instância, não só `connected` (diferente de `listWhatsAppInstances`
+ * acima). Mesmo shape de resposta — a tela só substitui os dados que já
+ * tem.
+ */
+export async function reconcileAllWhatsAppInstances(): Promise<ReconcileWhatsAppInstancesResponse> {
+  const instances = await prisma.whatsAppInstance.findMany({ orderBy: { createdAt: 'asc' } });
+  const unconfirmed = await reconcileInstancesInPlace(instances, () => true);
+  if (unconfirmed > 0) {
+    logger.warn('whatsapp_instance.reconciliacao_forcada_incompleta', { unconfirmed, total: instances.length });
+  }
+  return { ...(await buildInstanceListResponse(instances)), unconfirmed };
 }
 
 /**
@@ -109,6 +138,219 @@ function rethrowAsUpstream(err: unknown, action: string): never {
     upstreamError(`Não foi possível ${action} agora (Evolution API indisponível ou com erro). Tente novamente em instantes.`);
   }
   throw err;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Reconciliação de status (2026-09-24) — incidente do dono: "mesmo o número
+// estando desconectado o sistema ainda fica mostrando como se ele estivesse
+// conectado". Causa raiz: o ÚNICO caminho que tirava uma instância de
+// `connected` era o webhook `connection.update` — um evento perdido
+// (restart nosso, blip de rede, Evolution reiniciando) deixava o banco
+// mentindo PARA SEMPRE, porque nenhuma LEITURA jamais voltava a perguntar.
+//
+// Por que isto vive AQUI (na leitura, em `apps/web`) e não num job do
+// `apps/worker` — decisão deliberada, não descuido: o factory do
+// `EvolutionClient` por instância (`getEvolutionClientForInstance` em
+// `@/lib/evolution`) mora em `apps/web` e depende de `@/lib/api-handler`/
+// `@/lib/evolution-server-crypto` de lá — levar isso para o worker é uma
+// extração que pertence à Fase 4.F.4 (quando o `dispatch-tick.job` precisar
+// de verdade resolver o cliente por instância para ENVIAR, não só para
+// perguntar o status), e o tick vai conferir a instância antes de enviar de
+// qualquer forma. Até lá, reconciliar na leitura resolve o incidente sem
+// puxar essa extração para frente sem necessidade real.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Limite de frescor: uma instância `connected` só é reconciliada de novo se
+ * `statusCheckedAt` for `null` ou mais velho que isto. Evita perguntar à
+ * Evolution a CADA `GET /whatsapp/instances` (a tela pode pollar) — 60s é
+ * curto o suficiente para o operador nunca ficar muito tempo olhando um
+ * "conectado" mentiroso, e longo o suficiente para não multiplicar
+ * requisições à Evolution por poll.
+ */
+const STATUS_FRESHNESS_MS = 60_000;
+
+/**
+ * Timeout DURO da consulta de reconciliação — independente do timeout
+ * interno do `EvolutionClient` (`packages/messaging/src/client/http.ts`,
+ * 15s por tentativa) E da sua política de retry de transporte
+ * (`getConnectionState` é retryable por padrão: até 2 tentativas extras em
+ * `TRANSIENT_ERROR`/`TIMEOUT`, cada uma com backoff — sem este teto PRÓPRIO,
+ * UMA instância lenta/fora do ar poderia levar quase 1 minuto, e mesmo em
+ * paralelo (`Promise.allSettled`) isso deixaria a página inteira pendurada
+ * esperando a mais lenta). Não cancela a chamada de rede de verdade (o
+ * cliente não aceita um `signal` externo hoje) — só para de ESPERAR por ela;
+ * como `getConnectionState` é uma leitura pura, uma resposta tardia e sem
+ * dono depois do timeout é inofensiva (é só descartada).
+ */
+const RECONCILE_TIMEOUT_MS = 5_000;
+
+function withHardTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`reconciliação: sem resposta da Evolution em ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+function isStaleConnectedInstance(instance: WhatsAppInstance): boolean {
+  if (instance.status !== 'connected') return false;
+  if (!instance.statusCheckedAt) return true;
+  return Date.now() - instance.statusCheckedAt.getTime() >= STATUS_FRESHNESS_MS;
+}
+
+/**
+ * Mensagem PRÓPRIA (nunca texto cru de upstream — regra 4 de
+ * `lib/alerts.ts`) usada quando a RECONCILIAÇÃO (não o webhook) é quem
+ * descobre a queda — deixa claro na auditoria (`lastErrorMessage`,
+ * `Campaign.haltReason`, alerta) de onde veio, já que não existe
+ * `statusReason` aqui (não é um evento da Evolution, é uma pergunta nossa).
+ */
+const RECONCILE_DOWN_MESSAGE =
+  'Reconciliação automática: a Evolution API confirmou a instância desconectada, mas o banco ainda registrava como conectada (provável evento connection.update perdido).';
+
+/**
+ * Reconcilia UMA instância contra a Evolution (`getConnectionState`) e
+ * decide o que é SEGURO corrigir — o estado bruto da Evolution só distingue
+ * 3 valores (`connected`/`connecting`/`disconnected`), enquanto o nosso
+ * `status` tem mais nuance (`qr_pending`/`banned`). Regra, deliberada:
+ *
+ *   1. Evolution diz `connected` → SEMPRE seguro subir para `connected`,
+ *      venha o banco de onde vier (`qr_pending`, `disconnected`, etc.) — é a
+ *      MESMA direção segura que `getWhatsAppInstanceQr`/
+ *      `getWhatsAppInstanceStatus` já usam.
+ *   2. Banco achava `connected` e Evolution diz OUTRA coisa → só essa
+ *      combinação é a MENTIRA perigosa que este incidente é sobre. Dentro
+ *      dela:
+ *      - Evolution diz `disconnected` (explícito) → QUEDA confirmada: status
+ *        `disconnected` + kill switch + alerta (a correção do incidente).
+ *      - Evolution diz `connecting` → **decisão deliberada, NÃO tratar como
+ *        queda**: `connecting` é a Evolution tentando reconectar SOZINHA (ex.:
+ *        blip de rede que ela mesma recupera); dar kill switch em campanhas
+ *        por isso seria falso positivo. Ainda assim, deixar o banco em
+ *        `connected` seria continuar mentindo — a saída é mostrar o estado
+ *        intermediário de verdade (`status: 'connecting'`), SEM kill switch
+ *        e SEM alerta (`applyInstanceConnectionTransition` só aciona os dois
+ *        para `disconnected`/`banned`). Um restart nesse meio-tempo pode
+ *        piscar connected→connecting→connected na tela — isso é FIEL ao que
+ *        está acontecendo de verdade, não um bug.
+ *   3. Banco JÁ NÃO achava `connected` (qualquer nuance — `qr_pending`,
+ *      `connecting`, `banned`, `disconnected`) e Evolution confirma "não
+ *      conectada" — não há mentira de "conectado" para corrigir aqui, e
+ *      sobrescrever o `status` arriscaria efeitos colaterais que não são
+ *      desta função (ex.: `qr_pending` tem um modal de QR aberto contando
+ *      com aquele status — ver o bug de 2026-09-23 em `getWhatsAppInstanceQr`).
+ *      Só confirma `statusCheckedAt` — a Evolution FOI perguntada, só não
+ *      havia nada seguro a corrigir.
+ *
+ * Nunca lança — falha de rede/timeout é logada e devolve a instância
+ * INTOCADA (nem `statusCheckedAt` avança: é isso que faz a tela poder dizer
+ * "não consigo confirmar desde X" quando a Evolution está fora do ar, em vez
+ * de fingir que confirmou).
+ *
+ * `confirmed` distingue as duas coisas que "não lançar" junta: `true` = a
+ * Evolution foi perguntada E a confirmação foi persistida (`statusCheckedAt`
+ * avançou, tenha havido correção de status ou não); `false` = não deu para
+ * confirmar. Quem chama o `GET` da lista ignora essa diferença (a lista
+ * responde de qualquer forma), mas a reconciliação FORÇADA precisa dela: ali
+ * "não deu erro" e "eu confirmei" não podem ser a mesma resposta, senão o
+ * operador clica em "Verificar agora" com a Evolution fora do ar e a tela
+ * dá um `200` silencioso.
+ */
+type ReconcileOneResult = { instance: WhatsAppInstance; confirmed: boolean };
+
+async function reconcileOneInstance(instance: WhatsAppInstance): Promise<ReconcileOneResult> {
+  let raw: ConnectionState;
+  try {
+    const client = await getEvolutionClientForInstance(instance);
+    raw = await withHardTimeout(client.getConnectionState(instance.evolutionInstanceName), RECONCILE_TIMEOUT_MS);
+  } catch (err) {
+    logger.warn('whatsapp_instance.reconciliacao_falhou — mantendo o último estado conhecido do banco', {
+      instanceId: instance.id,
+      err: err instanceof Error ? err : new Error(String(err)),
+    });
+    return { instance, confirmed: false };
+  }
+
+  try {
+    const wasConnectedInDb = instance.status === 'connected';
+    const isConnectedNow = raw === 'connected';
+
+    if (!isConnectedNow && !wasConnectedInDb) {
+      // Regra 3 acima — nada de seguro a corrigir, só confirma o timestamp.
+      const touched = await prisma.whatsAppInstance.update({ where: { id: instance.id }, data: { statusCheckedAt: new Date() } });
+      return { instance: touched, confirmed: true };
+    }
+
+    const nextStatus: InstanceConnectionStatus = isConnectedNow ? 'connected' : raw === 'connecting' ? 'connecting' : 'disconnected';
+    const { instance: updated, pausedCampaigns } = await applyInstanceConnectionTransition({
+      instanceId: instance.id,
+      instanceName: instance.name,
+      previousStatus: instance.status,
+      nextStatus,
+      downMessage: nextStatus === 'disconnected' ? RECONCILE_DOWN_MESSAGE : undefined,
+    });
+
+    if (pausedCampaigns.length > 0) {
+      logger.warn('whatsapp_instance.reconciliacao_haltou_campanhas', { instanceId: instance.id, pausedCampaigns });
+    }
+    return { instance: updated, confirmed: true };
+  } catch (err) {
+    // Erro de INFRAESTRUTURA (Postgres) escrevendo a reconciliação — diferente
+    // do catch acima (falha ao CONSULTAR a Evolution). Mesma postura: nunca
+    // lança, a listagem responde com o que já tinha antes desta tentativa.
+    logger.error('whatsapp_instance.reconciliacao_falhou_ao_gravar', {
+      instanceId: instance.id,
+      err: err instanceof Error ? err : new Error(String(err)),
+    });
+    // A Evolution respondeu, mas a confirmação não foi persistida — logo
+    // `statusCheckedAt` continua onde estava, e dizer `confirmed: true` aqui
+    // faria a tela afirmar um frescor que o banco não tem.
+    return { instance, confirmed: false };
+  }
+}
+
+/**
+ * Reconcilia, EM PARALELO (`Promise.allSettled` — nunca em série), toda
+ * instância de `instances` que `shouldReconcile` selecionar, e substitui no
+ * próprio array (mutação in-place, por índice) o resultado de cada uma —
+ * quem chamou continua com a MESMA referência, agora com dados frescos onde
+ * a reconciliação teve algo a dizer. `reconcileOneInstance` nunca lança (ver
+ * comentário lá), então `Promise.allSettled` só existe como defesa de 2ª
+ * linha; um `rejected` aqui manteria a instância original intocada.
+ *
+ * Devolve quantas das CANDIDATAS não puderam ser confirmadas (Evolution fora
+ * do ar/timeout, ou falha ao gravar). Instância que nem era candidata não
+ * conta: ninguém tentou confirmá-la, então não há nada que tenha falhado.
+ */
+async function reconcileInstancesInPlace(
+  instances: WhatsAppInstance[],
+  shouldReconcile: (instance: WhatsAppInstance) => boolean,
+): Promise<number> {
+  const candidates = instances.map((instance, index) => ({ instance, index })).filter(({ instance }) => shouldReconcile(instance));
+  if (candidates.length === 0) return 0;
+
+  const results = await Promise.allSettled(candidates.map(({ instance }) => reconcileOneInstance(instance)));
+  let unconfirmed = 0;
+  results.forEach((result, i) => {
+    if (result.status !== 'fulfilled') {
+      // Defesa de 2ª linha (ver acima): `reconcileOneInstance` não deveria
+      // rejeitar. Se rejeitou, nada foi confirmado sobre esta instância.
+      unconfirmed += 1;
+      return;
+    }
+    instances[candidates[i]!.index] = result.value.instance;
+    if (!result.value.confirmed) unconfirmed += 1;
+  });
+  return unconfirmed;
 }
 
 /**

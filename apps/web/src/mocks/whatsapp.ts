@@ -7,6 +7,7 @@ import type {
   InstanceListItem,
   InstanceQrResponse,
   InstanceStatusResponse,
+  ReconcileInstancesResult,
 } from '@/types/whatsapp';
 import { mockNoteInstanceCreatedOnServer, mockNoteInstanceRemovedFromServer, mockRequireActiveEvolutionServer } from './evolution-servers';
 import { mockNotFound } from './utils';
@@ -41,6 +42,10 @@ function buildInstances(): MockInstance[] {
       lastErrorAt: null,
       lastError: null,
       activeCampaigns: 1,
+      // Confirmado há poucos segundos — o caso "tudo bem de verdade", pra
+      // contrastar com wa_2/wa_4 abaixo (mesmo `status: 'connected'`, frescor
+      // bem diferente — é o contraste que `StatusFreshness` existe pra mostrar).
+      statusCheckedAt: new Date(now - 15_000).toISOString(),
       qrIssuedAtMs: null,
       qrPollCount: 0,
       evolutionServerId: 'evo_1',
@@ -57,6 +62,10 @@ function buildInstances(): MockInstance[] {
       lastErrorAt: null,
       lastError: null,
       activeCampaigns: 1,
+      // `null` = nunca confirmado desde que a coluna existe — exercita
+      // exatamente a combinação do incidente do dono (`connected` + sem
+      // nenhuma confirmação ainda).
+      statusCheckedAt: null,
       qrIssuedAtMs: null,
       qrPollCount: 0,
       evolutionServerId: 'evo_1',
@@ -73,6 +82,10 @@ function buildInstances(): MockInstance[] {
       lastErrorAt: new Date(now - 86_400_000).toISOString(),
       lastError: 'Conexão perdida (state: close). Tentando reconectar automaticamente.',
       activeCampaigns: 0,
+      // Velho e MUITO velho (~1h30) — mas o status já é `disconnected`, então
+      // esta é a leitura menos perigosa das duas velhas (não é uma mentira de
+      // "conectado", é só "ainda não perguntamos de novo").
+      statusCheckedAt: new Date(now - 90 * 60_000).toISOString(),
       qrIssuedAtMs: null,
       qrPollCount: 0,
       // Servidor secundário de propósito — dá pra ver a contagem de
@@ -91,6 +104,10 @@ function buildInstances(): MockInstance[] {
       lastErrorAt: null,
       lastError: null,
       activeCampaigns: 0,
+      // 7 minutos — passou do limiar de 5 min (`STATUS_FRESHNESS_STALE_MS`)
+      // ENQUANTO `connected`: o outro caso que `StatusFreshness` precisa
+      // deixar visivelmente hesitante, sem virar alarme vermelho.
+      statusCheckedAt: new Date(now - 7 * 60_000).toISOString(),
       qrIssuedAtMs: null,
       qrPollCount: 0,
       evolutionServerId: 'evo_1',
@@ -116,7 +133,34 @@ export function mockListInstances(): InstanceListItem[] {
     lastErrorAt: instance.lastErrorAt,
     lastError: instance.lastError,
     activeCampaigns: instance.activeCampaigns,
+    statusCheckedAt: instance.statusCheckedAt,
   }));
+}
+
+/**
+ * Espelha `POST /whatsapp/instances/reconcile` (reconciliação FORÇADA, sem
+ * Evolution real para perguntar de verdade em modo mock): simplesmente
+ * confirma AGORA toda instância, sem mudar nenhum `status` — o mock não tem
+ * como descobrir uma queda que o "webhook perdido" já não soubesse. Isso já
+ * basta pra exercitar o caminho feliz do botão "Verificar agora" (os selos
+ * "nunca confirmado"/"confirmado há 7 min" de wa_2/wa_4 viram "confirmado
+ * agora"); o caminho de erro (502 com a Evolution fora do ar) é
+ * responsabilidade do backend real, não deste mock.
+ */
+/**
+ * `unconfirmed: 0` — o mock sempre consegue confirmar tudo, porque aqui não
+ * existe Evolution para estar fora do ar. O caminho PARCIAL (algumas
+ * instâncias não confirmadas, que é o que liga o aviso na tela) é provado em
+ * `lib/services/whatsapp-instances.test.ts` contra o fake db, não aqui — este
+ * mock serve para olhar o layout do caminho feliz, não para simular queda de
+ * upstream.
+ */
+export function mockReconcileInstances(): ReconcileInstancesResult {
+  const now = new Date().toISOString();
+  for (const instance of getInstances()) {
+    instance.statusCheckedAt = now;
+  }
+  return { instances: mockListInstances(), unconfirmed: 0 };
 }
 
 function findInstance(id: string): MockInstance {
@@ -148,6 +192,10 @@ export function mockCreateInstance(input: CreateInstanceRequest): CreateInstance
     lastErrorAt: null,
     lastError: null,
     activeCampaigns: 0,
+    // Nasce sem nenhuma confirmação ainda — nem faz sentido perguntar à
+    // Evolution status de conexão de uma instância que ainda está em
+    // `qr_pending`, esperando ser escaneada.
+    statusCheckedAt: null,
     qrIssuedAtMs: Date.now(),
     qrPollCount: 0,
     evolutionServerId: input.evolutionServerId,

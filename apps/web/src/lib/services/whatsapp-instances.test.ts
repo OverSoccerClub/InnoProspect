@@ -14,7 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
-import { resetFakeDb, type FakeWhatsAppInstance } from '@/test/fake-db';
+import { resetFakeDb, type FakeCampaign, type FakeWhatsAppInstance } from '@/test/fake-db';
 
 vi.mock('@inno/db', async () => {
   const { fakePrismaClient } = await import('@/test/fake-db');
@@ -47,7 +47,9 @@ vi.mock('@/lib/evolution', () => ({
   buildWebhookUrl: buildWebhookUrlMock,
 }));
 
-const { getWhatsAppInstanceQr, getWhatsAppInstanceStatus, createWhatsAppInstance } = await import('./whatsapp-instances');
+const { getWhatsAppInstanceQr, getWhatsAppInstanceStatus, createWhatsAppInstance, listWhatsAppInstances, reconcileAllWhatsAppInstances } = await import(
+  './whatsapp-instances'
+);
 const { decryptEvolutionApiKey } = await import('@/lib/evolution-server-crypto');
 const { getFakeDbState } = await import('@/test/fake-db');
 
@@ -59,7 +61,24 @@ function instance(overrides: Partial<FakeWhatsAppInstance> & Pick<FakeWhatsAppIn
     lastConnectionAt: null,
     lastErrorAt: null,
     lastErrorMessage: null,
+    statusCheckedAt: null,
     evolutionInstanceName: 'inno-1',
+    name: 'Instância',
+    ...overrides,
+  };
+}
+
+function campaign(overrides: Partial<FakeCampaign> & Pick<FakeCampaign, 'id'>): FakeCampaign {
+  return {
+    status: 'running',
+    sentCount: 0,
+    deliveredCount: 0,
+    readCount: 0,
+    respondedCount: 0,
+    failedCount: 0,
+    skippedCount: 0,
+    haltReason: null,
+    instanceIds: [],
     ...overrides,
   };
 }
@@ -194,5 +213,181 @@ describe('createWhatsAppInstance — 🆕 correção do webhook mudo (2026-09-23
     expect(result.status).toBe('qr_pending');
     const saved = getFakeDbState().whatsAppInstances[0] as unknown as { instanceApiKeyCiphertext?: Uint8Array };
     expect(saved.instanceApiKeyCiphertext).toBeUndefined();
+  });
+});
+
+describe('listWhatsAppInstances — reconciliação de status (2026-09-24, incidente do dono: "mesmo desconectado, o sistema ainda mostra como conectado")', () => {
+  it('Evolution confirma DESCONECTADA uma instância que o banco achava CONECTADA — muda o status E halta as campanhas que dependiam só dela (a correção do incidente)', async () => {
+    resetFakeDb({
+      whatsAppInstances: [instance({ id: 'i1', status: 'connected', statusCheckedAt: null })],
+      campaigns: [
+        campaign({ id: 'camp-sole', status: 'running', instanceIds: ['i1'] }),
+        campaign({ id: 'camp-shared', status: 'running', instanceIds: ['i1', 'i2'] }),
+      ],
+    });
+    getConnectionStateMock.mockResolvedValue('disconnected');
+
+    const res = await listWhatsAppInstances();
+
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0]!.status).toBe('disconnected');
+    expect(res.data[0]!.statusCheckedAt).not.toBeNull();
+    const state = getFakeDbState();
+    expect(state.whatsAppInstances[0]!.status).toBe('disconnected');
+    expect(state.campaigns.find((c) => c.id === 'camp-sole')?.status).toBe('halted');
+    expect(state.campaigns.find((c) => c.id === 'camp-shared')?.status).toBe('running');
+    expect(sendAlertMock).toHaveBeenCalledWith(expect.objectContaining({ kind: 'instance_disconnected', instanceId: 'i1', reason: 'disconnected' }));
+  });
+
+  it('Evolution fora do ar (lança) — a lista responde com o ÚLTIMO estado conhecido, e statusCheckedAt NÃO avança', async () => {
+    const before = new Date('2026-09-20T10:00:00Z');
+    resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'connected', statusCheckedAt: before })] });
+    getConnectionStateMock.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const res = await listWhatsAppInstances();
+
+    expect(res.data[0]!.status).toBe('connected'); // último estado conhecido, não regride.
+    expect(res.data[0]!.statusCheckedAt).toBe(before.toISOString());
+    const saved = getFakeDbState().whatsAppInstances.find((i) => i.id === 'i1');
+    expect(saved?.statusCheckedAt).toBe(before); // nunca avançou.
+  });
+
+  it('instância em qr_pending NÃO é reconciliada — getConnectionState nem é chamado', async () => {
+    resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'qr_pending', statusCheckedAt: null })] });
+
+    const res = await listWhatsAppInstances();
+
+    expect(getConnectionStateMock).not.toHaveBeenCalled();
+    expect(res.data[0]!.status).toBe('qr_pending');
+  });
+
+  it('limite de frescor: duas leituras seguidas, statusCheckedAt ainda fresco, fazem só UMA consulta à Evolution', async () => {
+    resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'connected', statusCheckedAt: null })] });
+    getConnectionStateMock.mockResolvedValue('connected');
+
+    await listWhatsAppInstances(); // 1ª leitura: statusCheckedAt era null (obsoleto) — consulta a Evolution.
+    await listWhatsAppInstances(); // 2ª leitura, imediatamente depois: statusCheckedAt fresco — NÃO deveria consultar de novo.
+
+    expect(getConnectionStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('instância já connected e Evolution confirma connected de novo — sem transição, sem alerta, só statusCheckedAt avança', async () => {
+    resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'connected', statusCheckedAt: null })] });
+    getConnectionStateMock.mockResolvedValue('connected');
+
+    await listWhatsAppInstances();
+
+    expect(sendAlertMock).not.toHaveBeenCalled();
+    const saved = getFakeDbState().whatsAppInstances.find((i) => i.id === 'i1');
+    expect(saved?.status).toBe('connected');
+    expect(saved?.statusCheckedAt).toBeInstanceOf(Date);
+  });
+
+  it('timeout duro: se a Evolution nunca responde, a reconciliação desiste sozinha e a lista responde com o estado anterior (não trava)', async () => {
+    vi.useFakeTimers();
+    try {
+      resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'connected', statusCheckedAt: null })] });
+      getConnectionStateMock.mockReturnValue(new Promise<never>(() => {})); // nunca resolve nem rejeita.
+
+      const pending = listWhatsAppInstances();
+      await vi.runAllTimersAsync();
+      const res = await pending;
+
+      expect(res.data[0]!.status).toBe('connected');
+      const saved = getFakeDbState().whatsAppInstances.find((i) => i.id === 'i1');
+      expect(saved?.statusCheckedAt).toBeNull(); // desistiu — nunca confirmou.
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Evolution diz "connecting" (reconectando sozinha) — NÃO é tratado como queda: sem kill switch, sem alerta, só reflete o estado intermediário', async () => {
+    resetFakeDb({
+      whatsAppInstances: [instance({ id: 'i1', status: 'connected', statusCheckedAt: null })],
+      campaigns: [campaign({ id: 'camp-sole', status: 'running', instanceIds: ['i1'] })],
+    });
+    getConnectionStateMock.mockResolvedValue('connecting');
+
+    const res = await listWhatsAppInstances();
+
+    expect(res.data[0]!.status).toBe('connecting');
+    expect(sendAlertMock).not.toHaveBeenCalled();
+    expect(getFakeDbState().campaigns.find((c) => c.id === 'camp-sole')?.status).toBe('running');
+  });
+});
+
+describe('reconcileAllWhatsAppInstances — reconciliação FORÇADA (POST .../reconcile)', () => {
+  it('ignora o limite de frescor: instância recém-confirmada É reconciliada de novo mesmo assim', async () => {
+    const justNow = new Date();
+    resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'connected', statusCheckedAt: justNow })] });
+    getConnectionStateMock.mockResolvedValue('connected');
+
+    await reconcileAllWhatsAppInstances();
+
+    expect(getConnectionStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('cobre instância que NÃO está connected — se a Evolution já confirma conectada, sobe (direção segura, mesma dos outros endpoints)', async () => {
+    resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'qr_pending', statusCheckedAt: null })] });
+    getConnectionStateMock.mockResolvedValue('connected');
+
+    const res = await reconcileAllWhatsAppInstances();
+
+    expect(res.data[0]!.status).toBe('connected');
+  });
+
+  it('instância qr_pending cuja Evolution ainda não confirma conectada — não sobrescreve o status (evita quebrar o modal de QR aberto)', async () => {
+    resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'qr_pending', statusCheckedAt: null })] });
+    getConnectionStateMock.mockResolvedValue('disconnected');
+
+    const res = await reconcileAllWhatsAppInstances();
+
+    expect(res.data[0]!.status).toBe('qr_pending');
+    const saved = getFakeDbState().whatsAppInstances.find((i) => i.id === 'i1');
+    expect(saved?.statusCheckedAt).toBeInstanceOf(Date); // confirmado, mesmo sem mudar o status.
+  });
+
+  // Estes três provam o `unconfirmed`, que é o que autoriza a TELA a dizer
+  // "confirmei". A rota devolve `200` mesmo com a Evolution fora do ar (a
+  // reconciliação nunca quebra a leitura) — sem este contador, "não deu erro"
+  // e "eu confirmei" seriam a mesma resposta, e o botão "Verificar agora"
+  // daria um sucesso silencioso com a Evolution inteira inacessível.
+  it('todas confirmadas → unconfirmed = 0', async () => {
+    resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'connected' }), instance({ id: 'i2', status: 'connected' })] });
+    getConnectionStateMock.mockResolvedValue('connected');
+
+    const res = await reconcileAllWhatsAppInstances();
+
+    expect(res.unconfirmed).toBe(0);
+  });
+
+  it('Evolution fora do ar para TODAS → unconfirmed conta todas, e a resposta ainda é a lista (nunca erro)', async () => {
+    resetFakeDb({ whatsAppInstances: [instance({ id: 'i1', status: 'connected' }), instance({ id: 'i2', status: 'connected' })] });
+    getConnectionStateMock.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const res = await reconcileAllWhatsAppInstances();
+
+    expect(res.unconfirmed).toBe(2);
+    expect(res.data).toHaveLength(2);
+    expect(res.data.every((i) => i.statusCheckedAt === null)).toBe(true);
+  });
+
+  it('sucesso PARCIAL → unconfirmed conta só as que falharam, e as que deram certo ficam frescas', async () => {
+    resetFakeDb({
+      whatsAppInstances: [
+        instance({ id: 'i1', status: 'connected', evolutionInstanceName: 'inno-i1' }),
+        instance({ id: 'i2', status: 'connected', evolutionInstanceName: 'inno-i2' }),
+      ],
+    });
+    getConnectionStateMock.mockImplementation(async (nome: string) => {
+      if (nome === 'inno-i2') throw new Error('ETIMEDOUT');
+      return 'connected';
+    });
+
+    const res = await reconcileAllWhatsAppInstances();
+
+    expect(res.unconfirmed).toBe(1);
+    expect(res.data.find((i) => i.id === 'i1')!.statusCheckedAt).not.toBeNull();
+    expect(res.data.find((i) => i.id === 'i2')!.statusCheckedAt).toBeNull();
   });
 });
