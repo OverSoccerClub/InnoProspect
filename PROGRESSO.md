@@ -55,6 +55,47 @@ genérica, para não virar oráculo). Antes disso o sintoma era "nada acontece",
 que não dá pista de onde procurar. Regra que fica: autenticação fail-closed
 com resposta genérica precisa de log que diga o motivo real.
 
+## Consertado em 24/09/2026 — a tela deixa de jurar que o número está conectado
+
+Bug reportado pelo dono: número desconectado continuava aparecendo como
+**Conectado**. A causa não era um `if` errado — era a **ausência de alguém que
+voltasse a perguntar**. A leitura de status só gravava no banco na transição
+PARA `connected`; o único caminho que tirava uma instância desse estado era o
+webhook `connection.update`. Webhook é, por definição, um caminho que pode
+perder evento — e perdeu.
+
+O que mudou, e por que importa além deste bug:
+
+- A transação completa de conexão (status + kill switch de campanhas +
+  alerta) saiu do webhook para **um corpo único**
+  (`apps/web/src/lib/services/instance-connection.ts`). O comentário antigo
+  que justificava não reconciliar estava certo no medo e errado no alvo: o
+  risco nunca foi "ler de novo", foi ter uma **segunda implementação** da
+  transição. Agora o evento que chega e a pergunta que fazemos executam o
+  mesmo código.
+- `WhatsAppInstance.statusCheckedAt` responde "**desde quando** eu sei disso"
+  — nunca "quando mudou". A listagem reconcilia sozinha as instâncias
+  `connected` com leitura mais velha que 60s, em paralelo e com timeout; se a
+  Evolution estiver fora do ar, **o campo não avança** e a tela diz isso.
+- Direção segura é assimétrica de propósito: subir para `connected` sempre
+  vale; derrubar só quando a Evolution diz `disconnected` explícito e o banco
+  achava `connected`. `connecting` reflete o estado sem haltar campanha
+  (é a Evolution reconectando sozinha); `qr_pending` não se toca.
+- "Verificar agora" devolve `unconfirmed`: quantas instâncias **não** deram
+  para confirmar. A rota responde `200` mesmo com a Evolution inacessível —
+  sem esse contador, "não deu erro" e "eu confirmei" seriam a mesma resposta,
+  e o botão daria sucesso silencioso. É também o único jeito de expressar
+  sucesso **parcial** (3 de 4).
+
+**Regra que fica:** estado espelhado de sistema externo que só é atualizado
+por evento empurrado precisa de um caminho que **volte a perguntar** — e de um
+campo que diga desde quando a resposta é válida. Sem o segundo, a
+reconciliação troca uma mentira por outra mais discreta.
+
+Pendente de olho humano: a geometria do selo de frescor no card de instância
+(390px). Não medida em navegador — o token do harness de demonstração venceu e
+não há E2E no repositório.
+
 ## O que existe mas nunca foi exercitado de verdade
 
 - **Restore de backup.** Configurado, nunca restaurado.
@@ -213,6 +254,9 @@ gate de mock exige também `inno_mock_session=1`.
   22-23/09 passaram por typecheck, lint, testes e `next build` — nenhum deles
   olha para a imagem que sobe. Todo processo empacotado precisa de auto-teste
   dentro da própria imagem.
+- **Espelho de sistema externo atualizado só por evento empurrado mente para
+  sempre quando um evento se perde.** Precisa de reconciliação E de um campo
+  de "confirmado quando" — ver o conserto de 24/09.
 - **Sanidade medida só por volume não pega falha de completude.** As assertions
   não dispararam quando 260 leads vieram só com o nome.
 - **Script operacional precisa ser entrada do bundle.** A imagem do worker não
