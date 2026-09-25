@@ -101,6 +101,10 @@ export interface FakeWhatsAppInstance {
   instanceKey?: string;
   createdById?: string;
   warmupStartedAt?: Date | null;
+  /** 🆕 Fase 4.F.5 — `lib/services/instance-connection.test.ts`/`webhook.test.ts` (regressWarmupDay ao reconectar). Default `1` no `create` (mesmo default de produção, `schema.prisma#warmupDay`). */
+  warmupDay?: number;
+  /** 🆕 Fase 4.F.5 — congelamento do `health-check.job` (worker); do lado do web só é lido/exibido, nunca escrito. `null`/ausente = não congelado. */
+  warmupFrozenAt?: Date | null;
 }
 
 /** 🆕 Fase 4.B — `lib/services/evolution-servers.ts` (CRUD de servidores Evolution API) e `lib/services/webhook.ts` (resolução do apikey esperado por instância). */
@@ -220,14 +224,26 @@ export const fakePrismaClient = {
     return Promise.all(arg as Promise<unknown>[]);
   }),
 
-  // Stub genérico — o único chamador hoje é `lib/services/users.ts`
-  // (`lockActiveAdminsAndCount`, `SELECT ... FOR UPDATE` para travar as
-  // linhas de admin ativo). Este fake NÃO simula lock/concorrência real
-  // (nenhum Postgres por trás) — só evita que o `await tx.$queryRaw` quebre
-  // por "não é função" no teste. A correção da corrida em si depende do
-  // comportamento real do Postgres, não verificável aqui (ver comentário
-  // longo em `users.ts`).
-  $queryRaw: vi.fn(async () => []),
+  // Stub genérico — cobre 2 chamadores hoje, roteados por TEXTO da query
+  // (mesmo padrão de `dashboard.test.ts`), nenhum dos dois simulando
+  // lock/concorrência real (nenhum Postgres por trás):
+  //  1. `lib/services/users.ts#lockActiveAdminsAndCount` (`SELECT ... FOR
+  //     UPDATE` para travar linhas de admin ativo) — resultado descartado
+  //     pelo chamador, `[]` (default) é suficiente.
+  //  2. 🆕 Fase 4.F.5 — `lib/services/instance-connection.ts#
+  //     applyInstanceConnectionTransition` (`SELECT "warmupDay" ... FOR
+  //     UPDATE`, para `regressWarmupDay`) — este SIM precisa devolver o
+  //     `warmupDay` ATUAL da instância (senão `regressWarmupDay(undefined)`
+  //     computaria `NaN`), por isso é o único caso roteado por conteúdo.
+  $queryRaw: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = Array.isArray(strings) ? strings.join('?') : String(strings);
+    if (sql.includes('whatsapp_instances') && sql.includes('warmupDay')) {
+      const instanceId = values[0] as string | undefined;
+      const found = store.whatsAppInstances.find((i) => i.id === instanceId);
+      return found ? [{ warmupDay: found.warmupDay ?? 1 }] : [];
+    }
+    return [];
+  }),
 
   lead: {
     findFirst: vi.fn(async ({ where, orderBy }: { where?: Where; orderBy?: Record<string, string> } = {}) => {
@@ -403,6 +419,8 @@ export const fakePrismaClient = {
         lastErrorMessage: null,
         statusCheckedAt: null,
         isActive: true,
+        warmupDay: 1,
+        warmupFrozenAt: null,
         ...data,
       } as FakeWhatsAppInstance;
       store.whatsAppInstances.push(created);

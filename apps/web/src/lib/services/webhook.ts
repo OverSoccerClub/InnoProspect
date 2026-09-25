@@ -289,13 +289,24 @@ async function handleConnectionUpdate(instance: WhatsAppInstance, event: Connect
   // (`applyInstanceConnectionTransition` usa isto para não realertar/haltar
   // de novo a cada evento redundante que a Evolution mande com o mesmo
   // estado, ex.: tentativas de reconexão que falham repetidamente).
-  const { pausedCampaigns } = await applyInstanceConnectionTransition({
+  const { pausedCampaigns, warmupRegression } = await applyInstanceConnectionTransition({
     instanceId: instance.id,
     instanceName: instance.name,
     previousStatus: instance.status,
     nextStatus,
     downMessage,
   });
+
+  if (warmupRegression) {
+    // 🆕 Fase 4.F.5 — a linha que prova, no log, que o recuo de fato
+    // aconteceu nesta reconexão (o aceite visual é a tela, mas isto é o que
+    // o Vulcano/dono confirmam sem precisar abrir Postgres).
+    logger.info('webhook evolution: warmup regredido (reconexão após queda)', {
+      instanceId: instance.id,
+      fromDay: warmupRegression.fromDay,
+      toDay: warmupRegression.toDay,
+    });
+  }
 
   logger.info('webhook evolution: connection.update processado', {
     instanceId: instance.id,

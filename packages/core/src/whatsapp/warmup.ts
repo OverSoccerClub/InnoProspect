@@ -55,9 +55,14 @@ export function effectiveDailyLimit(warmupDay: number, override: number | null |
 
 /**
  * Regressão automática de warmup (ARQUITETURA §6.2: "se a instância ficar
- * disconnected/banned e voltar, o warmupDay recua 30%, mín. dia 1"). Função
- * pura pronta para o `warmup-roll.job` (Fase 4, worker) — não é chamada por
- * nenhum código desta rodada (webhook só atualiza `status`, não `warmupDay`).
+ * disconnected/banned e voltar, o warmupDay recua 30%, mín. dia 1"). 🆕 Fase
+ * 4.F.5 — ligada em `apps/web/src/lib/services/instance-connection.ts#
+ * applyInstanceConnectionTransition` (dentro de uma transação com `SELECT
+ * ... FOR UPDATE`, para não perder a escrita concorrente do
+ * `warmup-roll.job`), disparada só na transição REAL `disconnected`/`banned`
+ * → `connected` (webhook `connection.update` e a reconciliação FORÇADA;
+ * NUNCA na reconciliação automática da listagem, que só reconfirma instância
+ * JÁ `connected` — não existe transição de queda ali para regredir).
  */
 export function regressWarmupDay(currentDay: number): number {
   return Math.max(1, Math.floor(currentDay * 0.7));

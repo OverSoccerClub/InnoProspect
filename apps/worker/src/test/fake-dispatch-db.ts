@@ -100,6 +100,21 @@ export interface FakeWhatsAppInstance {
   evolutionServerId: string | null;
   lastErrorAt: Date | null;
   lastErrorMessage: string | null;
+  /** 🆕 Fase 4.F.5 — `jobs/warmup-roll.job.test.ts`/`jobs/health-check.job.test.ts`. Default `true` no seed (nenhum teste anterior a esta rodada precisava filtrar por isto). */
+  isActive?: boolean;
+  /** 🆕 Fase 4.F.5 — `jobs/health-check.job.test.ts`/`jobs/warmup-roll.job.test.ts`. `null`/ausente = não congelado (default de produção). */
+  warmupFrozenAt?: Date | null;
+}
+
+/** 🆕 Fase 4.F.5 — `jobs/health-check.job.test.ts` (ping em toda `EvolutionServer` ativa). */
+export interface FakeEvolutionServer {
+  id: string;
+  baseUrl: string;
+  isActive: boolean;
+  apiKeyCiphertext: Buffer;
+  apiKeyIv: Buffer;
+  apiKeyAuthTag: Buffer;
+  apiKeyKeyVersion: number;
 }
 
 export interface FakeInstanceDailyStat {
@@ -131,6 +146,7 @@ export interface FakeDbSeed {
   instanceDailyStats?: FakeInstanceDailyStat[];
   optOuts?: FakeOptOut[];
   messages?: FakeMessage[];
+  evolutionServers?: FakeEvolutionServer[];
 }
 
 const store = {
@@ -143,6 +159,7 @@ const store = {
   optOuts: [] as FakeOptOut[],
   messages: [] as FakeMessage[],
   leadActivities: [] as FakeLeadActivity[],
+  evolutionServers: [] as FakeEvolutionServer[],
 };
 
 let nextId = 1;
@@ -160,6 +177,7 @@ export function resetFakeDispatchDb(seed: FakeDbSeed = {}): void {
   store.optOuts = seed.optOuts ? seed.optOuts.map((o) => ({ ...o })) : [];
   store.messages = seed.messages ? seed.messages.map((m) => ({ ...m })) : [];
   store.leadActivities = [];
+  store.evolutionServers = seed.evolutionServers ? seed.evolutionServers.map((s) => ({ ...s })) : [];
   nextId = 1;
 }
 
@@ -293,6 +311,26 @@ export const fakePrismaClient = {
       },
     ),
     findUnique: vi.fn(async ({ where }: { where: { id: string } }) => store.messages.find((m) => m.id === where.id) ?? null),
+    /** 🆕 Fase 4.F.5 — `health-check.job.ts#evaluateInstanceFailureRate` (janela dos últimos N envios resolvidos de uma instância). */
+    findMany: vi.fn(
+      async ({
+        where,
+        orderBy,
+        take,
+      }: {
+        where?: { instanceId?: string; direction?: string; status?: { in: string[] } };
+        orderBy?: Record<string, string>;
+        take?: number;
+      } = {}) => {
+        let rows = store.messages;
+        if (where?.instanceId !== undefined) rows = rows.filter((m) => m.instanceId === where.instanceId);
+        if (where?.direction !== undefined) rows = rows.filter((m) => m.direction === where.direction);
+        if (where?.status?.in) rows = rows.filter((m) => where.status!.in.includes(m.status));
+        if (orderBy?.createdAt === 'desc') rows = [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        if (typeof take === 'number') rows = rows.slice(0, take);
+        return rows.map((m) => ({ status: m.status }));
+      },
+    ),
   },
 
   campaignTarget: {
@@ -401,11 +439,28 @@ export const fakePrismaClient = {
   },
 
   whatsAppInstance: {
-    findMany: vi.fn(async ({ where }: { where?: { id?: { in: string[] } } } = {}) => {
-      let rows = store.whatsAppInstances;
-      if (where?.id?.in) rows = rows.filter((i) => where.id!.in.includes(i.id));
-      return rows.map((i) => ({ ...i }));
-    }),
+    findMany: vi.fn(
+      async ({
+        where,
+      }: {
+        where?: { id?: { in: string[] }; isActive?: boolean; status?: string | { not: string }; evolutionServerId?: string | null };
+      } = {}) => {
+        let rows = store.whatsAppInstances;
+        if (where?.id?.in) rows = rows.filter((i) => where.id!.in.includes(i.id));
+        // 🆕 Fase 4.F.5 — `warmup-roll.job`/`health-check.job` filtram por
+        // `isActive`/`status: {not: 'banned'}`. Default `isActive: true`
+        // (nenhum teste anterior a esta rodada setava o campo).
+        if (where?.isActive !== undefined) rows = rows.filter((i) => (i.isActive ?? true) === where.isActive);
+        if (where?.status !== undefined) {
+          rows =
+            typeof where.status === 'string'
+              ? rows.filter((i) => i.status === where.status)
+              : rows.filter((i) => i.status !== (where.status as { not: string }).not);
+        }
+        if (where?.evolutionServerId !== undefined) rows = rows.filter((i) => i.evolutionServerId === where.evolutionServerId);
+        return rows.map((i) => ({ ...i }));
+      },
+    ),
     findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
       const instance = store.whatsAppInstances.find((i) => i.id === where.id);
       return instance ? { ...instance } : null;
@@ -416,6 +471,13 @@ export const fakePrismaClient = {
       applyIncrementsOrSets(instance as unknown as Record<string, unknown>, data);
       return { ...instance };
     }),
+    /** 🆕 Fase 4.F.5 — `health-check.job.ts#pingAllEvolutionTargets` (conta instância legada sem `evolutionServerId`). */
+    count: vi.fn(async ({ where }: { where?: { evolutionServerId?: string | null; isActive?: boolean } } = {}) => {
+      let rows = store.whatsAppInstances;
+      if (where?.evolutionServerId !== undefined) rows = rows.filter((i) => i.evolutionServerId === where.evolutionServerId);
+      if (where?.isActive !== undefined) rows = rows.filter((i) => (i.isActive ?? true) === where.isActive);
+      return rows.length;
+    }),
   },
 
   instanceDailyStat: {
@@ -424,6 +486,12 @@ export const fakePrismaClient = {
       if (where?.instanceId?.in) rows = rows.filter((s) => where.instanceId!.in.includes(s.instanceId));
       if (where?.date) rows = rows.filter((s) => s.date.getTime() === where.date!.getTime());
       return rows.map((s) => ({ ...s }));
+    }),
+    /** 🆕 Fase 4.F.5 — `warmup-roll.job.ts` (passo 1: `InstanceDailyStat` de ONTEM). */
+    findUnique: vi.fn(async ({ where }: { where: { instanceId_date: { instanceId: string; date: Date } } }) => {
+      const { instanceId, date } = where.instanceId_date;
+      const row = store.instanceDailyStats.find((s) => s.instanceId === instanceId && s.date.getTime() === date.getTime());
+      return row ? { ...row } : null;
     }),
     upsert: vi.fn(
       async ({
@@ -480,6 +548,12 @@ export const fakePrismaClient = {
 
   evolutionServer: {
     findUnique: vi.fn(async () => null),
+    /** 🆕 Fase 4.F.5 — `health-check.job.ts#pingAllEvolutionTargets`. */
+    findMany: vi.fn(async ({ where }: { where?: { isActive?: boolean } } = {}) => {
+      let rows = store.evolutionServers;
+      if (where?.isActive !== undefined) rows = rows.filter((s) => s.isActive === where.isActive);
+      return rows.map((s) => ({ ...s }));
+    }),
   },
 } as const;
 

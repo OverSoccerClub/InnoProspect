@@ -17,8 +17,25 @@
  * ligeiramente diferente da primeira. Esta função é o único corpo — chamada
  * por `webhook.ts` (o evento chegou) e por `whatsapp-instances.ts` (a
  * reconciliação foi nós que perguntamos).
+ *
+ * 🆕 Fase 4.F.5 (ARQUITETURA §6.2/§6.9) — o MESMO corpo agora também liga o
+ * recuo de 30% do warmup (`regressWarmupDay`, `@inno/core`, código escrito
+ * sem chamador desde a Fase 3): quando `previousStatus` era `disconnected`/
+ * `banned` e `nextStatus` é `connected` — ou seja, uma QUEDA de verdade que
+ * volta, nunca numa reconfirmação `connected → connected`. Essa distinção é
+ * o ponto que o briefing avisa escapar: a reconciliação AUTOMÁTICA da
+ * listagem (`whatsapp-instances.ts#listWhatsAppInstances`) só reconcilia
+ * instância que JÁ estava `connected` no banco — ela nunca chama esta função
+ * com `previousStatus` de queda, então nunca aciona o recuo mesmo rodando a
+ * cada minuto. Só o webhook (evento real da Evolution) e a reconciliação
+ * FORÇADA (`POST /whatsapp/instances/reconcile`, cobre qualquer status)
+ * passam por uma transição de queda→conectada de verdade — uma instância
+ * que oscilar entre elas várias vezes RECUA a cada vez, o que é correto
+ * (cada queda real é um evento novo), não um bug de "perder 30% a cada tela
+ * aberta".
  */
 import { prisma, type WhatsAppInstance, type WhatsAppInstanceStatus } from '@inno/db';
+import { regressWarmupDay } from '@inno/core';
 import { haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
 import { sendAlert } from '@/lib/alerts';
 
@@ -46,6 +63,8 @@ export type ApplyInstanceConnectionTransitionResult = {
   wasDownTransition: boolean;
   /** Ids das campanhas pausadas pelo kill switch nesta chamada — `[]` quando não houve queda ou nenhuma campanha dependia só desta instância. */
   pausedCampaigns: string[];
+  /** 🆕 Fase 4.F.5 — `{fromDay, toDay}` só quando esta chamada de fato regrediu o warmup (queda→conectada real); `null` em qualquer outro caso. Exposto para o chamador logar (ver `webhook.ts`) — nenhuma tela lê este retorno hoje, quem lê é `warmupDay` na próxima leitura da instância. */
+  warmupRegression: { fromDay: number; toDay: number } | null;
 };
 
 const DEFAULT_DOWN_MESSAGE = 'Conexão encerrada.';
@@ -56,10 +75,35 @@ export async function applyInstanceConnectionTransition(
   const { instanceId, instanceName, previousStatus, nextStatus, downMessage } = input;
   const wasAlreadyDown = previousStatus === 'disconnected' || previousStatus === 'banned';
   const isGoingDown = nextStatus === 'disconnected' || nextStatus === 'banned';
+  // ARQUITETURA §6.2 — "se a instância ficar disconnected/banned e voltar, o
+  // warmupDay recua 30%". `wasAlreadyDown` já é exatamente "estava
+  // disconnected/banned antes" — só falta a metade "e voltou" (`connected`
+  // agora). Ver cabeçalho do arquivo para por que isto NUNCA dispara na
+  // reconciliação automática da listagem.
+  const wasUpTransition = wasAlreadyDown && nextStatus === 'connected';
   const message = downMessage ?? DEFAULT_DOWN_MESSAGE;
   const now = new Date();
 
-  const { updated, pausedCampaigns } = await prisma.$transaction(async (tx) => {
+  const { updated, pausedCampaigns, warmupRegression } = await prisma.$transaction(async (tx) => {
+    let warmupRegression: { fromDay: number; toDay: number } | null = null;
+
+    if (wasUpTransition) {
+      // `FOR UPDATE` — trava a linha ANTES de ler `warmupDay`, para o
+      // `warmup-roll.job` (mesma coluna, `{increment: 1}` 1x/dia) não poder
+      // completar um UPDATE concorrente entre esta leitura e a escrita
+      // abaixo. É a MESMA lição de `[[bug-pace-lock-blind-set-regression]]`
+      // (ler-decidir-escrever em JS sem lock perde escrita concorrente) —
+      // aqui resolvida por lock pessimista (mesmo padrão de
+      // `lib/services/users.ts#lockActiveAdminsAndCount`) em vez de UPDATE
+      // condicional, porque a fórmula (`regressWarmupDay`, `@inno/core`) não
+      // é uma comparação simples de "só avança" expressável só na cláusula
+      // WHERE.
+      const [row] = await tx.$queryRaw<{ warmupDay: number }[]>`
+        SELECT "warmupDay" FROM "whatsapp_instances" WHERE "id" = ${instanceId} FOR UPDATE
+      `;
+      if (row) warmupRegression = { fromDay: row.warmupDay, toDay: regressWarmupDay(row.warmupDay) };
+    }
+
     const updated = await tx.whatsAppInstance.update({
       where: { id: instanceId },
       data: {
@@ -70,12 +114,13 @@ export async function applyInstanceConnectionTransition(
         statusCheckedAt: now,
         ...(nextStatus === 'connected' ? { lastConnectionAt: now, isDegraded: false, consecutiveFailures: 0 } : {}),
         ...(isGoingDown ? { lastErrorAt: now, lastErrorMessage: message } : {}),
+        ...(warmupRegression ? { warmupDay: warmupRegression.toDay } : {}),
       },
     });
 
-    if (!isGoingDown) return { updated, pausedCampaigns: [] as string[] };
+    if (!isGoingDown) return { updated, pausedCampaigns: [] as string[], warmupRegression };
     const pausedCampaigns = await haltCampaignsSoleInstanceDisconnected(tx, instanceId, message);
-    return { updated, pausedCampaigns };
+    return { updated, pausedCampaigns, warmupRegression };
   });
 
   const wasDownTransition = isGoingDown && !wasAlreadyDown;
@@ -89,5 +134,5 @@ export async function applyInstanceConnectionTransition(
     });
   }
 
-  return { instance: updated, wasDownTransition, pausedCampaigns };
+  return { instance: updated, wasDownTransition, pausedCampaigns, warmupRegression };
 }

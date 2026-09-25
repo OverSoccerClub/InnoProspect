@@ -84,6 +84,24 @@ export type AlertEvent =
   | {
       kind: 'dispatch_campaign_halted_no_connected_instance';
       campaignId: string;
+    }
+  // 🆕 Fase 4.F.5 (ARQUITETURA §6.6/§6.9) — a fatia MÍNIMA do health-check
+  // que ENTRA na Fase 4 ("só o que PARA", §6.9): ping na Evolution 3x e taxa
+  // de falha > 30% em 50 envios. As heurísticas de shadow-ban por taxa de
+  // RESPOSTA (<2% em 48h/100+ envios) são Fase 5/6 — não têm kind aqui de
+  // propósito, não implementadas nesta rodada.
+  | {
+      kind: 'dispatch_evolution_down_all_halted';
+      haltedCampaignCount: number;
+      consecutivePingFailures: number;
+    }
+  | {
+      kind: 'dispatch_instance_failure_rate_degraded';
+      instanceId: string;
+      instanceName: string | null;
+      failureRate: number;
+      sampleSize: number;
+      threshold: number;
     };
 
 /** Timeout de rede para o POST do alerta — curto de propósito, ver regra 2 no cabeçalho. */
@@ -208,6 +226,28 @@ function buildPayload(event: AlertEvent, occurredAt: string): Record<string, unk
         text: `⏹️ InnoProspect — campanha PARADA (kill switch): nenhuma instância de WhatsApp conectada disponível para ela.`,
         type: 'dispatch_campaign_halted_no_connected_instance',
         campaignId: event.campaignId,
+        occurredAt,
+      };
+    }
+    case 'dispatch_evolution_down_all_halted': {
+      return {
+        text: `🚨 InnoProspect — Evolution API fora do ar (${event.consecutivePingFailures}x seguidas): ${event.haltedCampaignCount} campanha${event.haltedCampaignCount === 1 ? '' : 's'} PARADA${event.haltedCampaignCount === 1 ? '' : 'S'}. Verifique a Evolution antes de retomar.`,
+        type: 'dispatch_evolution_down_all_halted',
+        haltedCampaignCount: event.haltedCampaignCount,
+        consecutivePingFailures: event.consecutivePingFailures,
+        occurredAt,
+      };
+    }
+    case 'dispatch_instance_failure_rate_degraded': {
+      const label = event.instanceName ?? event.instanceId;
+      return {
+        text: `⚠️ InnoProspect — instância de WhatsApp "${label}" foi DEGRADADA: taxa de falha de ${(event.failureRate * 100).toFixed(0)}% nos últimos ${event.sampleSize} envios (limite: ${(event.threshold * 100).toFixed(0)}%). Warmup congelado.`,
+        type: 'dispatch_instance_failure_rate_degraded',
+        instanceId: event.instanceId,
+        instanceName: event.instanceName,
+        failureRate: event.failureRate,
+        sampleSize: event.sampleSize,
+        threshold: event.threshold,
         occurredAt,
       };
     }

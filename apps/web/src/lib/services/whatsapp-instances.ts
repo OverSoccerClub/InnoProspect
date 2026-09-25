@@ -296,7 +296,7 @@ async function reconcileOneInstance(instance: WhatsAppInstance): Promise<Reconci
     }
 
     const nextStatus: InstanceConnectionStatus = isConnectedNow ? 'connected' : raw === 'connecting' ? 'connecting' : 'disconnected';
-    const { instance: updated, pausedCampaigns } = await applyInstanceConnectionTransition({
+    const { instance: updated, pausedCampaigns, warmupRegression } = await applyInstanceConnectionTransition({
       instanceId: instance.id,
       instanceName: instance.name,
       previousStatus: instance.status,
@@ -306,6 +306,17 @@ async function reconcileOneInstance(instance: WhatsAppInstance): Promise<Reconci
 
     if (pausedCampaigns.length > 0) {
       logger.warn('whatsapp_instance.reconciliacao_haltou_campanhas', { instanceId: instance.id, pausedCampaigns });
+    }
+    if (warmupRegression) {
+      // 🆕 Fase 4.F.5 — só a reconciliação FORÇADA (`reconcileAllWhatsAppInstances`,
+      // `shouldReconcile: () => true`) alcança este ramo com `previousStatus`
+      // de queda; a automática (`listWhatsAppInstances`) só reconcilia
+      // instância já `connected`, e por isso nunca regride warmup aqui.
+      logger.info('whatsapp_instance.reconciliacao_regrediu_warmup', {
+        instanceId: instance.id,
+        fromDay: warmupRegression.fromDay,
+        toDay: warmupRegression.toDay,
+      });
     }
     return { instance: updated, confirmed: true };
   } catch (err) {

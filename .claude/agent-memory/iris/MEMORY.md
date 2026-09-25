@@ -1,2 +1,3 @@
 - [InnoProspect: convenção de teste](project_innoprospect_testing.md) — infra vitest de apps/web/apps/worker, estratégia de mock (fake db manual), áreas frágeis já cobertas.
 - [Vitest: vi.mock cross-file hoisting](feedback_vitest_mock_hoisting.md) — referenciar binding importado de outro arquivo dentro de `vi.mock(path, factory)` quebra; usar `import()` dinâmico dentro da factory ou `vi.hoisted`.
+- [InnoProspect: motor de disparo (Fase 4.F)](project_innoprospect_motor_fase4.md) — o que os 815 testes não provam (claim/unique/atomicidade só "na forma"), gap de UI do freio global, D8 não é bug novo.

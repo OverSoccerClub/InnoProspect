@@ -14,6 +14,9 @@ import {
 } from './queues.js';
 import { createScrapeSearchProcessor, type ScrapeSearchJobData } from './jobs/scrape-search.job.js';
 import { createDispatchTickProcessor, defaultDispatchTickDeps } from './jobs/dispatch-tick.job.js';
+import { createHealthCheckProcessor, defaultHealthCheckDeps } from './jobs/health-check.job.js';
+import { createWarmupRollProcessor, defaultWarmupRollDeps } from './jobs/warmup-roll.job.js';
+import { resolveHealthCheckConfig } from './lib/health-check-config.js';
 import { logger } from './observability/logger.js';
 import { sendAlert } from './observability/alerts.js';
 import {
@@ -31,6 +34,9 @@ export type WorkerHandles = {
   dispatchTickQueue: Queue;
   /** 🆕 Fase 4.F.4 — o motor de disparo em si (`dispatch-tick.job.ts`). */
   dispatchTickWorker: Worker;
+  /** 🆕 Fase 4.F.5 — fila única para os 2 periódicos (`warmup-roll`/`health-check`, ARQUITETURA §6.9), diferenciados por `job.name`. */
+  maintenanceQueue: Queue;
+  maintenanceWorker: Worker;
   close: () => Promise<void>;
 };
 
@@ -141,11 +147,68 @@ export function startWorkers(): WorkerHandles {
     'motor de disparo agendado (nasce PAUSADO — ARQUITETURA §6.8.9)',
   );
 
+  // 🆕 Fase 4.F.5 (ARQUITETURA §6.9) — os 2 periódicos que faltavam para o
+  // motor. UMA fila (`QUEUES.maintenance`, já reservada desde a Fase 1) e UM
+  // `Worker`, diferenciados por `job.name` — dois jobs tão pequenos e de
+  // cadência tão baixa (90s/1x-dia) não justificam 2 pares Queue/Worker
+  // próprios (ao contrário de `dispatch-tick`, que tem concorrência e
+  // heartbeat dedicados por ser o motor em si).
+  const maintenanceQueue = new Queue(QUEUES.maintenance, { connection });
+  const healthCheckConfig = resolveHealthCheckConfig(process.env);
+  const healthCheckDeps = defaultHealthCheckDeps(maintenanceQueue);
+  const warmupRollDeps = defaultWarmupRollDeps();
+  const processHealthCheck = createHealthCheckProcessor(healthCheckDeps);
+  const processWarmupRoll = createWarmupRollProcessor(warmupRollDeps);
+
+  const maintenanceWorker = new Worker(
+    QUEUES.maintenance,
+    async (job) => {
+      if (job.name === 'health-check') return processHealthCheck(job);
+      if (job.name === 'warmup-roll') return processWarmupRoll(job);
+      // Não deveria acontecer — só nós agendamos nesta fila, e só com estes
+      // 2 nomes. Loga e ignora em vez de lançar (um job desconhecido nunca
+      // deveria travar o worker inteiro).
+      logger.error({ jobId: job.id, jobName: job.name }, 'maintenance: job com nome desconhecido — ignorado');
+    },
+    { connection, concurrency: 1 },
+  );
+
+  maintenanceWorker.on('failed', (job, err) => {
+    logger.error({ jobId: job?.id, jobName: job?.name, err }, 'job de manutenção (warmup-roll/health-check) falhou sem tratamento interno');
+  });
+  maintenanceWorker.on('error', (err) => {
+    logger.error({ err }, 'erro no Worker de manutenção (nível de conexão/infra)');
+  });
+
+  // `health-check`: intervalo curto (~90s, ARQUITETURA §6.6), via `every`.
+  void maintenanceQueue
+    .upsertJobScheduler('health-check-scheduler', { every: healthCheckConfig.intervalMs }, { name: 'health-check' })
+    .catch((err: unknown) => {
+      logger.error({ err }, 'falha ao agendar o job repetível health-check');
+    });
+
+  // `warmup-roll`: 1x/dia, ~00:10 no fuso do app (ARQUITETURA §6.9) — cron
+  // (`pattern`) + `tz`, não `every`: precisa disparar num HORÁRIO local
+  // fixo, não a cada N milissegundos desde o boot.
+  const appTimezone = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
+  void maintenanceQueue
+    .upsertJobScheduler('warmup-roll-scheduler', { pattern: '10 0 * * *', tz: appTimezone }, { name: 'warmup-roll' })
+    .catch((err: unknown) => {
+      logger.error({ err }, 'falha ao agendar o job repetível warmup-roll — warmupDay não vai avançar');
+    });
+
+  logger.info(
+    { queue: QUEUES.maintenance, healthCheckIntervalMs: healthCheckConfig.intervalMs, warmupRollCron: '10 0 * * *', timezone: appTimezone },
+    'periódicos de manutenção agendados (warmup-roll + health-check, ARQUITETURA §6.9)',
+  );
+
   return {
     scrapeSearchQueue,
     scrapeSearchWorker,
     dispatchTickQueue,
     dispatchTickWorker,
+    maintenanceQueue,
+    maintenanceWorker,
     async close() {
       clearInterval(heartbeatTimer);
       clearInterval(pauseSweepTimer);
@@ -153,6 +216,8 @@ export function startWorkers(): WorkerHandles {
       await scrapeSearchQueue.close();
       await dispatchTickWorker.close();
       await dispatchTickQueue.close();
+      await maintenanceWorker.close();
+      await maintenanceQueue.close();
       await closeDefaultEngine();
     },
   };
