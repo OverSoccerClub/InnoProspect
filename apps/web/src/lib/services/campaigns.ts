@@ -22,6 +22,7 @@ import {
   firstName,
   hasCompanyNameMention,
   hasOptOutNotice,
+  localDateKey,
   renderTemplate,
   resolveSpintax,
   type TemplateVariableValues,
@@ -71,10 +72,14 @@ function appTimezone(): string {
   return process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 }
 
+/**
+ * 🆕 Fase 4.F.2 — religado para `localDateKey` de `@inno/core` (era uma
+ * cópia manual do mesmo cálculo que existia, também duplicada, em
+ * `whatsapp-instances.ts` e `messages.ts` — ver `local-date-key.ts` para o
+ * porquê da unificação). Comportamento idêntico ao de antes.
+ */
 function todayDateKey(): Date {
-  const tz = appTimezone();
-  const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  return new Date(`${ymd}T00:00:00.000Z`);
+  return localDateKey(new Date(), appTimezone());
 }
 
 // ─────────────────────────────────────────────────────────────────────────

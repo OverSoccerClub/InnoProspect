@@ -8,7 +8,7 @@
  */
 import { MessagingError, type ConnectionState, type ConnectResult } from '@inno/messaging';
 import { Prisma, prisma, type WhatsAppInstance } from '@inno/db';
-import { deriveInstanceHealth, effectiveDailyLimit, isWarmupDayWarm } from '@inno/core';
+import { deriveInstanceHealth, effectiveDailyLimit, isWarmupDayWarm, localDateKey } from '@inno/core';
 import type {
   ConnectInstanceResponse,
   CreateWhatsAppInstanceBody,
@@ -36,11 +36,16 @@ import { applyInstanceConnectionTransition, type InstanceConnectionStatus } from
 import { sendAlert } from '@/lib/alerts';
 import { logger } from '@/lib/logger';
 
-/** Chave do dia corrente (00:00 UTC do dia civil em `APP_TIMEZONE`) — mesma granularidade de `InstanceDailyStat.date` (`@db.Date`). */
+/**
+ * Chave do dia corrente (00:00 UTC do dia civil em `APP_TIMEZONE`) — mesma
+ * granularidade de `InstanceDailyStat.date` (`@db.Date`). 🆕 Fase 4.F.2:
+ * religado para `localDateKey` de `@inno/core` — era uma cópia manual do
+ * mesmo cálculo, duplicada também em `campaigns.ts` e `messages.ts`.
+ * Comportamento idêntico ao de antes.
+ */
 function todayDateKey(): Date {
   const tz = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
-  const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  return new Date(`${ymd}T00:00:00.000Z`);
+  return localDateKey(new Date(), tz);
 }
 
 async function countActiveCampaigns(instanceId: string): Promise<number> {

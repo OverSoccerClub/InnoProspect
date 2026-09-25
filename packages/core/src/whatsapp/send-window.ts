@@ -30,8 +30,22 @@ export type SendWindowConfig = {
     startHour: number;
     endHour: number;
     lunchBreak: { startHour: number; startMinute: number; endHour: number; endMinute: number } | null;
+    /**
+     * 🆕 Fase 4.F.2 (ARQUITETURA §6.8.10) — dias da semana permitidos,
+     * `0..6` (0=domingo..6=sábado, mesma convenção de `localParts`/
+     * `Date#getUTCDay`). `undefined` preserva o comportamento de SEMPRE:
+     * "sábado e domingo nunca" (ver `BUSINESS_WINDOW_DEFAULT_DAYS_OF_WEEK`
+     * abaixo) — nenhum chamador existente muda de comportamento por esta
+     * adição. Quem preenche isto é `resolveCampaignWindow`, nunca a env
+     * (o piso seg-sex não é configurável — decisão do dono, 24/09/2026,
+     * ver `DISPATCH_ALLOW_SATURDAY` removida do §10).
+     */
+    daysOfWeek?: readonly number[];
   };
 };
+
+/** Piso implícito de dias (seg-sex) quando `businessWindow.daysOfWeek` não é informado — mesmo conjunto que o código hardcodava antes da 4.F.2 (`weekday === 0 || weekday === 6` bloqueava). Exportado para `resolveCampaignWindow` intersectar contra ele. */
+export const BUSINESS_WINDOW_DEFAULT_DAYS_OF_WEEK: readonly number[] = [1, 2, 3, 4, 5];
 
 /** Padrão da ARQUITETURA §4.9.6/§6.3 — usado quando a env não estreita nada. */
 export const DEFAULT_SEND_WINDOW_CONFIG: SendWindowConfig = {
@@ -173,10 +187,11 @@ export function isWithinQuietHoursFloor(now: Date, config: SendWindowConfig): bo
 // decidida por quem chama `evaluateSendGuard`, via `overrides.confirmOutsideBusinessWindow`)
 // ─────────────────────────────────────────────────────────────────────────
 
-/** `true` se `now` está dentro da janela comercial "cheia" (seg-sex, fora da pausa de almoço, dentro do horário comercial). Sábado/domingo são SEMPRE `false` aqui — mesmo que passem no piso duro. */
+/** `true` se `now` está dentro da janela comercial "cheia" (dias permitidos, fora da pausa de almoço, dentro do horário comercial). Sem `businessWindow.daysOfWeek`, sábado/domingo são SEMPRE `false` aqui — mesmo que passem no piso duro (comportamento idêntico ao de antes da 4.F.2). */
 export function isWithinBusinessWindow(now: Date, config: SendWindowConfig): boolean {
   const { hour, minute, weekday } = localParts(now, config.timezone);
-  if (weekday === 0 || weekday === 6) return false;
+  const allowedDays = config.businessWindow.daysOfWeek ?? BUSINESS_WINDOW_DEFAULT_DAYS_OF_WEEK;
+  if (!allowedDays.includes(weekday)) return false;
 
   const { startHour, endHour, lunchBreak } = config.businessWindow;
   if (hour < startHour || hour >= endHour) return false;
@@ -231,4 +246,51 @@ export function nextLocalMidnight(now: Date, timezone: string): Date {
     }
   }
   return guess;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 🆕 Fase 4.F.2 (ARQUITETURA §6.8.10) — configuração de janela por CAMPANHA.
+// `sendWindowStartHour`/`sendWindowEndHour`/`sendWindowDaysOfWeek` são
+// gravados pelo `POST`, devolvidos pelo `GET`, exibidos na tela — e até
+// aqui, nenhum código os lia na hora de enviar. O motor (4.F.4) é o
+// primeiro consumidor; esta função é o único lugar que sabe combinar os
+// dois níveis.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Recorte de `Campaign` que `resolveCampaignWindow` precisa — não é o model do Prisma inteiro, de propósito (este pacote não conhece `@inno/db`). */
+export type CampaignWindowSettings = {
+  startHour: number;
+  endHour: number;
+  daysOfWeek: readonly number[];
+};
+
+/**
+ * `pisoDaEnv` (o `SendWindowConfig` já resolvido a partir da env, via
+ * `resolveSendPolicy`) INTERSECTADO com a configuração da campanha — a
+ * campanha só pode ESTREITAR o piso, nunca alargá-lo (ARQUITETURA §6.8.10,
+ * mesma regra do §10 para a env — invariante A32). `quietHours` (o piso
+ * duro, G5) nunca muda aqui: campanha não tem esse campo, e não deveria
+ * ter — G5 é legal/anti-denúncia, não uma preferência operacional.
+ *
+ * A pausa de almoço (`lunchBreak`) também não muda: não existe campo de
+ * campanha para ela (mesmo gap documentado em `messages.ts#businessWindowFromEnv`).
+ */
+export function resolveCampaignWindow(pisoDaEnv: SendWindowConfig, campanha: CampaignWindowSettings): SendWindowConfig {
+  const pisoDays = pisoDaEnv.businessWindow.daysOfWeek ?? BUSINESS_WINDOW_DEFAULT_DAYS_OF_WEEK;
+  // Interseção, não união: um dia só sobrevive se estiver nos DOIS
+  // conjuntos. É isto que impede a campanha de "abrir" sábado/domingo — o
+  // piso (seg-sex, nunca configurável) simplesmente não tem esses dias
+  // para oferecer, então a interseção os descarta mesmo que a campanha os
+  // peça.
+  const daysOfWeek = pisoDays.filter((day) => campanha.daysOfWeek.includes(day)).slice().sort((a, b) => a - b);
+
+  return {
+    ...pisoDaEnv,
+    businessWindow: {
+      ...pisoDaEnv.businessWindow,
+      startHour: Math.max(pisoDaEnv.businessWindow.startHour, campanha.startHour),
+      endHour: Math.min(pisoDaEnv.businessWindow.endHour, campanha.endHour),
+      daysOfWeek,
+    },
+  };
 }

@@ -17,3 +17,6 @@ export * from './whatsapp/health.js';
 export * from './whatsapp/send-window.js';
 export * from './whatsapp/send-guard.js';
 export * from './whatsapp/jitter.js';
+export * from './whatsapp/send-policy.js';
+export * from './whatsapp/instance-selection.js';
+export * from './time/local-date-key.js';

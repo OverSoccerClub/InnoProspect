@@ -27,19 +27,15 @@ import {
   effectiveDailyLimit,
   firstName,
   isWarmupDayWarm,
+  localDateKey,
+  localDateKeyString,
   nextLocalMidnight,
   parseSpintax,
   renderTemplate,
+  resolveSendPolicy,
   resolveSpintax,
   validateTemplateVariables,
   DEFAULT_COLD_FOLLOWUP_COOLDOWN_MS,
-  DEFAULT_JITTER_RANGE_SECONDS,
-  DEFAULT_MICRO_PAUSE_CONFIG,
-  DEFAULT_SEND_WINDOW_CONFIG,
-  MIN_JITTER_FLOOR_SECONDS,
-  type JitterRangeSeconds,
-  type MicroPauseConfig,
-  type SendWindowConfig,
   type TemplateVariableValues,
 } from '@inno/core';
 import type { SendLeadMessageBody, SendLeadMessageResponse, SendLeadMessageWarning } from '@inno/contracts';
@@ -63,45 +59,24 @@ import {
  */
 export type { CampaignSendContext };
 
-const APP_TIMEZONE = () => process.env.APP_TIMEZONE || DEFAULT_SEND_WINDOW_CONFIG.timezone;
+/** Default local só para quando a env está ausente — mesmo literal usado em `whatsapp-instances.ts`/`campaigns.ts` (nenhum dos três importa `DEFAULT_SEND_WINDOW_CONFIG` só por este valor). */
+const APP_TIMEZONE = () => process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Configuração — lida da env AQUI (a camada de serviço), nunca dentro de
 // `@inno/core`/`@inno/sending` (que ficam puros/testáveis sem
 // `process.env`, ver comentário em `packages/core/src/whatsapp/send-window.ts`
 // e `packages/sending/src/ports.ts`).
+//
+// 🆕 Fase 4.F.2 — `quietHoursFromEnv`/`businessWindowFromEnv`/
+// `sendWindowConfigFromEnv`/`jitterRangeSecondsFromEnv`/
+// `microPauseConfigFromEnv` (5 funções que faziam esta MESMA conta, cada
+// uma com seu próprio clamp) foram religadas para `resolveSendPolicy` de
+// `@inno/core` — "um único lugar com os clamps" (ARQUITETURA §4.F.2). O
+// futuro `dispatch-tick.job` (`apps/worker`, 4.F.4) usa a MESMA função,
+// nunca uma segunda versão. `process.env` satisfaz `SendPolicyEnv`
+// estruturalmente, sem parsing próprio deste arquivo.
 // ─────────────────────────────────────────────────────────────────────────
-
-/** Piso duro (G5) só pode ser ESTREITADO pela env (ARQUITETURA §10) — nunca alargado além de 08–20. */
-function quietHoursFromEnv(): SendWindowConfig['quietHours'] {
-  const base = DEFAULT_SEND_WINDOW_CONFIG.quietHours;
-  const envStart = Number.parseInt(process.env.DISPATCH_QUIET_HOURS_START ?? '', 10);
-  const envEnd = Number.parseInt(process.env.DISPATCH_QUIET_HOURS_END ?? '', 10);
-  return {
-    startHour: Number.isFinite(envStart) ? Math.max(envStart, base.startHour) : base.startHour,
-    endHour: Number.isFinite(envEnd) ? Math.min(envEnd, base.endHour) : base.endHour,
-  };
-}
-
-/** Janela comercial (G6, mole no manual) — configurável dentro do piso duro (ARQUITETURA §6.3). Pausa de almoço não tem env própria hoje (gap documentado, dívida pequena) — fica no padrão de `DEFAULT_SEND_WINDOW_CONFIG`. */
-function businessWindowFromEnv(): SendWindowConfig['businessWindow'] {
-  const base = DEFAULT_SEND_WINDOW_CONFIG.businessWindow;
-  const envStart = Number.parseInt(process.env.DISPATCH_WINDOW_START ?? '', 10);
-  const envEnd = Number.parseInt(process.env.DISPATCH_WINDOW_END ?? '', 10);
-  return {
-    startHour: Number.isFinite(envStart) ? envStart : base.startHour,
-    endHour: Number.isFinite(envEnd) ? envEnd : base.endHour,
-    lunchBreak: base.lunchBreak,
-  };
-}
-
-function sendWindowConfigFromEnv(): SendWindowConfig {
-  return {
-    timezone: APP_TIMEZONE(),
-    quietHours: quietHoursFromEnv(),
-    businessWindow: businessWindowFromEnv(),
-  };
-}
 
 function duplicateWindowMsFromEnv(): number {
   const seconds = Number.parseInt(process.env.MANUAL_SEND_DUPLICATE_WINDOW_S ?? '', 10);
@@ -119,41 +94,15 @@ function coldFollowupCooldownMsFromEnv(): number {
   return Number.isFinite(hours) && hours > 0 ? hours * 60 * 60 * 1000 : DEFAULT_COLD_FOLLOWUP_COOLDOWN_MS;
 }
 
-/** 🆕 Fase 4.C — piso de 30s (`MIN_JITTER_FLOOR_SECONDS`) nunca contornável pela env, mesmo espírito de `quietHoursFromEnv` (ARQUITETURA §6.3: "configurável, mín. 30s"). */
-function jitterRangeSecondsFromEnv(): JitterRangeSeconds {
-  const base = DEFAULT_JITTER_RANGE_SECONDS;
-  const envMin = Number.parseInt(process.env.DISPATCH_JITTER_MIN_S ?? '', 10);
-  const envMax = Number.parseInt(process.env.DISPATCH_JITTER_MAX_S ?? '', 10);
-  const minSeconds = Number.isFinite(envMin) ? Math.max(envMin, MIN_JITTER_FLOOR_SECONDS) : base.minSeconds;
-  const maxSeconds = Number.isFinite(envMax) && envMax > minSeconds ? envMax : base.maxSeconds;
-  return { minSeconds, maxSeconds };
-}
-
-/** 🆕 Fase 4.C — `DISPATCH_MICRO_PAUSE_*` (ARQUITETURA §10). Valor inválido/fora de ordem cai no default de `@inno/core`, nunca em NaN silencioso. */
-function microPauseConfigFromEnv(): MicroPauseConfig {
-  const base = DEFAULT_MICRO_PAUSE_CONFIG;
-  const envEveryMin = Number.parseInt(process.env.DISPATCH_MICRO_PAUSE_EVERY_MIN ?? '', 10);
-  const envEveryMax = Number.parseInt(process.env.DISPATCH_MICRO_PAUSE_EVERY_MAX ?? '', 10);
-  const envPauseMin = Number.parseInt(process.env.DISPATCH_MICRO_PAUSE_MIN_S ?? '', 10);
-  const envPauseMax = Number.parseInt(process.env.DISPATCH_MICRO_PAUSE_MAX_S ?? '', 10);
-
-  const everyMin = Number.isFinite(envEveryMin) && envEveryMin > 0 ? envEveryMin : base.everyMin;
-  const everyMax = Number.isFinite(envEveryMax) && envEveryMax >= everyMin ? envEveryMax : base.everyMax;
-  const pauseMinSeconds = Number.isFinite(envPauseMin) && envPauseMin > 0 ? envPauseMin : base.pauseMinSeconds;
-  const pauseMaxSeconds = Number.isFinite(envPauseMax) && envPauseMax >= pauseMinSeconds ? envPauseMax : base.pauseMaxSeconds;
-
-  return { everyMin, everyMax, pauseMinSeconds, pauseMaxSeconds };
-}
-
-/** Mesma granularidade de `InstanceDailyStat.date` (`@db.Date`, fuso `APP_TIMEZONE`). Duplicado de propósito de `lib/services/whatsapp-instances.ts#todayDateKey` (ver `convention-api-routes-fase1`, regra 4) — E o futuro `dispatch-tick.job` vai ter a SUA PRÓPRIA cópia (ARQUITETURA §6.8.0.4: risco explícito de fuso divergente entre web/worker, não deste pacote). */
+/**
+ * Mesma granularidade de `InstanceDailyStat.date` (`@db.Date`, fuso
+ * `APP_TIMEZONE`). 🆕 Fase 4.F.2: religado para `localDateKey` de
+ * `@inno/core` — era uma cópia manual do mesmo cálculo, duplicada também em
+ * `whatsapp-instances.ts` e `campaigns.ts`. Comportamento idêntico ao de
+ * antes.
+ */
 function todayDateKey(): Date {
-  const tz = APP_TIMEZONE();
-  const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  return new Date(`${ymd}T00:00:00.000Z`);
-}
-
-function localDateKeyString(now: Date, tz: string): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  return localDateKey(new Date(), APP_TIMEZONE());
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -375,6 +324,9 @@ export async function sendLeadMessage(
   const isColdFirstContact = lastOutbound === null;
 
   const coldFollowupCooldownMs = coldFollowupCooldownMsFromEnv();
+  // 🆕 Fase 4.F.2 — um único lugar com os clamps de janela/jitter/micro-pausa
+  // (`resolveSendPolicy`, `@inno/core`); ver nota acima de `APP_TIMEZONE`.
+  const sendPolicy = resolveSendPolicy(process.env);
 
   // ── A sequência protegida (ARQUITETURA §6.8.0) — opt-out → guard →
   // write-ahead → sendText → contabilidade → cadência. Vive em
@@ -407,11 +359,11 @@ export async function sendLeadMessage(
         // pedir incondicionalmente aqui.
         ignorePaceLock: true,
       },
-      windowConfig: sendWindowConfigFromEnv(),
+      windowConfig: sendPolicy.sendWindow,
       duplicateWindowMs: duplicateWindowMsFromEnv(),
       coldFollowupCooldownMs,
-      jitterRangeSeconds: jitterRangeSecondsFromEnv(),
-      microPauseConfig: microPauseConfigFromEnv(),
+      jitterRangeSeconds: sendPolicy.jitterRangeSeconds,
+      microPauseConfig: sendPolicy.microPause,
       campaignContext,
       actor: { type: 'user', userId: actor.id },
       renderedTemplateId: renderedFrom?.templateId ?? null,

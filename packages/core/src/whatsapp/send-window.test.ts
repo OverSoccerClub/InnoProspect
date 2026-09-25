@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BUSINESS_WINDOW_DEFAULT_DAYS_OF_WEEK,
   DEFAULT_SEND_WINDOW_CONFIG,
   isBrazilianNationalHoliday,
   isWithinBusinessWindow,
@@ -7,6 +8,7 @@ import {
   nextBusinessWindowOpensAt,
   nextLocalMidnight,
   nextQuietHoursFloorOpensAt,
+  resolveCampaignWindow,
 } from './send-window';
 
 const TZ = 'America/Sao_Paulo';
@@ -127,5 +129,62 @@ describe('nextLocalMidnight', () => {
     const parts = Object.fromEntries(formatter.formatToParts(midnight).map((p) => [p.type, p.value]));
     expect(parts.day).toBe('23');
     expect(parts.hour === '00' || parts.hour === '24').toBe(true);
+  });
+});
+
+describe('isWithinBusinessWindow — businessWindow.daysOfWeek (4.F.2)', () => {
+  it('sem daysOfWeek, comportamento idêntico ao de antes: só bloqueia sábado/domingo', () => {
+    // 2026-09-22 é terça, 2026-09-19 é sábado — igual ao describe acima, sem passar daysOfWeek.
+    expect(isWithinBusinessWindow(saoPauloInstant(9, 22, 10), DEFAULT_SEND_WINDOW_CONFIG)).toBe(true);
+    expect(isWithinBusinessWindow(saoPauloInstant(9, 19, 10), DEFAULT_SEND_WINDOW_CONFIG)).toBe(false);
+  });
+
+  it('com daysOfWeek restrito, só os dias listados abrem — mesmo dentro do horário comercial', () => {
+    const tueThuOnly = {
+      ...DEFAULT_SEND_WINDOW_CONFIG,
+      businessWindow: { ...DEFAULT_SEND_WINDOW_CONFIG.businessWindow, daysOfWeek: [2, 4] }, // terça, quinta
+    };
+    // 2026-09-22 = terça (permitida), 2026-09-23 = quarta (não listada), 2026-09-24 = quinta (permitida).
+    expect(isWithinBusinessWindow(saoPauloInstant(9, 22, 10), tueThuOnly)).toBe(true);
+    expect(isWithinBusinessWindow(saoPauloInstant(9, 23, 10), tueThuOnly)).toBe(false);
+    expect(isWithinBusinessWindow(saoPauloInstant(9, 24, 10), tueThuOnly)).toBe(true);
+  });
+});
+
+describe('resolveCampaignWindow — A32: a campanha só ESTREITA o piso da env, nunca alarga', () => {
+  it('interseca os dias: a campanha pode restringir para um subconjunto do piso (seg-sex)', () => {
+    const piso = DEFAULT_SEND_WINDOW_CONFIG; // businessWindow.daysOfWeek ausente = piso implícito seg-sex
+    const resolved = resolveCampaignWindow(piso, { startHour: 9, endHour: 18, daysOfWeek: [2, 4] }); // só terça/quinta
+    expect(resolved.businessWindow.daysOfWeek).toEqual([2, 4]);
+  });
+
+  it('NUNCA alarga os dias: campanha pedindo sábado/domingo não os ganha, porque o piso não os tem', () => {
+    const piso = DEFAULT_SEND_WINDOW_CONFIG;
+    // A campanha "pede" a semana inteira, inclusive fim de semana.
+    const resolved = resolveCampaignWindow(piso, { startHour: 9, endHour: 18, daysOfWeek: [0, 1, 2, 3, 4, 5, 6] });
+    expect(resolved.businessWindow.daysOfWeek).toEqual(BUSINESS_WINDOW_DEFAULT_DAYS_OF_WEEK);
+    expect(resolved.businessWindow.daysOfWeek).not.toContain(0); // domingo
+    expect(resolved.businessWindow.daysOfWeek).not.toContain(6); // sábado
+  });
+
+  it('NUNCA alarga o horário: campanha pedindo início mais cedo/fim mais tarde do que o piso é ignorada nesse sentido', () => {
+    const piso = DEFAULT_SEND_WINDOW_CONFIG; // 09-18
+    const resolved = resolveCampaignWindow(piso, { startHour: 6, endHour: 23, daysOfWeek: [1, 2, 3, 4, 5] });
+    expect(resolved.businessWindow.startHour).toBe(9); // não desceu para 6
+    expect(resolved.businessWindow.endHour).toBe(18); // não subiu para 23
+  });
+
+  it('ESTREITA o horário quando a campanha pede um intervalo menor que o piso', () => {
+    const piso = DEFAULT_SEND_WINDOW_CONFIG; // 09-18
+    const resolved = resolveCampaignWindow(piso, { startHour: 11, endHour: 15, daysOfWeek: [1, 2, 3, 4, 5] });
+    expect(resolved.businessWindow.startHour).toBe(11);
+    expect(resolved.businessWindow.endHour).toBe(15);
+  });
+
+  it('nunca toca o piso duro (quietHours) nem a pausa de almoço — campanha não tem esses campos', () => {
+    const piso = DEFAULT_SEND_WINDOW_CONFIG;
+    const resolved = resolveCampaignWindow(piso, { startHour: 10, endHour: 16, daysOfWeek: [1, 2, 3, 4, 5] });
+    expect(resolved.quietHours).toEqual(piso.quietHours);
+    expect(resolved.businessWindow.lunchBreak).toEqual(piso.businessWindow.lunchBreak);
   });
 });
