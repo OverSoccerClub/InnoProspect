@@ -20,6 +20,21 @@
 import { getDispatchTickQueue } from './dispatch-queue';
 
 export const DISPATCH_ENABLED_META_KEY = 'inno:dispatch:queue:enabled-meta';
+/**
+ * 🆕 Registro de QUEM pausou e QUANDO — chave SEPARADA, e ela existe por uma
+ * razão estrutural, não por capricho: com a semântica invertida (§6.8.9),
+ * "pausado" é a AUSÊNCIA de `DISPATCH_ENABLED_META_KEY`, e ausência não
+ * carrega dado nenhum. Não havia onde gravar a autoria da pausa. O resultado
+ * era uma assimetria que a Lyra achou ao construir a tela: retomar ficava
+ * registrado (`enabledBy`), pausar não — e "por que isso está pausado?" é a
+ * PRIMEIRA pergunta de quem chega depois, às duas da manhã, sem contexto.
+ *
+ * Esta chave é puramente informativa: ela NUNCA decide se o motor está
+ * rodando (quem decide é a ausência/presença da outra). Só é lida quando o
+ * motor está pausado, e é limpa ao retomar — um `pausedBy` sobrevivendo a um
+ * `resume` faria a tela contar uma história velha como se fosse a atual.
+ */
+export const DISPATCH_PAUSED_META_KEY = 'inno:dispatch:queue:paused-meta';
 export const DISPATCH_TICK_HEARTBEAT_KEY = 'inno:dispatch:tick:heartbeat';
 /** Folga de 3x o intervalo de gravação (`DISPATCH_HEARTBEAT_INTERVAL_MS` = 15s no worker) — mesmo raciocínio do heartbeat geral do worker. */
 export const DISPATCH_HEARTBEAT_TTL_SECONDS = 45;
@@ -27,6 +42,13 @@ export const DISPATCH_HEARTBEAT_TTL_SECONDS = 45;
 export type DispatchEnabledMeta = {
   enabledAt: string;
   enabledBy: string;
+};
+
+export type DispatchPausedMeta = {
+  pausedAt: string;
+  pausedBy: string;
+  /** Opcional — quem pausa pela TELA não digita nada (a pausa é um clique, por desenho §6.8.9); quem chama a API pode explicar. */
+  reason?: string;
 };
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -95,4 +117,32 @@ export async function writeDispatchEnabledMeta(meta: DispatchEnabledMeta): Promi
 export async function clearDispatchEnabledMeta(): Promise<void> {
   const client = await getDispatchTickQueue().client;
   await client.del(DISPATCH_ENABLED_META_KEY);
+}
+
+/** Fail-soft, igual à leitura do `enabled` — informação de auditoria nunca pode derrubar `GET /dispatch/queue`. */
+export async function readDispatchPausedMeta(): Promise<DispatchPausedMeta | null> {
+  const client = await getClientOrNull();
+  if (!client) return null;
+  try {
+    const raw = await withTimeout(client.get(DISPATCH_PAUSED_META_KEY), 2000);
+    if (!raw) return null;
+    return JSON.parse(raw) as DispatchPausedMeta;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Gravada DEPOIS de `clearDispatchEnabledMeta` (ver `pauseDispatchQueue`): se
+ * esta escrita falhar, o motor já está parado — perder a autoria é ruim,
+ * deixar o motor rodando seria pior. A ordem codifica essa prioridade.
+ */
+export async function writeDispatchPausedMeta(meta: DispatchPausedMeta): Promise<void> {
+  const client = await getDispatchTickQueue().client;
+  await client.set(DISPATCH_PAUSED_META_KEY, JSON.stringify(meta));
+}
+
+export async function clearDispatchPausedMeta(): Promise<void> {
+  const client = await getDispatchTickQueue().client;
+  await client.del(DISPATCH_PAUSED_META_KEY);
 }

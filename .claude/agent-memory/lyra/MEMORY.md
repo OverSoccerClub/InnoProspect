@@ -32,3 +32,5 @@
 - [4 primitivos "estilo Altezza" (RecordHeader/LabeledField/TabsWithCount/PendingBand)](convention_altezza_record_primitives.md) — aplicados em Leads+Buscas; StatusPill=Badge já existente; Campanhas/Painel de fora, motivo real explicado
 - [Hook `useNow` pra texto relativo envelhecer sozinho](convention_use_now_self_aging_relative_time.md) — guardar dado bruto em state, `now` só recalcula via função pura; nunca precomputar o texto e guardar pronto
 - [UI da reconciliação de status WhatsApp (incidente "mostrava conectado")](project_whatsapp_status_reconciliation_ui.md) — selo de frescor nunca vermelho, botão admin-only com gate granular (prop, não página inteira), onde decidi não entrar e por quê
+- [Tela do freio do motor de disparo (Fase 4.F.3)](project_dispatch_engine_brake_ui.md) — pausar sem diálogo x retomar com confirmação, motor pausado nunca "alarme", heartbeat do worker é sinal separado do status do motor
+- [Relógio único compartilhado entre irmãos que dependem do mesmo `now`](convention_shared_clock_across_siblings.md) — useNow() uma vez no pai, `now` como prop pros filhos; dois useNow() dessincronizam por até 1 intervalo

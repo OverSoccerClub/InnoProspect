@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ChevronRight, Server, Settings2, ShieldOff, Users } from 'lucide-react';
+import { ChevronRight, PauseCircle, Server, Settings2, ShieldOff, Users } from 'lucide-react';
 
 import { PageHeader } from '@/components/common/page-header';
 import { Card, CardContent } from '@/components/ui/card';
@@ -83,6 +83,27 @@ export default async function ConfiguracoesPage() {
                 <p className="font-display text-sm font-semibold text-foreground">Opt-outs</p>
                 <p className="mt-0.5 text-sm text-muted-foreground">
                   Números que pediram para não receber mais mensagens — a lista que protege todo disparo.
+                </p>
+              </div>
+              <ChevronRight className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </CardContent>
+          </Card>
+        </Link>
+
+        <Link
+          href="/configuracoes/motor-disparo"
+          className="block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
+          <Card variant="interactive" className="h-full">
+            <CardContent className="flex h-full items-start gap-4 p-5">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <PauseCircle className="size-5" aria-hidden="true" />
+              </span>
+              <div className="flex-1">
+                <p className="font-display text-sm font-semibold text-foreground">Motor de disparo</p>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  O freio de emergência do motor que manda mensagem sozinho. Ver aqui é de qualquer operador;
+                  pausar e retomar é só de administrador.
                 </p>
               </div>
               <ChevronRight className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
