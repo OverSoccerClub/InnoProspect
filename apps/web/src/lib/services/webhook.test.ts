@@ -36,7 +36,7 @@ vi.mock('@/lib/alerts', () => ({ sendAlert: sendAlertMock }));
 // estarem registrados (o `vi.mock` já é hoisted para o topo do arquivo pelo
 // Vitest, mas isso deixa a ordem de dependência óbvia na leitura).
 const { processEvolutionWebhookEvent, resolveExpectedWebhookApiKeys, isWebhookApiKeyAccepted, extractApiKeyFromBody } = await import('./webhook');
-const { encryptEvolutionApiKey } = await import('@/lib/evolution-server-crypto');
+const { encryptEvolutionApiKey } = await import('@inno/sending');
 
 const instance = { id: 'inst-1' } as WhatsAppInstance;
 
@@ -340,7 +340,7 @@ describe('processEvolutionWebhookEvent — connection_update (kill switch)', () 
 
 /** Instância com credencial PRÓPRIA já cifrada — helper para não repetir os 4 campos em cada teste do bloco de correção do webhook mudo. */
 function instanceWithOwnApiKey(overrides: { id: string; evolutionServerId?: string | null }, apiKey: string): WhatsAppInstance {
-  const encrypted = encryptEvolutionApiKey(apiKey);
+  const encrypted = encryptEvolutionApiKey(apiKey, process.env);
   return {
     evolutionServerId: null,
     ...overrides,
@@ -378,7 +378,7 @@ describe('resolveExpectedWebhookApiKeys — 🆕 correção do webhook mudo (202
   });
 
   it('instância COM credencial própria E servidor — devolve as DUAS chaves como candidatas (nunca escolhe uma só)', async () => {
-    const encryptedServer = encryptEvolutionApiKey('chave-secreta-do-servidor-1');
+    const encryptedServer = encryptEvolutionApiKey('chave-secreta-do-servidor-1', process.env);
     resetFakeDb({
       evolutionServers: [
         evolutionServer({
@@ -414,7 +414,7 @@ describe('resolveExpectedWebhookApiKeys — 🆕 correção do webhook mudo (202
   });
 
   it('servidor referenciado está DESATIVADO e instância SEM credencial própria — devolve [] (mesmo com a credencial do servidor existindo e sendo decifrável)', async () => {
-    const encrypted = encryptEvolutionApiKey('chave-servidor-desativado');
+    const encrypted = encryptEvolutionApiKey('chave-servidor-desativado', process.env);
     resetFakeDb({
       evolutionServers: [
         evolutionServer({
@@ -450,7 +450,7 @@ describe('resolveExpectedWebhookApiKeys — 🆕 correção do webhook mudo (202
   });
 
   it('chave-mestre ERRADA (rotação mal feita) na credencial da instância — decifra falha, OMITIDA da lista (não lança, não derruba a chave do servidor)', async () => {
-    const encryptedInstance = encryptEvolutionApiKey('chave-instancia-qualquer');
+    const encryptedInstance = encryptEvolutionApiKey('chave-instancia-qualquer', process.env);
     const badInstance = {
       id: 'inst-1',
       evolutionServerId: null,
@@ -469,8 +469,8 @@ describe('resolveExpectedWebhookApiKeys — 🆕 correção do webhook mudo (202
   });
 
   it('dois servidores DIFERENTES têm chaves DIFERENTES — a chave de um nunca resolve para outro (webhook de um servidor não pode ser aceito com a chave de outro)', async () => {
-    const encrypted1 = encryptEvolutionApiKey('chave-servidor-1');
-    const encrypted2 = encryptEvolutionApiKey('chave-servidor-2');
+    const encrypted1 = encryptEvolutionApiKey('chave-servidor-1', process.env);
+    const encrypted2 = encryptEvolutionApiKey('chave-servidor-2', process.env);
     resetFakeDb({
       evolutionServers: [
         evolutionServer({ id: 'srv-1', apiKeyCiphertext: encrypted1.ciphertext, apiKeyIv: encrypted1.iv, apiKeyAuthTag: encrypted1.authTag, apiKeyKeyVersion: encrypted1.keyVersion }),
@@ -500,7 +500,7 @@ describe('isWebhookApiKeyAccepted — decisão real que a rota usa (@inno/messag
   });
 
   it('webhook ACEITO com a chave da INSTÂNCIA (servidor tem uma credencial DIFERENTE) — cenário central do incidente', async () => {
-    const encryptedServer = encryptEvolutionApiKey('chave-do-servidor');
+    const encryptedServer = encryptEvolutionApiKey('chave-do-servidor', process.env);
     resetFakeDb({
       evolutionServers: [
         evolutionServer({ id: 'srv-1', apiKeyCiphertext: encryptedServer.ciphertext, apiKeyIv: encryptedServer.iv, apiKeyAuthTag: encryptedServer.authTag, apiKeyKeyVersion: encryptedServer.keyVersion }),
@@ -512,7 +512,7 @@ describe('isWebhookApiKeyAccepted — decisão real que a rota usa (@inno/messag
   });
 
   it('webhook ACEITO com a chave GLOBAL do servidor (instância sem credencial própria — legada)', async () => {
-    const encryptedServer = encryptEvolutionApiKey('chave-do-servidor');
+    const encryptedServer = encryptEvolutionApiKey('chave-do-servidor', process.env);
     resetFakeDb({
       evolutionServers: [
         evolutionServer({ id: 'srv-1', apiKeyCiphertext: encryptedServer.ciphertext, apiKeyIv: encryptedServer.iv, apiKeyAuthTag: encryptedServer.authTag, apiKeyKeyVersion: encryptedServer.keyVersion }),
@@ -524,7 +524,7 @@ describe('isWebhookApiKeyAccepted — decisão real que a rota usa (@inno/messag
   });
 
   it('webhook RECUSADO com chave ERRADA (não bate com a própria nem com a do servidor)', async () => {
-    const encryptedServer = encryptEvolutionApiKey('chave-do-servidor');
+    const encryptedServer = encryptEvolutionApiKey('chave-do-servidor', process.env);
     resetFakeDb({
       evolutionServers: [
         evolutionServer({ id: 'srv-1', apiKeyCiphertext: encryptedServer.ciphertext, apiKeyIv: encryptedServer.iv, apiKeyAuthTag: encryptedServer.authTag, apiKeyKeyVersion: encryptedServer.keyVersion }),

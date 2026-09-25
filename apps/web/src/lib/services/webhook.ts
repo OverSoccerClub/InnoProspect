@@ -17,7 +17,7 @@ import {
 import { checkStatusTransition, toE164 } from '@inno/core';
 import { advanceCampaignTargetStatus, skipPendingCampaignTargetsForPhone } from '@/lib/services/campaign-targets';
 import { applyInstanceConnectionTransition } from '@/lib/services/instance-connection';
-import { decryptEvolutionApiKey } from '@/lib/evolution-server-crypto';
+import { decryptEvolutionApiKey } from '@inno/sending';
 import { logger } from '@/lib/logger';
 
 type WebhookAuthInstance = Pick<
@@ -57,12 +57,15 @@ export async function resolveExpectedWebhookApiKeys(instance: WebhookAuthInstanc
   if (instance.instanceApiKeyCiphertext && instance.instanceApiKeyIv && instance.instanceApiKeyAuthTag && instance.instanceApiKeyKeyVersion != null) {
     try {
       keys.push(
-        decryptEvolutionApiKey({
-          apiKeyCiphertext: instance.instanceApiKeyCiphertext,
-          apiKeyIv: instance.instanceApiKeyIv,
-          apiKeyAuthTag: instance.instanceApiKeyAuthTag,
-          apiKeyKeyVersion: instance.instanceApiKeyKeyVersion,
-        }),
+        decryptEvolutionApiKey(
+          {
+            apiKeyCiphertext: instance.instanceApiKeyCiphertext,
+            apiKeyIv: instance.instanceApiKeyIv,
+            apiKeyAuthTag: instance.instanceApiKeyAuthTag,
+            apiKeyKeyVersion: instance.instanceApiKeyKeyVersion,
+          },
+          process.env,
+        ),
       );
     } catch (err) {
       logger.error('webhook evolution: falha ao decifrar a credencial PRÓPRIA da instância — omitida (a chave do servidor ainda pode aceitar)', {
@@ -81,7 +84,7 @@ export async function resolveExpectedWebhookApiKeys(instance: WebhookAuthInstanc
   const server = await prisma.evolutionServer.findUnique({ where: { id: instance.evolutionServerId } });
   if (server && server.isActive) {
     try {
-      keys.push(decryptEvolutionApiKey(server));
+      keys.push(decryptEvolutionApiKey(server, process.env));
     } catch (err) {
       logger.error('webhook evolution: falha ao decifrar a credencial do servidor — omitida (a credencial própria da instância ainda pode aceitar)', {
         instanceId: instance.id,

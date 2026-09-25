@@ -25,6 +25,15 @@ import { defineConfig } from 'tsup';
 // `.ts` fonte via symlink do pnpm, e o processo morre no boot com
 // `ERR_UNKNOWN_FILE_EXTENSION` — só aparece no boot do CONTAINER, nunca em
 // `pnpm typecheck`/`lint`/`build` na máquina de quem escreveu.
+//
+// 🆕 Fase 4.F.4 — `@inno/messaging` entra pelo MESMO motivo, só que agora
+// direto (não só transitivo via `@inno/sending`): `dispatch-tick.job.ts`
+// resolve o `EvolutionClient` por instância (`lib/evolution.ts`) e chama
+// `executeSendAttempt` de verdade — a PRIMEIRA vez que o worker de fato
+// importa `@inno/messaging` em código que roda. Sem entrar aqui, o mesmo
+// `ERR_UNKNOWN_FILE_EXTENSION` do parágrafo acima se repete, só que desta
+// vez em `@inno/messaging`, não em `@inno/sending`. Sem binário nativo
+// próprio (é HTTP/fetch puro) — seguro de embutir.
 export default defineConfig({
   // O segundo entry NÃO é conveniência: sem ele o backfill é impossível de
   // rodar em produção. A imagem final (stage `runner` do Dockerfile) não tem
@@ -60,7 +69,7 @@ export default defineConfig({
   // `index.ts`/`client.ts` EM LUGAR, ao lado do `.ts`) e continua sendo
   // resolvido normalmente via `node_modules` — ver `packages/db/package.json`
   // (`exports`) e `packages/db/tsconfig.build.json`.
-  noExternal: [/^@inno\/(core|contracts|scraper|sending)$/],
+  noExternal: [/^@inno\/(core|contracts|messaging|scraper|sending)$/],
   // `playwright` PRECISA ficar external de forma EXPLÍCITA (não basta o
   // default do tsup/esbuild): o default só marca como external o que já
   // está nas `dependencies` do PRÓPRIO package.json (apps/worker) — como

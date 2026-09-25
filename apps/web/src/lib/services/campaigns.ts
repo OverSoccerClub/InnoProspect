@@ -24,6 +24,8 @@ import {
   hasOptOutNotice,
   localDateKey,
   renderTemplate,
+  resolveCampaignWindow,
+  resolveSendPolicy,
   resolveSpintax,
   type TemplateVariableValues,
 } from '@inno/core';
@@ -735,6 +737,29 @@ export async function startCampaign(id: string): Promise<StartCampaignResponse> 
       `Este template gera apenas ${variations} variação(ões) de texto para ${campaign.totalTargets} alvos — risco de bloqueio por padrão repetitivo (ARQUITETURA §6.4). Adicione spintax ({opção a|opção b}).`,
       undefined,
       'INSUFFICIENT_TEXT_VARIATION',
+    );
+  }
+
+  // 🆕 Fase 4.F.4 (ARQUITETURA §6.8.10/A32) — defesa em profundidade: o
+  // contrato (`sendWindowSchema`) já recusa 0/6 na entrada desde esta rodada,
+  // mas uma linha ANTIGA no banco (criada antes da restrição) pode ter
+  // `sendWindowDaysOfWeek` que, intersectado com o piso da env, resulta numa
+  // janela que NUNCA abre — a campanha ficaria `running` para sempre sem
+  // enviar nada e sem explicação nenhuma na tela. Recusar aqui é a mesma
+  // regra do "start que aceita uma campanha impossível é pior que um start
+  // que recusa com motivo" (briefing da 4.F.4).
+  const effectiveWindow = resolveCampaignWindow(resolveSendPolicy(process.env).sendWindow, {
+    startHour: campaign.sendWindowStartHour,
+    endHour: campaign.sendWindowEndHour,
+    daysOfWeek: campaign.sendWindowDaysOfWeek,
+  });
+  const effectiveDaysOfWeek = effectiveWindow.businessWindow.daysOfWeek ?? [];
+  const windowNeverOpens = effectiveDaysOfWeek.length === 0 || effectiveWindow.businessWindow.startHour >= effectiveWindow.businessWindow.endHour;
+  if (windowNeverOpens) {
+    conflict(
+      'A janela de envio configurada para esta campanha (dias/horário), depois de combinada com o piso do ambiente, nunca abre — ajuste os dias da semana ou o horário nas configurações da campanha.',
+      [{ path: 'settings.sendWindow', message: `dias efetivos: [${effectiveDaysOfWeek.join(',')}], horário efetivo: ${effectiveWindow.businessWindow.startHour}h-${effectiveWindow.businessWindow.endHour}h` }],
+      'EMPTY_SEND_WINDOW',
     );
   }
 

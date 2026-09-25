@@ -50,7 +50,7 @@ vi.mock('@/lib/evolution', () => ({
 const { getWhatsAppInstanceQr, getWhatsAppInstanceStatus, createWhatsAppInstance, listWhatsAppInstances, reconcileAllWhatsAppInstances } = await import(
   './whatsapp-instances'
 );
-const { decryptEvolutionApiKey } = await import('@/lib/evolution-server-crypto');
+const { decryptEvolutionApiKey } = await import('@inno/sending');
 const { getFakeDbState } = await import('@/test/fake-db');
 
 function instance(overrides: Partial<FakeWhatsAppInstance> & Pick<FakeWhatsAppInstance, 'id'>): FakeWhatsAppInstance {
@@ -188,12 +188,15 @@ describe('createWhatsAppInstance — 🆕 correção do webhook mudo (2026-09-23
     };
     expect(saved.instanceApiKeyCiphertext).toBeDefined();
     expect(
-      decryptEvolutionApiKey({
-        apiKeyCiphertext: saved.instanceApiKeyCiphertext,
-        apiKeyIv: saved.instanceApiKeyIv,
-        apiKeyAuthTag: saved.instanceApiKeyAuthTag,
-        apiKeyKeyVersion: saved.instanceApiKeyKeyVersion,
-      }),
+      decryptEvolutionApiKey(
+        {
+          apiKeyCiphertext: saved.instanceApiKeyCiphertext,
+          apiKeyIv: saved.instanceApiKeyIv,
+          apiKeyAuthTag: saved.instanceApiKeyAuthTag,
+          apiKeyKeyVersion: saved.instanceApiKeyKeyVersion,
+        },
+        process.env,
+      ),
     ).toBe('chave-da-instancia-123');
   });
 

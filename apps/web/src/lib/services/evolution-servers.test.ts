@@ -1,6 +1,6 @@
 /**
  * evolution-servers.test.ts — CRUD de `EvolutionServer` + teste de conexão
- * (Fase 4.B). Usa a cifra REAL (`lib/evolution-server-crypto.ts`, sem mock —
+ * (Fase 4.B). Usa a cifra REAL (`@inno/sending`, sem mock —
  * é o comportamento que precisamos comprovar: a credencial NUNCA sai em
  * texto puro de nenhuma resposta) contra o fake db compartilhado
  * (`@/test/fake-db`, mesmo padrão de `users.test.ts`).
@@ -226,8 +226,8 @@ describe('deactivateEvolutionServer', () => {
 describe('testEvolutionServerConnection', () => {
   /** As duas primeiras asserções (sucesso/MessagingError) exigem que a decifra funcione DE VERDADE — sem isso `testConnectionMock` nunca chega a ser chamado (a função já teria devolvido CONFIG_ERROR antes). */
   async function seedServerWithRealEncryptedKey(id = 'srv-1'): Promise<void> {
-    const { encryptEvolutionApiKey } = await import('@/lib/evolution-server-crypto');
-    const encrypted = encryptEvolutionApiKey('chave-real-do-servidor');
+    const { encryptEvolutionApiKey } = await import('@inno/sending');
+    const encrypted = encryptEvolutionApiKey('chave-real-do-servidor', process.env);
     resetFakeDb({
       evolutionServers: [
         evolutionServer({ id, apiKeyCiphertext: encrypted.ciphertext, apiKeyIv: encrypted.iv, apiKeyAuthTag: encrypted.authTag, apiKeyKeyVersion: encrypted.keyVersion }),

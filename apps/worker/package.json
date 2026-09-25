@@ -17,6 +17,7 @@
   "dependencies": {
     "@inno/core": "workspace:^",
     "@inno/db": "workspace:^",
+    "@inno/messaging": "workspace:^",
     "@inno/scraper": "workspace:^",
     "@inno/sending": "workspace:^",
     "bullmq": "^5.34.4",

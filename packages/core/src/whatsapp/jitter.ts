@@ -192,6 +192,23 @@ export type AdvanceSendPaceResult = {
  * que deveria acelerar"). Sinalizado aqui e no handoff — não é literal da
  * ARQUITETURA, é gap preenchido.
  */
+/**
+ * 🆕 Fase 4.F.4 (ARQUITETURA §6.8.10/A32) — `jitterMinSeconds`/
+ * `jitterMaxSeconds` da CAMPANHA intersectados com o piso já resolvido da env
+ * (`resolveSendPolicy(...).jitterRangeSeconds`, que já aplica
+ * `MIN_JITTER_FLOOR_SECONDS`). Mesmo princípio de `resolveCampaignWindow`
+ * (`send-window.ts`): a campanha só ESTREITA o intervalo do piso, nunca
+ * alarga — "o clamp mora no mesmo lugar do clamp da env, nunca numa segunda
+ * função" (handoff da 4.F.2). Se a campanha pedir um range fora de ordem
+ * depois do estreitamento (`maxSeconds < minSeconds`), cai no ponto mais
+ * seguro (`maxSeconds = minSeconds`) em vez de inverter/lançar.
+ */
+export function resolveCampaignJitter(envRange: JitterRangeSeconds, campaign: JitterRangeSeconds): JitterRangeSeconds {
+  const minSeconds = Math.max(envRange.minSeconds, campaign.minSeconds);
+  const maxSeconds = Math.min(envRange.maxSeconds, campaign.maxSeconds);
+  return { minSeconds, maxSeconds: maxSeconds >= minSeconds ? maxSeconds : minSeconds };
+}
+
 export function advanceSendPace(input: AdvanceSendPaceInput): AdvanceSendPaceResult {
   const rng = input.rng ?? Math.random;
   const jitterRangeSeconds = input.jitterRangeSeconds ?? DEFAULT_JITTER_RANGE_SECONDS;

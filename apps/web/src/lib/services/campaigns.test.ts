@@ -522,6 +522,21 @@ describe('startCampaign — segunda passagem de exclusão', () => {
     store.instances[0]!.status = 'disconnected';
     await expect(startCampaign('camp-1')).rejects.toMatchObject({ code: 'CONFLICT', reason: 'INSTANCE_NOT_CONNECTED' });
   });
+
+  // 🆕 Fase 4.F.4 (ARQUITETURA §6.8.10/A32) — defesa em profundidade: o
+  // contrato já recusa 0/6 na ENTRADA (`sendWindowSchema`, ver
+  // `campaign.contract.test.ts`), mas uma linha ANTIGA no banco (criada
+  // antes da restrição) pode ter `sendWindowDaysOfWeek: [0,6]` — a
+  // interseção com o piso seg-sex da env fica VAZIA e a campanha nunca
+  // enviaria nada, `running` para sempre, sem explicação na tela.
+  it('409 EMPTY_SEND_WINDOW quando a janela efetiva (interseção com o piso) nunca abre', async () => {
+    seedRunnableCampaign();
+    const campaign = store.campaigns.find((c) => c.id === 'camp-1')!;
+    campaign.sendWindowDaysOfWeek = [0, 6]; // linha "antiga" — só fim de semana, que o piso não tem para oferecer
+    await expect(startCampaign('camp-1')).rejects.toMatchObject({ code: 'CONFLICT', reason: 'EMPTY_SEND_WINDOW' });
+    // Rollback: nada deveria ter avançado para "running".
+    expect(store.campaigns.find((c) => c.id === 'camp-1')?.status).toBe('draft');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

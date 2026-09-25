@@ -138,6 +138,9 @@ importers:
       '@inno/db':
         specifier: workspace:^
         version: link:../../packages/db
+      '@inno/messaging':
+        specifier: workspace:^
+        version: link:../../packages/messaging
       '@inno/scraper':
         specifier: workspace:^
         version: link:../../packages/scraper

@@ -30,7 +30,7 @@ import {
   getEvolutionClientForServer,
   requireActiveEvolutionServer,
 } from '@/lib/evolution';
-import { encryptEvolutionApiKey, toPrismaBytes } from '@/lib/evolution-server-crypto';
+import { encryptEvolutionApiKey, toPrismaBytes } from '@inno/sending';
 import { haltCampaignsSoleInstanceDisconnected } from '@/lib/services/campaign-targets';
 import { applyInstanceConnectionTransition, type InstanceConnectionStatus } from '@/lib/services/instance-connection';
 import { sendAlert } from '@/lib/alerts';
@@ -154,15 +154,15 @@ function rethrowAsUpstream(err: unknown, action: string): never {
 // mentindo PARA SEMPRE, porque nenhuma LEITURA jamais voltava a perguntar.
 //
 // Por que isto vive AQUI (na leitura, em `apps/web`) e não num job do
-// `apps/worker` — decisão deliberada, não descuido: o factory do
-// `EvolutionClient` por instância (`getEvolutionClientForInstance` em
-// `@/lib/evolution`) mora em `apps/web` e depende de `@/lib/api-handler`/
-// `@/lib/evolution-server-crypto` de lá — levar isso para o worker é uma
-// extração que pertence à Fase 4.F.4 (quando o `dispatch-tick.job` precisar
-// de verdade resolver o cliente por instância para ENVIAR, não só para
-// perguntar o status), e o tick vai conferir a instância antes de enviar de
-// qualquer forma. Até lá, reconciliar na leitura resolve o incidente sem
-// puxar essa extração para frente sem necessidade real.
+// `apps/worker` — decisão deliberada, não descuido: reconciliar STATUS lendo
+// `GET /whatsapp/instances` é uma pergunta HTTP, e o motor (`dispatch-tick.job`,
+// Fase 4.F.4) nunca faz essa pergunta — ele confere a instância direto do
+// Postgres antes de enviar (`status`/`isDegraded`/cota/gate, ARQUITETURA
+// §6.8.3 passo 2.2), sem precisar perguntar à Evolution "você está viva?".
+// 🆕 Fase 4.F.4: a RESOLUÇÃO do `EvolutionClient` por instância (achar o
+// servidor, decifrar, montar o cliente) virou `@inno/sending` (`evolution-
+// resolver.ts`) exatamente porque o tick também precisa dela para ENVIAR —
+// mas a reconciliação de status em si (este arquivo) continua só aqui.
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
@@ -372,7 +372,7 @@ async function reconcileInstancesInPlace(
  */
 function encryptedInstanceApiKeyColumns(apiKey: string | null): Partial<Prisma.WhatsAppInstanceUncheckedCreateInput> {
   if (!apiKey) return {};
-  const encrypted = encryptEvolutionApiKey(apiKey);
+  const encrypted = encryptEvolutionApiKey(apiKey, process.env);
   return {
     instanceApiKeyCiphertext: toPrismaBytes(encrypted.ciphertext),
     instanceApiKeyIv: toPrismaBytes(encrypted.iv),

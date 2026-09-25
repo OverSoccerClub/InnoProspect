@@ -29,8 +29,16 @@ export type CampaignAudienceInput = z.infer<typeof campaignAudienceInputSchema>;
 export const sendWindowSchema = z.object({
   startHour: z.number().int().min(8).max(20),
   endHour: z.number().int().min(8).max(20),
-  /** 0=domingo .. 6=sábado. */
-  daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1),
+  /**
+   * 1=segunda .. 5=sexta — SÓ dias úteis. 🆕 Fase 4.F.4 (ARQUITETURA §6.8.10/
+   * A32): antes aceitava 0..6 (domingo/sábado inclusos), mas o motor
+   * (`resolveCampaignWindow`, `@inno/core`) intersecta contra o piso
+   * seg-sex (nunca configurável, decisão do dono 24/09/2026) — uma campanha
+   * criada com `[0,6]` (só fim de semana) produzia interseção VAZIA e nunca
+   * enviava, sem nenhuma explicação na tela. Recusar aqui, na entrada, é a
+   * mesma regra aplicada mais perto de onde o operador consegue corrigir.
+   */
+  daysOfWeek: z.array(z.number().int().min(1).max(5)).min(1),
 });
 export type SendWindow = z.infer<typeof sendWindowSchema>;
 

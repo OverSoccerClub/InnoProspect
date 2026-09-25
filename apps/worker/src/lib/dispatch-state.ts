@@ -34,14 +34,13 @@ export const DISPATCH_TICK_HEARTBEAT_KEY = 'inno:dispatch:tick:heartbeat';
  * worker (`queue-state.ts`, `HEARTBEAT_INTERVAL_MS`/`HEARTBEAT_TTL_SECONDS`):
  * 15s de intervalo, TTL de 45s (3x de folga para jitter/GC pause).
  *
- * ⚠️ Nesta rodada (4.F.3) o heartbeat é gravado por um `setInterval` no boot
- * do worker (`scheduler.ts`), NÃO pelo processamento de um tick de verdade —
- * o `dispatch-tick.job` (a fila BullMQ repetível, ARQUITETURA §6.8.3) ainda
- * não existe (Fase 4.F.4, fora de escopo aqui). Por isso o nome
- * `lastTickAt` hoje prova só "o processo do worker está de pé e a
- * infraestrutura de dispatch foi inicializada" — quando o tick real nascer,
- * a gravação deve migrar para DENTRO do processor do job (provando "o tick
- * de fato rodou este ciclo"), sem precisar mudar a CHAVE nem quem lê.
+ * ✅ Fase 4.F.4 — a promessa acima virou verdade: a gravação MIGROU do
+ * `setInterval` de boot (4.F.3) para DENTRO do processor do job
+ * (`jobs/dispatch-tick.job.ts#runDispatchTick`, primeira linha,
+ * INCONDICIONAL — roda mesmo com o motor pausado). `lastTickAt` agora prova
+ * "o tick de fato rodou este ciclo", não só "o processo está de pé" — mesma
+ * CHAVE, mesmo leitor (`GET /api/v1/dispatch/queue`), nada mudou do lado de
+ * quem lê.
  */
 export const DISPATCH_HEARTBEAT_INTERVAL_MS = 15_000;
 export const DISPATCH_HEARTBEAT_TTL_SECONDS = 45;

@@ -3,8 +3,10 @@ import {
   advanceSendPace,
   DEFAULT_JITTER_RANGE_SECONDS,
   DEFAULT_MICRO_PAUSE_CONFIG,
+  MIN_JITTER_FLOOR_SECONDS,
   drawLogNormalJitterMs,
   drawMicroPauseMs,
+  resolveCampaignJitter,
   shouldTriggerMicroPause,
   type RandomSource,
 } from './jitter';
@@ -184,5 +186,37 @@ describe('advanceSendPace — modo "floor" (resposta a conversa aberta, override
   it('respeita um jitterRangeSeconds customizado', () => {
     const result = advanceSendPace({ now: NOW, sendsSinceMicroPause: 0, mode: 'floor', jitterRangeSeconds: { minSeconds: 30, maxSeconds: 90 } });
     expect(result.jitterMs).toBe(30_000);
+  });
+});
+
+describe('resolveCampaignJitter (Fase 4.F.4, ARQUITETURA §6.8.10/A32 — campanha só estreita)', () => {
+  const ENV_RANGE = { minSeconds: 45, maxSeconds: 180 };
+
+  it('campanha dentro do piso da env: usa exatamente o range da campanha', () => {
+    const result = resolveCampaignJitter(ENV_RANGE, { minSeconds: 60, maxSeconds: 120 });
+    expect(result).toEqual({ minSeconds: 60, maxSeconds: 120 });
+  });
+
+  it('campanha pede um mínimo MENOR que o piso da env: o piso da env vence (nunca alarga)', () => {
+    const result = resolveCampaignJitter(ENV_RANGE, { minSeconds: 10, maxSeconds: 120 });
+    expect(result.minSeconds).toBe(ENV_RANGE.minSeconds);
+  });
+
+  it('campanha pede um máximo MAIOR que o teto da env: o teto da env vence', () => {
+    const result = resolveCampaignJitter(ENV_RANGE, { minSeconds: 60, maxSeconds: 999 });
+    expect(result.maxSeconds).toBe(ENV_RANGE.maxSeconds);
+  });
+
+  it('campanha totalmente fora do range da env (min > env.max): nunca inverte — max cai para o min resultante', () => {
+    const result = resolveCampaignJitter(ENV_RANGE, { minSeconds: 500, maxSeconds: 600 });
+    // minSeconds = max(45,500) = 500; maxSeconds = min(180,600) = 180 — invertido
+    // (180 < 500), então cai no ponto seguro: maxSeconds = minSeconds.
+    expect(result.minSeconds).toBeLessThanOrEqual(result.maxSeconds);
+    expect(result).toEqual({ minSeconds: 500, maxSeconds: 500 });
+  });
+
+  it('respeita o piso duro MIN_JITTER_FLOOR_SECONDS quando já embutido no envRange (resolveSendPolicy é quem garante isso antes de chamar)', () => {
+    const result = resolveCampaignJitter({ minSeconds: MIN_JITTER_FLOOR_SECONDS, maxSeconds: 180 }, { minSeconds: 1, maxSeconds: 5 });
+    expect(result.minSeconds).toBe(MIN_JITTER_FLOOR_SECONDS);
   });
 });

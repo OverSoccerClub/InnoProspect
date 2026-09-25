@@ -7,9 +7,23 @@
  * com UM único servidor Evolution, configurado via `EVOLUTION_API_URL`/
  * `EVOLUTION_API_KEY` (variável de ambiente, cliente singleton). Agora
  * `WhatsAppInstance.evolutionServerId` diz EM QUAL `EvolutionServer` (linha
- * do banco, credencial cifrada em repouso — `lib/evolution-server-crypto.ts`)
- * aquela instância vive, e o cliente é resolvido POR INSTÂNCIA/SERVIDOR, não
- * mais um singleton único de processo.
+ * do banco, credencial cifrada em repouso) aquela instância vive, e o
+ * cliente é resolvido POR INSTÂNCIA/SERVIDOR, não mais um singleton único de
+ * processo.
+ *
+ * 🆕 Fase 4.F.4 — a cifra e a resolução em si (achar o servidor, decifrar,
+ * montar o `EvolutionClient`) MUDARAM DE DONO: viraram `@inno/sending`
+ * (`evolution-crypto.ts`/`evolution-resolver.ts`), porque `apps/worker`
+ * (`dispatch-tick.job`) agora TAMBÉM precisa resolver o cliente por
+ * instância, e "achar o servidor certo" não pode ter uma segunda cópia
+ * (ARQUITETURA §6.8.0.1). Este arquivo fica como CAMADA FINA em cima disso:
+ * a política de erro (o que fazer quando o servidor não existe/está
+ * inativo) continua só daqui — `apps/web` tem uma requisição HTTP esperando
+ * e transforma isso em `404/409/502`; `apps/worker` não tem requisição
+ * nenhuma e reage diferente (tira a instância da rotação, halta a campanha
+ * se não sobrar nenhuma) — ver `apps/worker/src/lib/evolution.ts`. As rotas
+ * HTTP existentes não mudam de comportamento nenhum — só de onde vem a
+ * implementação.
  *
  * ⚠️ FALLBACK PARA A ENV, DE PROPÓSITO E TEMPORÁRIO: `evolutionServerId` é
  * NULLABLE (migração `20260923140000_evolution_servers` — ver comentário
@@ -25,9 +39,13 @@
  */
 import { randomBytes } from 'node:crypto';
 import { prisma, type EvolutionServer } from '@inno/db';
-import { EvolutionClient, evolutionConfigFromEnv } from '@inno/messaging';
+import type { EvolutionClient } from '@inno/messaging';
+import {
+  buildEvolutionClientFromServer,
+  buildLegacyEnvEvolutionClient,
+  resolveInstanceEvolutionClient,
+} from '@inno/sending';
 import { conflict, notFound, upstreamError } from './api-handler';
-import { decryptEvolutionApiKey } from './evolution-server-crypto';
 import { logger } from './logger';
 
 let legacyEnvClient: EvolutionClient | null = null;
@@ -39,10 +57,12 @@ let legacyEnvFallbackWarned = false;
  * `evolutionServerId` ainda é `null` (ver comentário no topo do arquivo).
  * Loga UMA VEZ por processo (não a cada chamada) para o operador notar, sem
  * inundar o log, que ainda existe alguma instância legada dependendo da env.
+ * O cache/aviso é DESTE processo (`apps/web`) — `apps/worker` tem o seu
+ * próprio, com o seu próprio texto de aviso.
  */
 function getLegacyEnvEvolutionClient(): EvolutionClient {
   if (!legacyEnvClient) {
-    legacyEnvClient = new EvolutionClient(evolutionConfigFromEnv());
+    legacyEnvClient = buildLegacyEnvEvolutionClient(process.env);
   }
   if (!legacyEnvFallbackWarned) {
     legacyEnvFallbackWarned = true;
@@ -51,11 +71,6 @@ function getLegacyEnvEvolutionClient(): EvolutionClient {
     );
   }
   return legacyEnvClient;
-}
-
-function evolutionClientFromServer(server: Pick<EvolutionServer, 'baseUrl' | 'apiKeyCiphertext' | 'apiKeyIv' | 'apiKeyAuthTag' | 'apiKeyKeyVersion'>): EvolutionClient {
-  const apiKey = decryptEvolutionApiKey(server);
-  return new EvolutionClient({ baseUrl: server.baseUrl, apiKey });
 }
 
 /**
@@ -71,7 +86,7 @@ export async function requireActiveEvolutionServer(evolutionServerId: string): P
 }
 
 export function getEvolutionClientForServer(server: EvolutionServer): EvolutionClient {
-  return evolutionClientFromServer(server);
+  return buildEvolutionClientFromServer(server, process.env);
 }
 
 /**
@@ -86,16 +101,17 @@ export function getEvolutionClientForServer(server: EvolutionServer): EvolutionC
  * `502 UPSTREAM_ERROR` (nosso problema a resolver), não `404`/`409`.
  */
 export async function getEvolutionClientForInstance(instance: { evolutionServerId: string | null }): Promise<EvolutionClient> {
-  if (!instance.evolutionServerId) return getLegacyEnvEvolutionClient();
-
-  const server = await prisma.evolutionServer.findUnique({ where: { id: instance.evolutionServerId } });
-  if (!server) {
+  const result = await resolveInstanceEvolutionClient(
+    { prisma, env: process.env, legacyClient: getLegacyEnvEvolutionClient },
+    instance,
+  );
+  if (result.outcome === 'server_not_found') {
     upstreamError('O servidor Evolution associado a esta instância não foi encontrado. Contate o administrador.', 'SERVER_NOT_FOUND');
   }
-  if (!server.isActive) {
+  if (result.outcome === 'server_inactive') {
     upstreamError('O servidor Evolution associado a esta instância está desativado. Contate o administrador.', 'SERVER_INACTIVE');
   }
-  return evolutionClientFromServer(server);
+  return result.client;
 }
 
 /**

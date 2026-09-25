@@ -13,6 +13,7 @@ import {
   bullConnectionOptions,
 } from './queues.js';
 import { createScrapeSearchProcessor, type ScrapeSearchJobData } from './jobs/scrape-search.job.js';
+import { createDispatchTickProcessor, defaultDispatchTickDeps } from './jobs/dispatch-tick.job.js';
 import { logger } from './observability/logger.js';
 import { sendAlert } from './observability/alerts.js';
 import {
@@ -22,19 +23,14 @@ import {
   readQueuePauseMeta,
   recordHeartbeat,
 } from './lib/queue-state.js';
-import { DISPATCH_HEARTBEAT_INTERVAL_MS, recordDispatchTickHeartbeat } from './lib/dispatch-state.js';
+import { resolveDispatchConfig } from './lib/dispatch-config.js';
 
 export type WorkerHandles = {
   scrapeSearchQueue: Queue<ScrapeSearchJobData>;
   scrapeSearchWorker: Worker<ScrapeSearchJobData>;
-  /**
-   * 🆕 Fase 4.F.3 — só um `Queue` (sem `Worker`/processor ainda): o tick de
-   * verdade (claim/eligibilidade/disparo, §6.8.2-§6.8.7) é Fase 4.F.4, fora
-   * de escopo aqui. Existe já para (a) dar um handle com `.client` para o
-   * heartbeat abaixo, e (b) o 4.F.4 anexar o `Worker` na MESMA fila sem
-   * precisar tocar neste arquivo de novo.
-   */
   dispatchTickQueue: Queue;
+  /** 🆕 Fase 4.F.4 — o motor de disparo em si (`dispatch-tick.job.ts`). */
+  dispatchTickWorker: Worker;
   close: () => Promise<void>;
 };
 
@@ -100,36 +96,62 @@ export function startWorkers(): WorkerHandles {
   }, PAUSE_SWEEP_INTERVAL_MS);
   pauseSweepTimer.unref?.();
 
-  // 🆕 Fase 4.F.3 — heartbeat do dispatch, ANTES de o tick existir (§8 Fase
-  // 4.F: "o freio é construído antes do acelerador"). Só um `Queue` (sem
-  // processor) — grava `lastTickAt` incondicionalmente, pausado ou não, pela
-  // MESMA razão do heartbeat geral acima: "parado" (motor pausado de
-  // propósito) e "quebrado" (worker morto) não podem ser a mesma tela
-  // (ARQUITETURA §6.8.9/§8.0 regra 4). Ver o comentário de
-  // `dispatch-state.ts` sobre o que este heartbeat prova HOJE (processo de
-  // pé) e o que vai passar a provar na Fase 4.F.4 (o tick de fato rodou).
+  // 🆕 Fase 4.F.4 — o motor de disparo em si. `dispatchTickQueue` já existia
+  // desde a 4.F.3 (só para o `.client` do freio); agora ganha um `Worker` de
+  // verdade, concorrência 1 (ARQUITETURA §6.8.3: "um único processo worker,
+  // poucos milhares de mensagens/dia e um gate por instância que já
+  // serializa o que importa — concorrência >1 traria contenção sem ganho de
+  // vazão"). O heartbeat (`lastTickAt`) MIGROU de um `setInterval` em boot
+  // para DENTRO do processor (`runDispatchTick`, primeira linha,
+  // incondicional) — é isso que faz a promessa do comentário de
+  // `dispatch-state.ts` (Fase 4.F.3) virar verdade: "lastTickAt" agora prova
+  // que o TICK RODOU este ciclo, não só que o processo está de pé.
   const dispatchTickQueue = new Queue(QUEUES.dispatchTick, { connection });
-  const dispatchHeartbeatTimer = setInterval(() => {
-    void recordDispatchTickHeartbeat(dispatchTickQueue).catch((err: unknown) => {
-      logger.error({ err }, 'falha ao gravar heartbeat do dispatch (Redis fora do ar?)');
-    });
-  }, DISPATCH_HEARTBEAT_INTERVAL_MS);
-  dispatchHeartbeatTimer.unref?.();
-  void recordDispatchTickHeartbeat(dispatchTickQueue).catch((err: unknown) => {
-    logger.error({ err }, 'falha ao gravar heartbeat inicial do dispatch');
+  const dispatchConfig = resolveDispatchConfig(process.env);
+
+  const dispatchTickWorker = new Worker(
+    QUEUES.dispatchTick,
+    createDispatchTickProcessor(defaultDispatchTickDeps(dispatchTickQueue)),
+    { connection, concurrency: 1 },
+  );
+
+  dispatchTickWorker.on('failed', (job, err) => {
+    // Só chega aqui se `runDispatchTick` lançar de verdade (ela já engole
+    // erro POR CAMPANHA — isto é o nível "o tick inteiro quebrou", ex.:
+    // Postgres/Redis fora do ar). O próximo tick agendado tenta de novo.
+    logger.error({ jobId: job?.id, err }, 'dispatch-tick job falhou sem tratamento interno');
   });
-  logger.info({ queue: QUEUES.dispatchTick }, 'heartbeat do dispatch no ar (motor nasce PAUSADO — ARQUITETURA §6.8.9)');
+  dispatchTickWorker.on('error', (err) => {
+    logger.error({ err }, 'erro no Worker dispatch-tick (nível de conexão/infra)');
+  });
+
+  // Job repetível (ARQUITETURA §6.8.3, default 15s via `DISPATCH_TICK_INTERVAL_S`).
+  // `upsertJobScheduler` é IDEMPOTENTE por `jobSchedulerId` — reiniciar o
+  // worker não empilha um segundo agendamento com o mesmo intervalo (ao
+  // contrário do `add(..., {repeat})` legado do BullMQ, que exigia controle
+  // manual de duplicidade).
+  void dispatchTickQueue
+    .upsertJobScheduler('dispatch-tick-scheduler', { every: dispatchConfig.tickIntervalMs }, { name: 'dispatch-tick' })
+    .catch((err: unknown) => {
+      logger.fatal({ err }, 'falha ao agendar o job repetível dispatch-tick — o motor NÃO vai rodar');
+    });
+
+  logger.info(
+    { queue: QUEUES.dispatchTick, tickIntervalMs: dispatchConfig.tickIntervalMs },
+    'motor de disparo agendado (nasce PAUSADO — ARQUITETURA §6.8.9)',
+  );
 
   return {
     scrapeSearchQueue,
     scrapeSearchWorker,
     dispatchTickQueue,
+    dispatchTickWorker,
     async close() {
       clearInterval(heartbeatTimer);
       clearInterval(pauseSweepTimer);
-      clearInterval(dispatchHeartbeatTimer);
       await scrapeSearchWorker.close();
       await scrapeSearchQueue.close();
+      await dispatchTickWorker.close();
       await dispatchTickQueue.close();
       await closeDefaultEngine();
     },

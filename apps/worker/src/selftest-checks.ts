@@ -184,7 +184,7 @@ export async function runSteps(steps: SelfTestStep[], stepTimeoutMs = DEFAULT_ST
  * este módulo existe para não deixar acontecer de novo.
  */
 async function checkModulosInternos(): Promise<string> {
-  const [core, db, scraper, sending] = await Promise.all([
+  const [core, db, scraper, sending, messaging] = await Promise.all([
     import('@inno/core'),
     import('@inno/db'),
     import('@inno/scraper'),
@@ -194,6 +194,11 @@ async function checkModulosInternos(): Promise<string> {
     // onde isso aparece — `ERR_UNKNOWN_FILE_EXTENSION` tentando carregar o
     // `.ts` fonte via symlink do pnpm, ANTES de qualquer Worker/Queue subir.
     import('@inno/sending'),
+    // 🆕 Fase 4.F.4 — mesma prova para `@inno/messaging`: o `dispatch-tick.job`
+    // é o PRIMEIRO código do worker a importar de verdade (resolve o
+    // `EvolutionClient` por instância, `lib/evolution.ts`) — antes disso o
+    // worker nunca tinha exercitado este caminho de bundling.
+    import('@inno/messaging'),
   ]);
   if (typeof core.isOffNiche !== 'function') {
     throw new Error('@inno/core carregou, mas "isOffNiche" não é uma função — export quebrado ou tree-shaking indevido');
@@ -207,7 +212,10 @@ async function checkModulosInternos(): Promise<string> {
   if (typeof sending.executeSendAttempt !== 'function') {
     throw new Error('@inno/sending carregou, mas "executeSendAttempt" não é uma função — export quebrado ou tree-shaking indevido');
   }
-  return '@inno/core, @inno/db, @inno/scraper e @inno/sending carregaram e expõem os símbolos esperados';
+  if (typeof messaging.EvolutionClient !== 'function') {
+    throw new Error('@inno/messaging carregou, mas "EvolutionClient" não é uma classe — export quebrado ou tree-shaking indevido');
+  }
+  return '@inno/core, @inno/db, @inno/scraper, @inno/sending e @inno/messaging carregaram e expõem os símbolos esperados';
 }
 
 /** Conexão real, consulta real — `new PrismaClient()` não lança sem `DATABASE_URL` (só na 1ª query), então só um `SELECT` prova conectividade. */

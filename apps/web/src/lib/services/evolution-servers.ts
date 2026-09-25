@@ -8,11 +8,13 @@
  *
  * ⚠️ A credencial NUNCA é devolvida por nenhuma função aqui — só
  * `hasApiKey` (booleano, sempre `true` hoje porque a coluna é `NOT NULL`).
- * `create`/`update` cifram (`lib/evolution-server-crypto.ts`) ANTES de
+ * `create`/`update` cifram (`@inno/sending`, movido de `lib/evolution-server-
+ * crypto.ts` na Fase 4.F.4 — o worker também precisa da mesma cifra) ANTES de
  * qualquer chamada ao Prisma — o texto puro nunca é persistido nem logado.
  */
 import { Prisma, prisma, type EvolutionServer } from '@inno/db';
 import { EvolutionClient, MessagingError } from '@inno/messaging';
+import { decryptEvolutionApiKey, encryptEvolutionApiKey, EvolutionCryptoError, toPrismaBytes } from '@inno/sending';
 import type {
   CreateEvolutionServerBody,
   CreateEvolutionServerResponse,
@@ -23,7 +25,6 @@ import type {
   UpdateEvolutionServerResponse,
 } from '@inno/contracts';
 import { conflict, notFound } from '@/lib/api-handler';
-import { decryptEvolutionApiKey, encryptEvolutionApiKey, EvolutionCryptoError, toPrismaBytes } from '@/lib/evolution-server-crypto';
 import { logger } from '@/lib/logger';
 
 /**
@@ -89,7 +90,7 @@ export async function createEvolutionServer(body: CreateEvolutionServerBody, cre
   const existing = await prisma.evolutionServer.findUnique({ where: { baseUrl } });
   if (existing) conflict(`Já existe um servidor cadastrado com a URL ${baseUrl}.`, undefined, 'SERVER_BASE_URL_TAKEN');
 
-  const encrypted = encryptEvolutionApiKey(body.apiKey);
+  const encrypted = encryptEvolutionApiKey(body.apiKey, process.env);
 
   let created: EvolutionServer;
   try {
@@ -133,7 +134,7 @@ export async function updateEvolutionServer(id: string, patch: UpdateEvolutionSe
   // da chave-mestre); ausente, a credencial gravada permanece intocada.
   const rotatingApiKey = patch.apiKey !== undefined;
   if (rotatingApiKey) {
-    const encrypted = encryptEvolutionApiKey(patch.apiKey!);
+    const encrypted = encryptEvolutionApiKey(patch.apiKey!, process.env);
     data.apiKeyCiphertext = toPrismaBytes(encrypted.ciphertext);
     data.apiKeyIv = toPrismaBytes(encrypted.iv);
     data.apiKeyAuthTag = toPrismaBytes(encrypted.authTag);
@@ -198,7 +199,7 @@ export async function testEvolutionServerConnection(id: string): Promise<TestEvo
 
   let apiKey: string;
   try {
-    apiKey = decryptEvolutionApiKey(server);
+    apiKey = decryptEvolutionApiKey(server, process.env);
   } catch (err) {
     logger.error('evolution_server.teste_de_conexao_erro_de_configuracao', {
       serverId: id,
