@@ -284,7 +284,27 @@ coletados na entrada, validadores duros na saída.
 
 Invariantes: **IA é conselho, nunca engrenagem** (falhou, cai no spintax) e
 geração **na montagem da campanha, nunca no envio** (auditoria antes de sair).
-Começa pelo assistente na ficha do lead, não pelo lote.
+
+**🆕 26/09 — arquitetura fechada pela Nova em `ARQUITETURA.md §8.11`, que ESTENDE
+a §8.10 e revisa a ordem de entrega.** Três mudanças que valem aqui:
+
+- **A medição virou a fase 0, antes de qualquer geração.** Motivo concreto,
+  verificado no código: responder **"SAIR" conta como RESPOSTA** hoje
+  (`webhook.ts#handleInboundMessage` avança o alvo para `responded` antes de
+  registrar o descadastro). Ligar aprendizado sobre esse sinal ensina a máquina
+  a premiar a abordagem que mais irrita.
+- **A maior parte do ganho não depende de IA.** O ângulo da abordagem passa a
+  ser **calculado por regra pura** sobre o dado coletado ("nota 4.8, 180
+  avaliações e sem site"); o modelo só escreve a frase. Catálogo de ângulos +
+  um texto base por ângulo já entrega o resultado — e é o braço de comparação
+  sem o qual "a IA converte mais" é incomparável. Custo de IA: **centavos por
+  campanha**; a variável de decisão é alucinação, não preço.
+- **Autonomia virou escada de 5 degraus (N0-N4)** com guarda-corpo explícito em
+  cada um. `ALERT_WEBHOOK_URL` ligada é **bloqueio duro** do degrau N4 (máquina
+  montando o público) — o risco nº 1 desta lista é pré-requisito daquela fase.
+
+Ordem nova: 6.0 medir → 6.1 ângulos (sem IA) → 6.2 assistente na ficha →
+6.3 lote com revisão → 6.4 escolha por desempenho → 6.5 público autônomo.
 
 ### Depois
 `DELETE /leads/:id` · configurações re-escopadas para diagnóstico operacional ·
@@ -298,6 +318,13 @@ testes de `searches.ts` e da camada HTTP.
 2. `RawCapture`: dropar ou ligar com retenção junto.
 3. Quantos números de WhatsApp entram na rotação (afeta a Fase 4).
 4. Qual a taxa de celular medida — é o portão do Bloco 0.
+5. **Fase 6 (IA) — sete decisões do dono**, listadas com o porquê de cada uma em
+   `ARQUITETURA.md §8.11.10`. As três que mudam o tamanho da fase: (a) usar API
+   externa e aceitar que nome/categoria/cidade/avaliações do lead saiam da
+   infra — se "não", a fase para na 6.1, que já entrega a maior parte do valor;
+   (b) até que degrau da escada de autonomia ele quer chegar; (c) quais ângulos
+   entram no catálogo v1 e quem escreve os 6-10 textos base (é trabalho de
+   vendedor, não de arquitetura).
 
 **Fechada, não reabrir:** o produto é de **uso próprio**, sem multi-tenancy e
 sem cobrança (decidido em 22/09).

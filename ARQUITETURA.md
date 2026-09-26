@@ -1,8 +1,29 @@
 # InnoProspect — Documento de Arquitetura
 
-> Versão 1.3 · Autora: Nova (arquitetura) · Data: 2026-09-24 (v1.2: 2026-09-22 · v1.1: 2026-08-03 · v1.0: 2026-07-30)
+> Versão 1.4 · Autora: Nova (arquitetura) · Data: 2026-09-26 (v1.3: 2026-09-24 · v1.2: 2026-09-22 · v1.1: 2026-08-03 · v1.0: 2026-07-30)
 > Status: **fechado para implementação** nas partes marcadas como CONTRATO.
 > Alterações em seções CONTRATO exigem aviso ao Atlas antes de codificar (Vega/Lyra dependem delas).
+
+### O que mudou na v1.4 — "medir antes de gerar, e autonomia como escada com guarda-corpo"
+
+O dono pediu uma máquina de prospecção autônoma. Ao desenhá-la contra o código real, o obstáculo não
+é gerar texto — é que **o sistema hoje não consegue dizer qual abordagem converte**, e uma máquina
+que gera sem medir erra com confiança, em escala. Esta revisão acrescenta a §8.11, que **estende** a
+§8.10 (os dois invariantes de lá continuam valendo palavra por palavra).
+
+| # | Mudança | Seção | Tipo |
+|---|---|---|---|
+| 1 | **A medição vira pré-requisito da geração**, não relatório posterior. Model `ApproachOutcome`, escrito na MESMA transação do write-ahead, em `@inno/sending` — único ponto em que nenhum chamador pode esquecer | **§8.11.3 (nova)** | 🔒 CONTRATO novo |
+| 2 | 🔴 **Responder "SAIR" conta como RESPOSTA hoje.** `webhook.ts#handleInboundMessage` avança o alvo para `responded` antes de registrar o descadastro. Ligar aprendizado sobre isso ensina a máquina a premiar a abordagem que mais irrita | **§8.11.3** | correção de fato |
+| 3 | **O ângulo da abordagem é CALCULADO por regra pura; a IA só escreve a frase.** O modelo deixa de selecionar fatos — recebe um conjunto fechado e declara quais citou, verificável em código | **§8.11.2** | 🔒 decisão travada (A33) |
+| 4 | **Escada de autonomia N0-N4**, nível persistido lido em runtime (ausente = N0). Cada degrau acrescenta um autor e não altera **nada** à direita de `executeSendAttempt` — subir e descer sem reescrever | **§8.11.4** | 🔒 CONTRATO novo |
+| 5 | **A maior parte do valor da fase não depende de IA**: catálogo de ângulos determinístico + template por ângulo entrega o ganho e serve de braço de comparação. Sem ele, "a IA converte mais" é incomparável | §8.11.6 | decisão |
+| 6 | **O texto final por alvo ganha coluna** (`CampaignTarget.renderedBody`). Hoje ele é recalculado do snapshot em três lugares no momento do envio — não há onde texto gerado morar | §8.11.5 | correção de fato |
+| 7 | O achado `medium` do Órion (corrida de `respondedCount`) **teve o gatilho disparado**: a heurística que iria lê-lo é justamente esta fase | §8.11.3 | dívida vencida |
+
+**A regra que esta revisão acrescenta:** *nenhum laço de aprendizado pode ser ligado sobre um sinal
+que mistura sucesso com fracasso.* Separar `replied` de `optedOut` não é refinamento de métrica — é
+a diferença entre uma máquina que melhora e uma que piora com confiança.
 
 ### O que mudou na v1.3 — "onde o envio mora, para o motor não ser uma segunda implementação"
 
@@ -3195,6 +3216,496 @@ segundos. Conversa iniciada protege o número; proposta não solicitada o queima
 envio de dado de lead a um provedor externo (dado comercial público, risco
 baixo, mas é decisão a registrar).
 
+> 🆕 **v1.4 — esta seção é ESTENDIDA pela §8.11**, que mantém os dois invariantes acima intactos e
+> muda três coisas: a medição passa a ser a fase 0 (antes de qualquer geração), o ângulo da
+> abordagem passa a ser calculado por regra pura em vez de escolhido pelo modelo, e a autonomia
+> ganha uma escada de cinco degraus com guarda-corpo explícito em cada um. A ordem de entrega desta
+> §8.10 foi revisada lá — leia a §8.11.7, não a lista acima.
+
+---
+
+### 8.11 🆕 v1.4 — Máquina de prospecção autônoma: o laço fechado
+
+**Origem:** pedido do dono, 2026-09-26 — *"um fluxo coerente, robusto e profissional de prospecção
+(…) campanhas com IA, de maneira autônoma, de acordo com os dados da busca/leads (…) como se fosse
+uma equipe de agentes/vendedores/marketing criando e gerindo campanhas profissionais"*.
+
+**Relação com a §8.10: ESTENDE, não substitui.** Os dois invariantes de lá continuam valendo sem
+alteração (*IA é conselho, nunca engrenagem*; *geração na montagem da campanha, nunca no envio*), e
+a âncora obrigatória ("só o que foi coletado") continua sendo a regra-mãe. Três coisas mudam:
+
+| O que a §8.10 dizia | O que a §8.11 muda | Por quê |
+|---|---|---|
+| Ordem de entrega: 1) assistente na ficha, 2) lote, 3) **medição por variante** | **A medição vira a fase 0**, antes de qualquer geração | Uma máquina que gera sem medir não melhora: ela erra com confiança, em escala. E o braço de comparação ("o que o template fixo faz no mesmo nicho") precisa existir **antes** do braço gerado, senão "a IA converte mais" é incomparável |
+| A IA gera a mensagem a partir dos campos do lead | **O ângulo é calculado por regra pura; a IA só escreve a frase** (A33) | Tira a seleção de fato do modelo. O que ele pode afirmar deixa de ser resultado de instrução e passa a ser resultado de tipo |
+| Autonomia não era escopo | **Escada de 5 degraus (N0-N4), cada um com guarda-corpo explícito** (§8.11.4) | "IA escreve a abordagem" e "IA decide quem recebe" são riscos de ordem de grandeza diferente. O modelo de segurança inteiro deste sistema assume humano montando o público |
+
+**Premissa de contexto declarada (confirmar se mudar):** uso próprio (A23), 1 dono + poucos
+operadores, dezenas a poucas centenas de mensagens frias por semana, 1-3 números na rotação. Isso
+descarta, de saída, qualquer desenho que precise de volume estatístico para funcionar. **Com esse
+volume, "aprender" significa "não repetir o que já se mostrou ruim", não "otimizar continuamente".**
+Quem desenhar para bandit contínuo aqui está dimensionando para um sistema que não existe.
+
+---
+
+#### 8.11.1 O laço completo, e onde cada peça mora
+
+```
+      ┌── HOJE (existe e está em produção) ──────────────────────────────┐
+      │                                                                  │
+  [busca] → [scraping] → [Lead] → [filtro/segmento] → [Campaign+Targets] │
+      │                                                  │               │
+      │                                    [template + spintax]          │
+      │                                                  ↓               │
+      │                            [dispatch-tick → @inno/sending → Evolution]
+      │                                                  ↓               │
+      │                                    [webhook: delivered/read/inbound]
+      └──────────────────────────────────────────────────────────────────┘
+                                                         ↓
+      ┌── NOVO (§8.11) ──────────────────────────────────────────────────┐
+      │  ① ÂNGULO calculado   ② REDAÇÃO gerada    ③ DESFECHO medido      │
+      │  (@inno/core, puro)   (@inno/ai, porta)   (ApproachOutcome)      │
+      │        ↑                     ↑                     │             │
+      │        └─────────── ④ AJUSTE ───────────────────────┘             │
+      │              (escolha de ângulo por desempenho, N3+)             │
+      └──────────────────────────────────────────────────────────────────┘
+```
+
+| Peça | Mora em | Existe hoje? | Natureza |
+|---|---|---|---|
+| Segmentação (filtro de público) | `leadFilterSchema` + `POST /campaigns` | **Sim** (falta `minReviewCount`) | reuso |
+| **Cálculo do ângulo** | `packages/core/src/approach/angles.ts` | Não | **função pura, testável sem rede** |
+| Biblioteca de ângulos (texto base por ângulo) | `MessageTemplate` + coluna `angle` | Parcial | dado, não código |
+| **Redação** (opcional, por cima do ângulo) | `packages/ai` (porta + adaptador) | Não | I/O externo, **substituível por no-op** |
+| Validação da saída gerada | `packages/core` (`validateGeneratedApproach`) | Não | função pura |
+| Persistência do texto por alvo | `CampaignTarget.renderedBody` | **Não — buraco** | migração |
+| Portão de envio (G1–G11) | `@inno/core` + `@inno/sending` | **Sim, auditado** | **não se toca** |
+| **Gravação do desfecho** | `@inno/sending` (mesma transação do write-ahead) | Não | migração + 1 escritor |
+| Atualização do desfecho | `apps/web/.../webhook.ts` | Parcial | 1 escritor |
+| Leitura/decisão por desempenho | `apps/web` (tela) + `packages/core` (escolha) | Não | último a ser construído |
+
+**A fronteira que decide o desenho inteiro:** tudo à esquerda da chamada a `executeSendAttempt`
+pode mudar de nível de autonomia; **nada à direita muda.** O portão, o gate de ritmo, a cota de
+warmup, a janela, o lease e o `@unique` continuam sendo o mesmo código, chamado do mesmo lugar, em
+qualquer degrau da escada. É isso que permite subir e descer de degrau sem reescrever o sistema.
+
+---
+
+#### 8.11.2 A matéria-prima é magra — e os ângulos fortes saem exatamente dela
+
+Confirmo a leitura do Atlas, com uma correção de ênfase. De cada lead sabemos `name`, `phoneE164`,
+`phoneType`, `address`, `city`/`uf`, `website` (ou a ausência), `category`, `rating`, `reviewCount`,
+`offNiche`, `lastSeenAt`. **Nada mais**, e a §7.1 proíbe ampliar (não é preguiça: é o que sustenta o
+legítimo interesse).
+
+Isso é **menos** que a fantasia de personalização profunda e **mais** que parece, porque os ângulos
+comerciais fortes são combinações e **ausências**, não detalhes. E o ponto que muda a arquitetura:
+cada ângulo é um **predicado determinístico** sobre campos coletados. Logo é calculável em código
+puro, testável com fixture, e **auditável**. A IA não escolhe o que é verdade; ela escreve a frase
+de um fato que o código já provou.
+
+> **A33 — o ângulo é calculado, a frase é gerada.** O gerador nunca recebe "invente o gancho";
+> recebe um `ApproachAngle` já decidido e um conjunto fechado de fatos citáveis. Se o modelo cair,
+> o ângulo continua existindo e o texto base do ângulo é enviado. **Este é o motivo pelo qual a
+> maior parte do valor desta fase não depende de IA nenhuma.**
+
+**Catálogo inicial de ângulos (vocabulário aberto, como `LeadActivity.type` — ângulo novo não exige
+migração):**
+
+| `angle` | Predicado sobre campos coletados | O que a frase pode afirmar |
+|---|---|---|
+| `no_website` | `website == null` | não achamos site da empresa |
+| `reputation_no_website` | `website == null && rating >= 4.5 && reviewCount >= 30` | boa reputação **e** sem site — o ângulo mais forte do catálogo |
+| `high_volume` | `reviewCount >= 100` | muito movimento (→ atendimento manual dói) |
+| `site_low_traction` | `website != null && reviewCount <= 10` | tem site, quase sem avaliação (→ presença/tráfego) |
+| `low_visibility` | `reviewCount == null \|\| reviewCount <= 5` | pouca presença digital |
+| `local_reference` | `rating >= 4.7 && reviewCount >= 50` | referência na cidade |
+| `generic` | fallback — sempre existe | só nicho + cidade |
+
+Regras de composição (puras, e é aqui que mora a robustez):
+
+1. **Precedência fixa e determinística**, não "o melhor segundo o modelo". Mesmo lead → mesmo ângulo,
+   sempre. Sem isso, não há como medir ângulo nenhum.
+2. **`offNiche == true` força `generic`.** A `category` desse lead é sabidamente não confiável (foi
+   assim que "escritório de arquitetura" trouxe Magazine Luiza). Uma frase do tipo *"vi que vocês
+   trabalham com arquitetura"* para a loja errada é **exatamente** o detalhe inventado que esta fase
+   existe para evitar — e o dado que produz o erro já está marcado no schema. **Recomendação mais
+   forte: `offNiche` fora de campanha fria, não só fora da geração.**
+3. **Números só são citáveis se frescos.** Se `lastSeenAt` tiver mais de 60 dias, o ângulo continua
+   valendo mas `rating`/`reviewCount` **saem do conjunto de fatos citáveis** — o ângulo é escolhido
+   pelo valor antigo, a frase não o cita. Citar "180 avaliações" de uma coleta de oito meses atrás é
+   errar em público sobre um número que o destinatário conhece melhor que nós.
+4. **`name` é razão social ou nome de fantasia com ruído** (`LTDA`, `- Matriz`, emoji). O ângulo
+   nunca depende do nome; a renderização usa a variável `{{nome}}` que já existe.
+
+**Conteúdo, que vale mais que engenharia de prompt (mantido da §8.10):** a primeira mensagem **não
+vende** — faz uma pergunta que a pessoa responde em cinco segundos. Isso não é estilo: conversa
+iniciada protege o número, proposta não solicitada o queima.
+
+---
+
+#### 8.11.3 🔒 A medição (CONTRATO — Cronos implementa)
+
+**O problema, em uma frase:** hoje o sistema não consegue dizer qual abordagem converte, e não é por
+falta de tela — é por falta de dado. Três buracos concretos, os três verificados no código:
+
+1. **Não existe atribuição por abordagem.** `Campaign → templateId` é o grão mais fino que existe. Um
+   público de 400 leads espalhado por 5 categorias e 12 cidades produz um único número agregado, com
+   nicho, cidade, número usado e horário todos confundidos dentro dele.
+2. 🔴 **`responded` inclui quem pediu para sair.** Em `webhook.ts#handleInboundMessage`, o alvo ativo
+   avança para `responded` **antes** de `registerOptOutFromInbound` rodar, e nada o faz voltar. Ou
+   seja: hoje, responder "SAIR" **conta como resposta**. Se um laço de aprendizado for ligado em cima
+   disso, ele aprende a premiar a abordagem que mais irrita. Este é o defeito mais importante desta
+   seção, e ele é anterior a qualquer IA.
+3. **O histórico encolhe, e encolhe enviesado.** `CampaignTarget.leadId` é `onDelete: Cascade` (de
+   propósito, para a eliminação LGPD conseguir completar). Logo, ao longo de 24 meses de retenção,
+   os leads eliminados — desproporcionalmente os que se incomodaram — **somem do conjunto de
+   aprendizado**, deixando toda abordagem parecer melhor do que foi. O `Campaign.*Count` já resolve
+   isso para o funil da campanha, por este exato motivo; a medição por abordagem precisa da mesma
+   proteção.
+
+**Model novo — `ApproachOutcome`.** Fato anônimo, append-only na criação, com poucos campos
+atualizados pelo desfecho. Um por MENSAGEM FRIA enviada, de qualquer caminho (campanha **e** envio
+unitário).
+
+```prisma
+model ApproachOutcome {
+  id       String   @id @default(cuid(2))
+  sentAt   DateTime
+
+  // ── ATRIBUIÇÃO (o "braço do experimento") ──
+  source       ApproachSource        // template | ai | manual
+  angle        String                // vocabulário ABERTO (como LeadActivity.type)
+  templateId   String?               // SetNull — sobrevive ao template apagado
+  campaignId   String?               // SetNull — envio unitário não tem campanha
+  variantKey   String?               // qual variação de spintax/prompt saiu
+  promptVersion String?              // só quando source = ai
+  modelId      String?               // só quando source = ai
+
+  // ── SEGMENTO (snapshot no envio, nunca join em tempo de leitura) ──
+  uf            String  @db.VarChar(2)
+  cityIbgeCode  String?
+  categoryKey   String?              // category normalizada (slug), null se offNiche
+  hasWebsite    Boolean
+  ratingBucket  String?              // none | lt40 | 40_45 | gte45
+  reviewBucket  String?              // b0 | b1_10 | b11_50 | b51_200 | b200p
+  phoneType     PhoneType
+
+  // ── CONFUNDIDORES CONHECIDOS (sem eles a comparação mente) ──
+  instanceId String?                 // SetNull — número aquecido converte mais
+  warmupDay  Int?
+  hourOfDay  Int                     // 0-23 no fuso APP_TIMEZONE
+  dayOfWeek  Int                     // 0=dom..6=sáb
+
+  // ── ELO OPERACIONAL (cortado pela eliminação LGPD, o fato permanece) ──
+  leadId    String?                  // SetNull
+  messageId String?  @unique         // SetNull — é por aqui que o webhook acha a linha
+
+  // ── DESFECHO ──
+  delivered    Boolean   @default(false)
+  read         Boolean   @default(false)
+  replied      Boolean   @default(false)   // ⚠️ NÃO inclui pedido de descadastro
+  optedOut     Boolean   @default(false)
+  firstReplyAt DateTime?
+  failed       Boolean   @default(false)
+  failReason   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([angle, sentAt])
+  @@index([categoryKey, angle])
+  @@index([uf, angle])
+  @@index([source, sentAt])
+  @@index([campaignId])
+  @@map("approach_outcomes")
+}
+
+enum ApproachSource { template  ai  manual }
+```
+
+**Decisões de desenho, com o porquê de cada uma:**
+
+| Decisão | Por quê |
+|---|---|
+| **Tabela separada, não colunas em `CampaignTarget`** | `CampaignTarget` cascateia na eliminação LGPD (e deve continuar cascateando). O aprendizado não pode desaparecer junto — e some enviesado, o que é pior que sumir |
+| **`replied` exclui descadastro; `optedOut` é campo próprio** (A35) | Sem essa separação, o sinal de "funcionou" é incrementado pelo sinal de "irritou". É o defeito nº 2 acima, elevado a invariante |
+| **Buckets em vez de `rating`/`reviewCount` crus** | A pergunta é "converte para qual **perfil**", não "para qual empresa". Bucket é o que a análise usa e o que impede a tabela de virar um segundo cadastro |
+| **Segmento snapshotado, não obtido por join** | Depois da eliminação do lead o join não existe mais; e `category`/`rating` mudam entre coletas (são `MACHINE_UPDATABLE_FIELDS`) — join em tempo de leitura responderia sobre o lead de hoje, não sobre o lead que recebeu a mensagem |
+| **`instanceId` + `warmupDay` + `hourOfDay` gravados** | São os confundidores que tornam a comparação honesta. "O ângulo B converteu mais" é vazio se B saiu do número aquecido às 10h e A do número novo às 19h |
+| **Sem tabela de rollup/agregado** | Em milhares de linhas/ano, `GROUP BY` sobre os índices acima responde em milissegundos. Rollup agora é exatamente a função-sem-chamador que este projeto já produziu quatro vezes |
+| **Sem coluna de desfecho de funil (`won`/`negotiating`)** | Exigiria um **terceiro** escritor (o `PATCH /leads/:id`), que é justamente o tipo de disciplina que se esquece. Enquanto o `leadId` existir, o funil sai por join. Aceito conscientemente: depois da eliminação, perde-se o desfecho profundo daquele lead — não o desfecho da mensagem |
+
+**Onde é escrito — e por que só ali (A34).**
+
+- **Criação:** dentro de `packages/sending`, **na mesma transação do write-ahead** de `Message`.
+  Não é conveniência: é a única posição em que é impossível um segundo chamador esquecer de gravar.
+  Se a criação ficasse no `dispatch-tick`, o envio unitário nunca registraria, e o conjunto de
+  aprendizado nasceria enviesado para o caminho automático. `executeSendAttempt` já recebe um
+  `campaignContext` opcional; ganha um `attribution` (obrigatório para contato frio, `null` para
+  resposta em conversa aberta — resposta não é abordagem e não entra na medição).
+- **Atualização de `delivered`/`read`:** `webhook.ts#handleMessageStatus`, por `messageId`.
+- **Atualização de `replied`/`optedOut`/`firstReplyAt`:** `webhook.ts#handleInboundMessage`,
+  **depois** de `event.isOptOutRequest` ser conhecido — é o mesmo ponto onde o defeito nº 2 se
+  conserta.
+
+**Correções pré-requisito (entram na mesma entrega, não depois):**
+
+1. 🔴 **Descadastro deixa de contar como resposta.** No inbound com `isOptOutRequest`, o alvo vai
+   para `skipped/opted_out` (ou um estado terminal equivalente), nunca `responded`; e o
+   `Campaign.respondedCount` não incrementa.
+2. 🔴 **A corrida de `recordInstanceResponseIfFirstToday`** (achado `medium` do Órion em 4.H, com
+   gatilho datado "consertar antes da heurística de taxa de resposta"). **O gatilho chegou aqui.**
+   Receita já existe no mesmo arquivo: constraint única + captura de `P2002`, como
+   `registerOptOutFromInbound` faz.
+3. **`minReviewCount` no `leadFilterSchema`** — já registrado como faltante na §8.9, e agora é
+   requisito: dois dos sete ângulos segmentam por número de avaliações.
+
+**A pergunta do dono, respondida em SQL (o critério de aceite da fase 0):**
+
+```sql
+SELECT "categoryKey", uf, angle, source,
+       count(*)                                        AS enviadas,
+       sum(("replied")::int)                           AS responderam,
+       sum(("optedOut")::int)                          AS descadastraram,
+       round(100.0 * sum(("replied")::int)  / count(*), 1) AS taxa_resposta,
+       round(100.0 * sum(("optedOut")::int) / count(*), 1) AS taxa_descadastro
+FROM approach_outcomes
+WHERE "sentAt" >= now() - interval '90 days'
+GROUP BY 1,2,3,4
+HAVING count(*) >= 20
+ORDER BY taxa_resposta DESC;
+```
+
+O `HAVING count(*) >= 20` não é enfeite: **é o piso abaixo do qual a tela não deve mostrar
+percentual nenhum.** 1 resposta em 3 envios não é 33% de conversão; é ruído, e exibi-lo como número
+é a forma mais eficiente de fazer o dono tomar uma decisão errada com confiança.
+
+---
+
+#### 8.11.4 🔒 A escada de autonomia (CONTRATO — o dono escolhe onde parar)
+
+Cada degrau **acrescenta um autor** ao processo e mantém tudo o mais igual. O nível é **uma
+configuração persistida, lida em runtime** (mesmo lugar e mesma semântica da pausa global do §4.10:
+**chave ausente = N0**, o degrau mais conservador — A36). Descer de degrau é mudar o valor; não há
+código a reverter.
+
+| Nível | Quem faz o quê | Guarda-corpo obrigatório (sem ele o nível não existe) | O que arrisca |
+|---|---|---|---|
+| **N0** — hoje | Humano escreve o texto, monta o público, libera. Máquina só respeita o ritmo | Os que já existem (G1–G11, gate, warmup, janela, lease, `@unique`, pausa global) | Nada novo. Não escala a atenção do dono |
+| **N1** — assistente | Humano pede sugestão **na ficha de um lead**; lê, edita, envia | Nada sai sem clique humano; o texto gerado passa pelos **mesmos** G1–G11; toda geração é registrada mesmo quando o humano reescreve | Praticamente zero. É aqui que se descobre o que é uma boa mensagem **antes** de automatizar quinhentas |
+| **N2** — lote com revisão | Máquina gera o texto de **todos** os alvos na montagem da campanha; humano revisa **amostra por ângulo** e libera | `start` devolve **409** se existir alvo `source=ai` sem aprovação; a aprovação é **por ângulo**, não por texto (revisar 430 textos é teatro; revisar 3 por ângulo é revisão de verdade); teto de alvos na primeira campanha de cada ângulo novo | Um ângulo ruim vai para todos do ângulo de uma vez. Daí o teto |
+| **N3** — escolha por desempenho | Máquina escolhe **qual ângulo** usar por alvo, dentro de um público que o humano montou | Só ângulos já aprovados em N2; **piso de amostra** por ângulo antes de considerar qualquer um vencedor; **fração mínima de exploração** (senão o laço congela no primeiro ângulo que teve sorte); sem dado suficiente → **rodízio uniforme**, nunca "o melhor até agora" | O sistema passa a reforçar o próprio viés. O piso e a exploração são o antídoto |
+| **N4** — público autônomo | Máquina **monta o público e agenda** a campanha; humano tem veto | Ver os seis abaixo — todos, não "os principais" | É o degrau que pode custar o número em escala. O modelo de segurança inteiro foi desenhado supondo humano no público |
+
+**Os seis guarda-corpos de N4 (nenhum é opcional):**
+
+1. **Envelope declarado pelo humano**, persistido: UFs permitidas, categorias permitidas, tamanho
+   máximo de campanha, nº máximo de campanhas por dia. **Fora do envelope a máquina recusa, não
+   pede.** Pedir cria um caminho em que o dono aprova no cansaço.
+2. **Orçamento diário de contatos frios**, global e persistido, **independente** da cota por
+   instância. São tetos de donos diferentes: a cota por número protege **o número**; o orçamento
+   protege **a base** — queimar 5.000 leads em duas semanas com uma abordagem ruim não dispara
+   nenhum limite de anti-ban, e destrói o ativo.
+3. **Janela de veto**: a campanha nasce `scheduled` para daqui a N horas, com notificação. Silêncio
+   = segue. Isso é veto real; "botão de pânico" depois de disparar não é.
+4. **Uma só campanha autônoma em voo.** A máquina não abre a segunda antes de o dono ter visto o
+   desfecho da primeira — senão um erro de julgamento se multiplica antes de existir qualquer
+   feedback.
+5. **Exclusões duras**, não configuráveis: `offNiche`, lead já contatado dentro de
+   `skipRecentlyContactedDays`, lead que já recebeu K abordagens na vida sem nunca responder,
+   telefone não-móvel.
+6. 🔴 **Canal de alerta LIGADO.** Em N0–N3 o alerta muda a duração do incidente. Em N4 existe um ator
+   autônomo de segundo grau (escolhe público **e** dispara) e o alerta passa a ser a única forma de
+   o dono descobrir, na mesma noite, que a máquina escolheu errado. **`ALERT_WEBHOOK_URL` vazia
+   bloqueia N4** — e isso é coerente com A31, que aceitou o motor sem alerta apenas porque os
+   patamares de parada não foram afrouxados.
+
+> **A metáfora do dono ("uma equipe de agentes/vendedores") é boa como descrição do resultado e ruim
+> como desenho.** Uma equipe simulada de agentes conversando entre si é mais cara, mais lenta, menos
+> auditável e — o que decide — **impossível de medir**: não há como dizer qual "agente" causou a
+> resposta. O que entrega o mesmo resultado é um **pipeline determinístico com um passo de redação**:
+> segmentar (regra) → escolher ângulo (regra, depois desempenho) → escrever (modelo) → validar
+> (regra) → enviar (portão existente) → medir (fato). Cada passo é inspecionável isoladamente, e é
+> isso que faz o conjunto parecer profissional em vez de só parecer inteligente.
+
+---
+
+#### 8.11.5 Contratos e migrações que a fase exige
+
+**Migração (Cronos):**
+
+| Mudança | Onde | Por quê |
+|---|---|---|
+| `CampaignTarget.renderedBody String?` | schema | **Buraco atual:** o texto é recalculado do snapshot em **três** lugares no momento do envio. Sem uma coluna por alvo, não há onde o texto gerado morar, e a §8.10 ("gerar antes, auditar antes de sair") é irrealizável |
+| `CampaignTarget.approachAngle String?` / `approachSource` / `approvalState` | schema | Atribuição e portão de aprovação do N2 |
+| `ApproachOutcome` + enum `ApproachSource` | schema | §8.11.3 |
+| `MessageTemplate.angle String?` | schema | Liga o template base ao ângulo. É assim que "ler os templates de forma dinâmica" vira arquitetura: **os templates são a biblioteca de ângulos, lida do banco** |
+| `minReviewCount` em `leadFilterSchema` | contracts | §8.9 + dois ângulos dependem |
+
+**Regra de leitura do texto final (fecha a duplicação de três pontos):** quem envia lê
+`target.renderedBody` se existir; **só cai** para `renderTemplate(snapshot) + resolveSpintax` se for
+`null`. Uma linha, nos três chamadores, e o caminho gerado não abre um quarto.
+
+**Contratos de API novos (Vega implementa, Lyra consome):**
+
+| Rota | Corpo/resposta | Observação |
+|---|---|---|
+| `POST /api/v1/leads/:id/approach` | → `{ angle, angleLabel, facts[], text, source, generationId }` | N1. **Não envia nada.** `409 AI_DISABLED` quando não há provedor; `200` com `source:"template"` quando o modelo falha (degradação, não erro) |
+| `POST /api/v1/campaigns/:id/approaches/generate` | → `{ generated, failed, byAngle[] }` | N2. Só em `draft`. Idempotente por alvo |
+| `GET /api/v1/campaigns/:id/approaches/sample?angle=` | → amostra estratificada | N2. É o que o humano revisa |
+| `POST /api/v1/campaigns/:id/approaches/approve` | `{ angle, approved }` | N2. Aprovação **por ângulo** |
+| `GET /api/v1/insights/approaches` | filtros: período, uf, categoria, ângulo, source | Fase 0. A consulta do §8.11.3, paginada, **com o piso de amostra aplicado no servidor** |
+| `PUT /api/v1/settings/autonomy` | `{ level: 'n0'..'n4', envelope }` | Ausente = `n0` |
+
+**Erros novos em `error.reason`** (A20 — todo nome precisa de um campo onde morar):
+`AI_DISABLED`, `AI_BUDGET_EXCEEDED`, `APPROACH_NOT_APPROVED`, `ANGLE_NOT_APPROVED`,
+`AUTONOMY_LEVEL_TOO_LOW`, `OUTSIDE_AUTONOMY_ENVELOPE`, `GENERATED_TEXT_REJECTED`.
+
+**Validação da saída gerada (`@inno/core`, pura — a mitigação estrutural de alucinação):**
+
+1. **Fatos declarados ⊆ fatos fornecidos.** O modelo devolve saída estruturada
+   (`output_config.format`) com `{ text, factsCited[] }`; qualquer fato citado fora do conjunto de
+   entrada **rejeita a geração**. Isto é o que transforma "instruí o modelo a não inventar" em
+   verificação de tipo.
+2. Nenhum numeral no texto que não esteja no conjunto de fatos citáveis.
+3. Nenhuma URL (link em primeiro contato de número novo — §6.4 item 4).
+4. Nenhum `{{` remanescente.
+5. Tamanho máximo, e `hasOptOutNotice` + `hasCompanyNameMention` — **os mesmos** `@inno/core` que o
+   G10 já usa em produção, não uma segunda checagem.
+6. Rejeição **nunca** propaga erro: cai no texto base do ângulo, grava `source='template'` e
+   incrementa um contador visível. Se rejeitar muito, alguém precisa **ver** (regra 4 das lições de
+   plano faseado: modo degradado com sinal mais barulhento que o normal).
+
+---
+
+#### 8.11.6 Stack de IA — opções, recomendação e custo
+
+| Opção | Prós | Contras | Custo |
+|---|---|---|---|
+| **A. Sem IA generativa** — catálogo de ângulos + template por ângulo + spintax | Zero alucinação, zero custo, determinístico, mensurável no mesmo laço. **Entrega a maior parte do ganho**, porque o ganho vem de *escolher o ângulo certo*, não da prosa | O dono escreve 6-10 textos uma vez; não capta nuance | R$ 0 |
+| **B. API Claude** — `claude-haiku-4-5` para volume, `claude-opus-5` para o raciocínio raro | Melhor qualidade em pt-BR comercial; saída estruturada com schema (essencial para o validador nº 1); prompt caching torna o sistema fixo quase gratuito; Batch API a 50% quando não é interativo | Dependência externa; dado comercial do lead sai da infra; chave a gerenciar | centavos — ver abaixo |
+| **C. Modelo local na VPS** (Ollama/Llama) | Dado não sai; custo marginal zero | A VPS já roda Chromium + Postgres + Redis; modelo decente exige GPU; qualidade em pt-BR comercial bem inferior — **e o risco dominante é alucinação, exatamente onde modelo pequeno é pior** | hardware |
+
+**Recomendação: A como base permanente, B como camada por cima, C descartada.**
+
+O argumento não é de custo, é de arquitetura: **o motor de ângulos determinístico É o produto**; o
+modelo é o redator. Construindo só o A, o dono já tem "uma equipe de vendas escolhendo a abordagem
+certa para cada lead", com zero risco de alucinação — e o laço de medição funciona **idêntico**
+(`source='template'`, `angle='reputation_no_website'`). Quando o B entrar, ele é medido **contra** o
+A no mesmo ângulo, mesmo nicho, mesma cidade. Sem o braço A existindo primeiro, "a IA converte mais"
+é uma frase sem comparação possível.
+
+**Custo, em ordem de grandeza** (preços de tabela da API Anthropic, set/2026 — recalcular antes de
+decidir):
+
+| Modelo | US$/MTok entrada | US$/MTok saída |
+|---|---|---|
+| `claude-haiku-4-5` | 1,00 | 5,00 |
+| `claude-sonnet-5` | 2,00 | 10,00 |
+| `claude-opus-5` | 5,00 | 25,00 |
+
+Uma geração = ~1.500 tokens de sistema (**fixo → cacheado, ~0,1× após a 1ª chamada**) + ~200 tokens
+de fatos do lead + ~150 tokens de saída:
+
+| Modelo | Por geração | **Campanha de 500 alvos** | 2.000 msgs/mês |
+|---|---|---|---|
+| Haiku 4.5 | ≈ US$ 0,0011 | ≈ **US$ 0,55** (~R$ 3) | ≈ US$ 2,20 (~R$ 12) |
+| Sonnet 5 | ≈ US$ 0,0022 | ≈ US$ 1,10 | ≈ US$ 4,40 |
+| Opus 5 | ≈ US$ 0,0055 | ≈ US$ 2,75 | ≈ US$ 11,00 |
+
+**Conclusão honesta: custo não é a variável de decisão desta fase.** A campanha inteira custa menos
+que um café em qualquer modelo. A variável é **risco de alucinação e capacidade de medir**. Por isso:
+
+- **Redação (volume) → `claude-haiku-4-5`.** Tarefa curta, âncora fechada, saída validada por código.
+- **Raciocínio de estratégia → `claude-opus-5`, raro, semanal, sobre AGREGADOS.** "Leia a tabela de
+  desfecho e diga quais ângulos aposentar, quais nichos abandonar e que ângulo novo tentar." Entrada
+  ~5k tokens de números, saída ~1,5k → **~US$ 0,06 por execução**.
+- **A38 — o modelo caro nunca vê dado de lead; vê agregado.** Corta custo, corta latência e corta a
+  superfície LGPD ao mesmo tempo: a análise estratégica não precisa de um único telefone.
+- **Batch API (50%)** vale para a geração em lote de campanha criada pela máquina de madrugada (N4);
+  **não** vale para o assistente da ficha (N1), que é interativo.
+- **Teto de gasto mensal persistido**, com degradação para o template base quando estourar
+  (`AI_BUDGET_EXCEEDED` visível na tela, nunca silencioso).
+
+---
+
+#### 8.11.7 Plano faseado — na ordem que entrega valor cedo
+
+A §8.10 recomendava começar pelo assistente na ficha do lead. **Depois de ver o pedido de autonomia,
+discordo da ordem, não da ideia.** O assistente continua sendo o primeiro uso de IA; mas a primeira
+coisa que o dono consegue **usar** não é IA nenhuma — é saber o que já está acontecendo, e mandar a
+mensagem certa para o perfil certo. Ordem revisada:
+
+| Fase | Entrega | Depende de | O que o dono passa a conseguir fazer |
+|---|---|---|---|
+| **6.0** 🔴 **Medir** | `ApproachOutcome` + escrita no `@inno/sending` + atualização no webhook + **separar `replied` de `optedOut`** + corrigir a corrida do `respondedCount` + `minReviewCount` | nada | Ver, sobre o que **já** está sendo enviado, taxa de resposta e de descadastro por nicho, cidade e horário. **Zero IA, valor imediato** |
+| **6.1** **Ângulos** (sem IA) | `packages/core/src/approach/angles.ts` + `MessageTemplate.angle` + `CampaignTarget.renderedBody`/`approachAngle` + escolha do ângulo na materialização | 6.0 | Uma campanha em que cada lead recebe a abordagem adequada ao que ele é. **É a primeira coisa que muda resultado** |
+| **6.2** **Assistente (N1)** | `packages/ai` + validadores + `POST /leads/:id/approach` | 6.1 | Gerar a abordagem de um lead, ler, ajustar, enviar. Descobrir o que é boa mensagem antes de automatizar |
+| **6.3** **Lote com revisão (N2)** | geração em lote + amostra por ângulo + aprovação + `409` no `start` | 6.2 + ≥1 campanha medida em 6.1 | Campanha inteira escrita pela máquina, liberada pelo humano |
+| **6.4** **Escolha por desempenho (N3)** | piso de amostra + exploração + fallback para rodízio | 6.3 + piso de amostra atingido | A máquina para de usar o que não funciona |
+| **6.5** **Público autônomo (N4)** | envelope + orçamento + janela de veto + uma-em-voo | 6.4 + 🔴 **`ALERT_WEBHOOK_URL` ligada** | A máquina propõe e roda campanhas; o dono veta |
+
+**Dependência externa desta fase inteira:** o **risco nº 1 do `PROGRESSO.md`** (ninguém é avisado
+quando quebra). Ele é *forte* em 6.4 e **bloqueante** em 6.5.
+
+**Critério de aceite de cada fase — o mesmo de sempre neste projeto:** comportamento observável
+quando a regra dispara, não teste unitário da função. Para 6.0 especificamente: uma mensagem fria
+real enviada, e a linha de `ApproachOutcome` aparecendo com `delivered=true` depois do webhook. Sem
+isso, 6.0 é mais uma função sem chamador.
+
+---
+
+#### 8.11.8 O que eu recomendo NÃO fazer
+
+Este projeto já entregou quatro funções sem chamador e três telas prometendo controle inexistente.
+Cinco partes do pedido caem exatamente nessa armadilha:
+
+1. **Não construir tabela de agregado/rollup, nem "dashboard de IA", antes de existir desfecho
+   medido.** Tela de métrica sem dado é a terceira tela prometendo controle que não existe.
+2. **Não montar "equipe de agentes" conversando entre si.** É a metáfora do dono, não a arquitetura
+   dele: mais caro, mais lento, e — o que decide — impossível de atribuir. Pipeline determinístico
+   com um passo de redação entrega o mesmo e é inspecionável passo a passo.
+3. **Não pular para N4.** Autonomia de público antes de haver desfecho medido é a máquina escolhendo
+   com base em nada, em escala, com o número do dono. É o erro caro desta fase.
+4. **Não fazer fine-tuning nem RAG sobre o histórico próprio.** Com dezenas a centenas de respostas
+   não há sinal a extrair; o retorno é zero e o custo de manutenção é permanente.
+5. **Não gerar no envio**, e **não** deixar a saída do modelo contornar G1–G11. O texto gerado é
+   **entrada** do portão, nunca substituto dele.
+6. **Não ampliar a coleta para "enriquecer o contexto da IA".** Buscar sócio, e-mail, faturamento ou
+   conteúdo do site derruba a base legal da §7.1. Mensagem melhor não vale a base legal.
+7. **Não tratar "ler os templates de forma dinâmica" como o modelo lendo arquivos.** A tradução certa:
+   os templates **são** a biblioteca de ângulos, lidos do banco, e a inteligência está em **escolher**
+   qual serve para este lead.
+
+---
+
+#### 8.11.9 Riscos específicos da fase
+
+| # | Risco | Prob. | Impacto | Mitigação |
+|---|---|---|---|---|
+| R-IA-1 | **Detalhe inventado numa abordagem fria** | média sem mitigação, **baixa com ela** | 🔴 destrói credibilidade na 1ª frase e vira denúncia (= ban) | Ângulo calculado (A33) + `factsCited[] ⊆` entrada + validadores puros + `offNiche → generic` |
+| R-IA-2 | **O laço aprende do sinal errado** (descadastro contado como resposta) | **certa hoje** | 🔴 a máquina passa a preferir a abordagem que mais irrita | A35, na fase 6.0, antes de qualquer geração |
+| R-IA-3 | **Número pequeno lido como tendência** (1 em 3 = "33%") | alta | decisão errada com confiança | Piso de amostra aplicado **no servidor**; sem piso, a tela não mostra percentual |
+| R-IA-4 | **Viés de sobrevivência** no conjunto de aprendizado | média | toda abordagem parece melhor do que foi | `ApproachOutcome` não cascateia na eliminação |
+| R-IA-5 | **Número citado envelhecido** (`rating`/`reviewCount` de 8 meses) | média | erro público sobre dado que o destinatário conhece melhor | Fatos citáveis expiram com `lastSeenAt` |
+| R-IA-6 | **N4 queima a base** sem disparar nenhum limite de anti-ban | baixa, **alta se N4 chegar cedo** | 🔴 ativo destruído, e silenciosamente | Orçamento diário de contatos frios (teto de dono diferente da cota por número) |
+| R-IA-7 | Provedor fora do ar / chave vencida / teto estourado | média | campanha travada | IA é conselho (§8.10): cai no texto base do ângulo, grava `source='template'`, contador visível |
+
+---
+
+#### 8.11.10 Decisões que dependem do dono
+
+| # | Decisão | Por que não posso fechar sozinha |
+|---|---|---|
+| D-IA-1 | **Usar API externa (Anthropic) e aceitar que nome/categoria/cidade/avaliações do lead saiam da infra?** | É dado comercial público e o risco é baixo, mas é tratamento com operador externo — decisão do controlador, não da arquitetura. Se "não", a fase para na 6.1, que já entrega a maior parte do valor |
+| D-IA-2 | **Até que degrau da escada ele quer chegar** — e confirma que N4 exige `ALERT_WEBHOOK_URL` ligada? | Define o tamanho da fase. N0→N3 é construção incremental; N4 é uma mudança de natureza do sistema |
+| D-IA-3 | **Quais ângulos entram no catálogo v1** e quem escreve os 6-10 textos base | O catálogo tem que refletir o que ele vende (sites, sistemas, plataformas, marketplaces, apps, automação, chatbots — §8.9). É trabalho de vendedor, não de arquiteta |
+| D-IA-4 | **Piso de amostra para declarar um ângulo vencedor.** Proponho **30 desfechos por ângulo** | É baixo estatisticamente e é o que o volume permite. Prefiro um número explícito e conservador a um critério implícito — mas o número é uma aposta dele |
+| D-IA-5 | **Teto de gasto mensal com IA** | Tecnicamente irrelevante (unidades de dólares); serve como freio de sanidade contra laço acidental |
+| D-IA-6 | **`ApproachOutcome` sobrevive a um pedido de eliminação LGPD?** Minha leitura: **sim** — não guarda telefone, nome nem `leadId` após o `SetNull` | Há um resíduo teórico (cidade + categoria + bucket pode ser raro em município pequeno). Avalio o risco como baixo e o benefício como estrutural, mas quem assume é o controlador |
+| D-IA-7 | **`offNiche` sai das campanhas frias, ou só da geração?** Recomendo sair das campanhas | Colide com a decisão travada "marcar, nunca descartar" — que era sobre **coleta e listagem**. Estender para "não abordar" é decisão nova, dele |
+
 ---
 
 ## 9. Riscos, mitigações e dívidas conscientes
@@ -3364,3 +3875,9 @@ ALERT_WEBHOOK_URL=                  # opcional: Slack/Discord/Telegram
 | **A30** | 🆕 **O ato de enviar mora em `packages/sending`**, importado por web e worker. O pacote devolve resultado, nunca erro de HTTP; `apps/web` traduz em `409/502`, o worker traduz em estado do alvo. Worker chamando rota HTTP do web foi descartado — deploy do `web` no meio da campanha viraria envio **incerto** em massa | **§6.8.0, §2** |
 | **A31** | 🆕 **O motor nasce PAUSADO**, e o interruptor é a pausa global persistida (chave ausente = pausado), não uma variável de ambiente. Ligar sem canal de alerta é aceitar descobrir incidente noturno no dia seguinte — aceitável só porque o sistema é desenhado para **parar sozinho**, e por isso os patamares de parada não podem ser afrouxados enquanto o alerta estiver desligado | **§6.8.9** |
 | **A32** | 🆕 **Configuração de campanha só estreita limite de segurança, nunca alarga.** Janela, ritmo e cota da campanha achatam contra o piso da env e contra o warmup. Três campos gravados e exibidos não eram lidos por ninguém — o motor é o primeiro consumidor deles | **§6.8.10** |
+| **A33** | 🆕 **O ângulo da abordagem é CALCULADO, a frase é gerada.** Predicado puro sobre campos coletados decide o ângulo; o modelo recebe um conjunto fechado de fatos citáveis e declara quais usou (`factsCited[] ⊆` entrada, verificado em código). O modelo nunca seleciona fato. `offNiche` força o ângulo genérico — a `category` dele é sabidamente não confiável | **§8.11.2, §8.11.5** |
+| **A34** | 🆕 **Todo contato frio grava um fato de desfecho anônimo** (`ApproachOutcome`) na MESMA transação do write-ahead, dentro de `@inno/sending`. Envio sem atribuição não existe — se a gravação ficasse no motor, o envio unitário nunca registraria e o conjunto de aprendizado nasceria enviesado | **§8.11.3** |
+| **A35** | 🆕 **`replied` e `optedOut` são desfechos DISTINTOS. Descadastro nunca conta como resposta.** Hoje conta (`webhook.ts#handleInboundMessage`), e é o defeito que faria o laço premiar a abordagem que mais irrita. Corolário: percentual só aparece na tela acima do piso de amostra | **§8.11.3, §8.11.9** |
+| **A36** | 🆕 **Nível de autonomia é configuração persistida lida em runtime; ausente = N0** (mesma assimetria da pausa global, A31). Subir de degrau acrescenta um autor e **não altera nada à direita de `executeSendAttempt`** — portão, gate, cota, janela e lease são os mesmos em qualquer nível. É isso que permite descer de degrau sem reverter código | **§8.11.4** |
+| **A37** | 🆕 **Autonomia de público (N4) exige os seis guarda-corpos, nenhum opcional**: envelope declarado (fora dele a máquina RECUSA, não pede), orçamento diário de contatos frios independente da cota por número, janela de veto antes de disparar, uma só campanha autônoma em voo, exclusões duras não-configuráveis e **canal de alerta ligado** | **§8.11.4** |
+| **A38** | 🆕 **O modelo caro nunca vê dado de lead; vê agregado.** Redação de volume roda em modelo barato sobre os fatos de um lead; raciocínio de estratégia roda raramente sobre a tabela de desfecho anônima. Corta custo, latência e superfície LGPD na mesma decisão | **§8.11.6** |

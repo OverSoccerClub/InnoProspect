@@ -9,3 +9,4 @@
 - [Uso próprio (decisão travada)](decision_uso_proprio.md) — D3 encerrada e D9 aceita; o que "uso próprio" NÃO relaxa (LGPD, auth, anti-ban).
 - [Fase 4: campanhas e motor](decision_fase4_motor.md) — cadência é do número, lease sem status `sending`, incerto nunca retentado, alvos no POST.
 - [Onde o envio mora (4.F)](decision_onde_o_envio_mora.md) — `packages/sending`, HTTP entre apps descartado, motor nasce pausado, config de campanha só estreita.
+- [Fase 6: prospecção autônoma](decision_fase6_prospeccao_autonoma.md) — ângulo calculado vs. frase gerada, medir antes de gerar, escada N0-N4, e por que a IA não é o produto.
