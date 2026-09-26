@@ -1,31 +1,60 @@
-import { mulberry32 } from '@/lib/utils';
+import {
+  countSpintaxVariations,
+  extractKnownVariables as coreExtractKnownVariables,
+  extractVariableTokens,
+  hasSpintax as coreHasSpintax,
+  parseSpintax,
+  renderTemplate,
+  resolveSpintax,
+  SpintaxSyntaxError,
+  validateTemplateVariables,
+  type SpintaxParseErrorCode,
+  type TemplateVariableValues,
+} from '@inno/core';
+import { TEMPLATE_ALLOWED_VARIABLES, type TemplateVariable } from '@inno/contracts';
 
 /**
- * Parser de variáveis `{{var}}` e spintax `{opção a|opção b}` — só para o
- * preview ao vivo do editor de templates (ARQUITETURA.md §4.4/§6.4).
+ * lib/spintax.ts — camada de APRESENTAÇÃO do preview local do editor de
+ * templates (ARQUITETURA §4.4/§6.4/§4.9.4). A análise de sintaxe de verdade
+ * — o que decide se `{opção a|opção b}` é válido, se `{{...}}` é bloco
+ * opaco, e como sortear uma variação — é `@inno/core` (`templates/render.ts`
+ * + `templates/spintax.ts`), a MESMA engine que `lib/services/templates.ts`
+ * (POST /templates) e o motor de envio usam.
  *
- * NÃO é a fonte de verdade: quem valida e renderiza de verdade no envio é o
- * backend (`packages/core/templates/spintax.ts`, do Vega — `POST
- * /api/v1/templates` responde 422 UNKNOWN_VARIABLE/INVALID_SPINTAX). Este
- * módulo existe porque o preview precisa reagir a cada tecla digitada sem
- * round-trip de rede, e porque templates ainda não salvos (modo "novo
- * template") não têm `id` para chamar `POST /templates/:id/preview`. Mantém
- * a mesma sintaxe do contrato de propósito — se o backend mudar a
- * gramática, este arquivo precisa acompanhar.
+ * Antes deste arquivo tinha o SEU PRÓPRIO tokenizer, reimplementando a
+ * contagem de chaves `{`/`}` — e discordava do `@inno/core` bem no caso que
+ * mais importa: `{a|b {{nome}}}` (spintax com variável dentro de uma
+ * opção). O tokenizer daqui parava na primeira `}` de `{{nome}}` (a
+ * primeira das duas), via um `{` sobrando e recusava como "aninhado" —
+ * enquanto o motor de envio (`@inno/core`) sempre tratou `{{...}}` como
+ * bloco opaco e aceitava o texto sem problema. Resultado: o dono via
+ * "sintaxe inválida" na tela para um texto que seria enviado normalmente
+ * (e, no caminho inverso, o preview reconstruía as opções truncadas —
+ * "{a|b" — e escondia esse erro maior). Duas implementações do mesmo
+ * parser SEMPRE voltam a divergir no primeiro ajuste; a correção é ter uma
+ * só. Não recriar um segundo parser aqui, mesmo que pareça mais simples
+ * para um caso novo — estender `@inno/core` em vez disso.
+ *
+ * O que continua só aqui, de propósito (adaptação legítima, não duplicata):
+ *   - `KNOWN_VARIABLES`/`VARIABLE_LABEL`/`SAMPLE_VALUES`: rótulos e valores
+ *     de exemplo em PT-BR para a UI — não é regra de negócio.
+ *   - `checkSpintaxSyntax`: traduz o `SpintaxParseErrorCode` do core para
+ *     uma frase em português que o dono entende sem saber o que é "spintax
+ *     aninhado" — a REGRA (o que é válido) vem do core; só a REDAÇÃO da
+ *     mensagem é daqui.
+ *   - `variationRisk`, `renderSample(s)`: puramente de exibição (cor do
+ *     badge, gerar N amostras diferentes para "sentir" a variação).
+ *   - `renderWithSeed`: usado só pelo mock de dev (`mocks/leads.ts`, atrás
+ *     de `USE_MOCKS`) para simular o preview/envio reais sem round-trip —
+ *     mesmo pipeline do core (`renderTemplate` → `resolveSpintax`), só com
+ *     o fallback de "sem valor real, usa a amostra genérica" que o preview
+ *     do editor também quer (o backend de verdade não faz esse fallback —
+ *     ele avisa com `missingVariables` em vez de inventar um valor).
  */
 
-export const KNOWN_VARIABLES = [
-  'nome',
-  'primeiro_nome',
-  'cidade',
-  'uf',
-  'categoria',
-  'site',
-  'telefone',
-  'minha_empresa',
-] as const;
+export const KNOWN_VARIABLES = TEMPLATE_ALLOWED_VARIABLES;
 
-export type KnownVariable = (typeof KNOWN_VARIABLES)[number];
+export type KnownVariable = TemplateVariable;
 
 export const VARIABLE_LABEL: Record<KnownVariable, string> = {
   nome: 'Nome da empresa',
@@ -50,92 +79,69 @@ const SAMPLE_VALUES: Record<KnownVariable, string> = {
   minha_empresa: 'Sua Empresa',
 };
 
-function isKnownVariable(name: string): name is KnownVariable {
-  return (KNOWN_VARIABLES as readonly string[]).includes(name);
-}
-
-type Token =
-  | { type: 'text'; value: string }
-  | { type: 'variable'; name: string }
-  | { type: 'spintax'; options: string[] };
-
 export type SpintaxDiagnostic = { message: string };
 
+/** Tradução de `SpintaxParseErrorCode` (`@inno/core`) para uma frase que o dono entende, sem jargão de parser. */
+const SPINTAX_ERROR_MESSAGE: Record<SpintaxParseErrorCode, string> = {
+  NESTED_SPINTAX: 'Chaves de variação não podem ser aninhadas — use só um nível: {opção a|opção b}.',
+  UNCLOSED_BRACE: 'Uma chave de variação "{opção a|opção b}" não foi fechada.',
+  UNEXPECTED_CLOSING_BRACE: 'Há uma "}" sem uma "{" correspondente antes dela.',
+  EMPTY_OPTION: 'Uma opção de variação está vazia — revise o texto entre as barras "|".',
+};
+
 /**
- * Tokeniza em uma única passada — de propósito, em vez de duas regexes
- * independentes para variável e spintax, porque `{{nome}}` e `{opção}` usam
- * o mesmo caractere `{` e uma regex de spintax ingênua (`\{[^{}]+\}`)
- * confundiria o miolo de uma variável com um grupo de spintax.
+ * Posição de um `{{` sem `}}` de fechamento correspondente, ou `null` se
+ * não houver. Isto é sobre VARIÁVEL (`{{...}}`), não sobre spintax — por
+ * isso não usa `parseSpintax`: `@inno/core` trata `{{` sem fechamento como
+ * bloco opaco até o fim do texto (silencioso — pra ele, variável malformada
+ * só significa "não vai ser substituída", não é erro de sintaxe). Aqui
+ * vale bloquear ANTES de salvar, porque senão a chave crua ("Oi {{nome")
+ * vaza pro texto que sai pro WhatsApp. Checagem independente das chaves de
+ * spintax — não é uma segunda análise da MESMA coisa, é sobre outro padrão.
  */
-function tokenize(body: string): { tokens: Token[]; diagnostics: SpintaxDiagnostic[] } {
-  const tokens: Token[] = [];
-  const diagnostics: SpintaxDiagnostic[] = [];
+function findUnclosedVariableBrace(body: string): number | null {
   let i = 0;
-  let textBuf = '';
-
-  const flushText = () => {
-    if (textBuf) {
-      tokens.push({ type: 'text', value: textBuf });
-      textBuf = '';
-    }
-  };
-
   while (i < body.length) {
     if (body[i] === '{' && body[i + 1] === '{') {
-      const end = body.indexOf('}}', i + 2);
-      if (end === -1) {
-        diagnostics.push({ message: 'Uma variável "{{...}}" não foi fechada corretamente.' });
-        textBuf += body.slice(i);
-        break;
-      }
-      flushText();
-      tokens.push({ type: 'variable', name: body.slice(i + 2, end).trim() });
-      i = end + 2;
+      const close = body.indexOf('}}', i + 2);
+      if (close === -1) return i;
+      i = close + 2;
       continue;
     }
-
-    if (body[i] === '{') {
-      const end = body.indexOf('}', i + 1);
-      if (end === -1) {
-        diagnostics.push({ message: 'Uma chave de variação "{opção a|opção b}" não foi fechada.' });
-        textBuf += body.slice(i);
-        break;
-      }
-      const inner = body.slice(i + 1, end);
-      if (inner.includes('{')) {
-        diagnostics.push({
-          message: 'Chaves de variação não podem ser aninhadas — use só um nível: {opção a|opção b}.',
-        });
-      }
-      flushText();
-      tokens.push({ type: 'spintax', options: inner.split('|').map((s) => s.trim()) });
-      i = end + 1;
-      continue;
-    }
-
-    if (body[i] === '}') {
-      diagnostics.push({ message: 'Há uma "}" sem uma "{" correspondente antes dela.' });
-    }
-
-    textBuf += body[i];
     i++;
   }
-  flushText();
-  return { tokens, diagnostics };
+  return null;
 }
 
-/** Todas as variáveis `{{...}}` usadas no corpo, na ordem em que aparecem, sem repetição. */
-export function extractVariables(body: string): string[] {
-  const found: string[] = [];
-  for (const t of tokenize(body).tokens) {
-    if (t.type === 'variable' && !found.includes(t.name)) found.push(t.name);
+/** Diagnóstico de sintaxe (chaves desbalanceadas/aninhadas/vazias) — mesma regra de `@inno/core#parseSpintax`, mensagem em português. */
+export function checkSpintaxSyntax(body: string): SpintaxDiagnostic[] {
+  if (findUnclosedVariableBrace(body) !== null) {
+    return [{ message: 'Uma variável "{{...}}" não foi fechada corretamente.' }];
   }
-  return found;
+  const result = parseSpintax(body);
+  if (result.valid) return [];
+  return [{ message: SPINTAX_ERROR_MESSAGE[result.error.code] }];
+}
+
+/** `true` se o corpo tiver ao menos um bloco spintax válido. */
+export function hasSpintax(body: string): boolean {
+  return coreHasSpintax(body);
+}
+
+/** Combinações possíveis de texto — produto do nº de opções de cada grupo de spintax. */
+export function countVariations(body: string): number {
+  return countSpintaxVariations(body);
+}
+
+/** Todas as variáveis `{{...}}` usadas no corpo, na ordem em que aparecem, sem repetição (inclui desconhecidas). */
+export function extractVariables(body: string): string[] {
+  return extractVariableTokens(body);
 }
 
 /** Variáveis usadas que não estão na lista permitida pelo contrato (§4.4) — geram 422 UNKNOWN_VARIABLE no backend. */
 export function findUnknownVariables(body: string): string[] {
-  return extractVariables(body).filter((v) => !isKnownVariable(v));
+  const result = validateTemplateVariables(body);
+  return result.valid ? [] : result.unknownVariables;
 }
 
 /**
@@ -145,25 +151,7 @@ export function findUnknownVariables(body: string): string[] {
  * de `findUnknownVariables` já ter validado que não sobrou nenhuma desconhecida.
  */
 export function extractKnownVariables(body: string): KnownVariable[] {
-  return extractVariables(body).filter(isKnownVariable);
-}
-
-/** Diagnóstico de sintaxe de spintax (chaves desbalanceadas/aninhadas) — espelha o 422 INVALID_SPINTAX do backend. */
-export function checkSpintaxSyntax(body: string): SpintaxDiagnostic[] {
-  return tokenize(body).diagnostics;
-}
-
-export function hasSpintax(body: string): boolean {
-  return tokenize(body).tokens.some((t) => t.type === 'spintax');
-}
-
-/** Combinações possíveis de texto — produto do nº de opções de cada grupo de spintax. */
-export function countVariations(body: string): number {
-  let total = 1;
-  for (const t of tokenize(body).tokens) {
-    if (t.type === 'spintax') total *= Math.max(1, t.options.length);
-  }
-  return total;
+  return coreExtractKnownVariables(body);
 }
 
 export type VariationRisk = 'low' | 'medium' | 'good';
@@ -179,50 +167,46 @@ export function variationRisk(count: number): VariationRisk {
   return 'good';
 }
 
-/** Hash simples (djb2) para transformar um `spintaxSeed` string (ARQUITETURA §4.9.4) em seed numérico do mulberry32. */
-export function hashSeed(seed: string): number {
-  let hash = 5381;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash * 33) ^ seed.charCodeAt(i);
+/**
+ * `resolveSpintax` (`@inno/core`) LANÇA em sintaxe inválida — correto para o
+ * envio real (nunca deveria receber um template inválido, já bloqueado na
+ * criação por `checkSpintaxSyntax`/`422 INVALID_SPINTAX`). Mas o preview
+ * local roda a CADA TECLA, inclusive com o corpo num estado intermediário
+ * normal de digitação (ex.: `{opção a` — chave ainda não fechada). Deixar
+ * a exceção subir quebraria a tela no meio da digitação; aqui é só exibição,
+ * então em caso de sintaxe inválida cai para o texto com as variáveis já
+ * substituídas mas sem sortear a variação — melhor um preview "cru" e
+ * legível do que a tela inteira quebrando (mesmo espírito do tokenizer
+ * antigo, que também nunca lançava).
+ */
+function resolveSpintaxForPreview(rendered: string, seed: string): string {
+  try {
+    return resolveSpintax(rendered, { seed });
+  } catch (err) {
+    if (err instanceof SpintaxSyntaxError) return rendered;
+    throw err;
   }
-  return hash >>> 0;
 }
 
 /**
  * Como `renderSample`, mas com valores reais (do lead) em vez dos genéricos
- * de `SAMPLE_VALUES`, e com seed string (não numérico) — usado no compositor
- * de envio (ARQUITETURA §4.9.4: "o que eu vi no preview é o que sai"). Uma
- * variável sem valor real cai no genérico de exemplo (mantém o preview
- * legível); `missingKnownVariables` de quem chama é quem decide se avisa.
+ * de `SAMPLE_VALUES`, e com seed string (não numérico) — usado no mock de
+ * dev do compositor de envio (`mocks/leads.ts`, ARQUITETURA §4.9.4: "o que
+ * eu vi no preview é o que sai"). Mesmo pipeline do core (`renderTemplate`
+ * → `resolveSpintax`); a única adaptação é o fallback pro valor de exemplo
+ * quando falta o valor real (mantém o preview legível) — o backend de
+ * verdade não faz esse fallback, ele avisa via `missingVariables`.
  */
 export function renderWithSeed(body: string, spintaxSeed: string, values: Partial<Record<KnownVariable, string>>): string {
-  const random = mulberry32(hashSeed(spintaxSeed));
-  return tokenize(body)
-    .tokens.map((t) => {
-      if (t.type === 'text') return t.value;
-      if (t.type === 'variable') {
-        if (!isKnownVariable(t.name)) return `{{${t.name}}}`;
-        return values[t.name] ?? SAMPLE_VALUES[t.name];
-      }
-      const idx = Math.floor(random() * t.options.length);
-      return t.options[idx] ?? '';
-    })
-    .join('');
+  const merged: TemplateVariableValues = { ...SAMPLE_VALUES, ...values };
+  const rendered = renderTemplate(body, merged);
+  return resolveSpintaxForPreview(rendered, spintaxSeed);
 }
 
 /** Renderiza uma amostra: substitui variáveis por valores de exemplo e sorteia uma opção por grupo de spintax. */
 export function renderSample(body: string, seed: number): string {
-  const random = mulberry32(seed);
-  return tokenize(body)
-    .tokens.map((t) => {
-      if (t.type === 'text') return t.value;
-      if (t.type === 'variable') {
-        return isKnownVariable(t.name) ? SAMPLE_VALUES[t.name] : `{{${t.name}}}`;
-      }
-      const idx = Math.floor(random() * t.options.length);
-      return t.options[idx] ?? '';
-    })
-    .join('');
+  const rendered = renderTemplate(body, SAMPLE_VALUES);
+  return resolveSpintaxForPreview(rendered, String(seed));
 }
 
 /** Gera `count` amostras com seeds diferentes — para o preview mostrar a variação "de verdade", não só uma versão. */

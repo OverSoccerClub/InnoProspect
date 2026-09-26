@@ -11,9 +11,10 @@ export function cn(...inputs: ClassValue[]) {
 
 /**
  * Gerador determinístico simples (mesma seed = mesma sequência). Mora aqui
- * (não só em `mocks/utils.ts`) porque `lib/spintax.ts` também precisa dele
- * para sortear variações de preview sem depender da camada de mocks —
- * `mocks/utils.ts` reexporta a partir daqui para não duplicar.
+ * (não só em `mocks/utils.ts`) porque vários `mocks/*.ts` precisam dele para
+ * gerar dados fictícios estáveis — `mocks/utils.ts` reexporta a partir daqui
+ * para não duplicar. (`lib/spintax.ts` sorteia variação delegando a
+ * `@inno/core#resolveSpintax`, que tem seu próprio gerador — não usa este.)
  */
 export function mulberry32(seed: number) {
   let a = seed;
