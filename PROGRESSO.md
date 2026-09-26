@@ -222,7 +222,7 @@ existe hoje — não há freio nenhum no envio manual.
 Entrega valor mesmo se o motor nunca sair: montar público, ver as exclusões
 discriminadas por motivo, disparar com cadência.
 
-### Bloco 4 — O motor (4.F ✅ → 4.G → 4.H)
+### Bloco 4 — O motor (4.F ✅ → 4.G → 4.H ✅)
 **4.F está construída** (25/09, ver a seção do marco). Restam as duas pernas
 que não são código:
 - **4.G** — executar `ACEITE-FASE-4.md` com Evolution real e 2 números. Um dos
@@ -230,7 +230,30 @@ que não são código:
   execução). Dois itens exigem acesso a shell/rede: forçar timeout precisa de
   um proxy com atraso entre o worker e UMA instância de teste — o timeout do
   cliente HTTP é fixo no código, não há variável que o exponha.
-- **4.H** — revisão do Órion. Sem achado `high`/`critical` aberto.
+- ~~**4.H** — revisão do Órion.~~ **Fechada em 26/09: 0 `critical`, 0 `high`,
+  1 `medium`.** Veredito: *a Fase 4 pode ser liberada para disparar contra
+  leads reais.* O que ele confirmou por conta própria, e não por confiar no
+  relato: o portão único sem segunda implementação nem caminho de bypass; a
+  sequência protegida (opt-out → guard → write-ahead → `sendText`) com
+  **nenhum `await`** entre a leitura de opt-out e o guard; a constraint única
+  como garantia anti-duplicata, exercitada pelo único caminho de escrita; o
+  freio fail-closed com gate de papel real; nenhum segredo em log nos caminhos
+  novos; e o descadastro honrado em dupla camada (no `start` e em runtime).
+  Confirmou também que o conserto do `nextSendAllowedAt` (Fase 4.C)
+  sobreviveu à chegada do segundo escritor concorrente — exatamente o cenário
+  que ele havia previsto como crítico quando o motor existisse.
+
+  **O achado `medium`, com gatilho datado:** a checagem "este lead já
+  respondeu hoje?" (`webhook.ts#recordInstanceResponseIfFirstToday`) é um
+  read-then-write sem lock nem constraint, em Read Committed. Duas mensagens
+  do mesmo lead chegando quase juntas podem contar 2 em vez de 1. **Não
+  bloqueia o go-live**: hoje `respondedCount` só alimenta um card de tela, e
+  nenhuma decisão de negócio (guard, kill switch, warmup) o lê. **Mas precisa
+  ser consertado ANTES da heurística de taxa de resposta (§6.2, Fase 5/6)**,
+  que é justamente quem vai passar a ler esse número para decidir se uma
+  instância está saudável. Contador inflado ali degrada a decisão.
+  Receita já existe no mesmo arquivo: `registerOptOutFromInbound` resolve a
+  mesma classe de corrida com constraint única + captura de `P2002`.
 
 Só então a primeira campanha real, com **20-30 alvos em um número**, não 50 em
 dois.
