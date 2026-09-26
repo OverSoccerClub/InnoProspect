@@ -68,6 +68,10 @@ vi.mock('@/lib/services/evolution-servers', () => ({
   deactivateEvolutionServer: vi.fn(async () => undefined),
   testEvolutionServerConnection: vi.fn(async () => ({ ok: true, latencyMs: 42, checkedAt: 'x', error: null })),
 }));
+// 🆕 Fase 5.3 (LGPD executável) — `POST /api/v1/leads/:id/eliminate`.
+vi.mock('@/lib/services/leads', () => ({
+  eliminateLeadData: vi.fn(async () => ({ ok: true, leadId: 'lead-1', deletedMessages: 0, deletedActivities: 0, optOutId: null, optOutCreated: false })),
+}));
 vi.mock('@/lib/services/users', () => ({
   listUsers: vi.fn(async () => ({ data: [], page: { cursor: null, nextCursor: null, limit: 25, total: 0 } })),
   createUser: vi.fn(async () => ({ id: 'u1', email: 'novo@x.local', name: 'Novo', role: 'operator', isActive: true, createdAt: 'x', updatedAt: 'x' })),
@@ -253,6 +257,18 @@ describe('rotas admin-only — operador 403 / admin passa', () => {
     await expectAdminOnly(
       POST,
       () => jsonReq('https://x.local/api/v1/evolution-servers/s1/test-connection', 'POST'),
+      { id: 'ckzz1234567890abcdefghijk' },
+      200,
+    );
+  });
+
+  // 🆕 Fase 5.3 (ARQUITETURA §7.3/§7.4, LGPD executável) — irreversível,
+  // mesmo rigor de confirmação do `POST /dispatch/queue/resume` acima.
+  it('POST /api/v1/leads/:id/eliminate', async () => {
+    const { POST } = await import('./leads/[id]/eliminate/route');
+    await expectAdminOnly(
+      POST,
+      () => jsonReq('https://x.local/api/v1/leads/lead-1/eliminate', 'POST', { acknowledge: true }),
       { id: 'ckzz1234567890abcdefghijk' },
       200,
     );

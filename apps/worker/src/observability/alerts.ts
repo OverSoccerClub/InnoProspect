@@ -102,6 +102,29 @@ export type AlertEvent =
       failureRate: number;
       sampleSize: number;
       threshold: number;
+    }
+  // 🆕 Fase 5.3 (ARQUITETURA §7.5, `jobs/retention.job.ts`) — o job mais
+  // destrutivo do sistema ganha os únicos 2 alertas que fazem sentido para
+  // ele: o teto de segurança ultrapassado (crítico, dispara em QUALQUER modo
+  // — inclusive simulação, porque é exatamente ali que um predicado errado
+  // deveria ser pego antes de alguém ligar `RETENTION_DRY_RUN=false`) e o
+  // resumo de uma rodada que de fato apagou/redigiu algo (só em modo
+  // aplicado — ver `runRetention`, nunca dispara em simulação nem em rodada
+  // com zero candidatos, mesmo espírito de dedupe por TRANSIÇÃO já usado
+  // nos outros alertas deste arquivo).
+  | {
+      kind: 'retention_safety_cap_exceeded';
+      target: 'message_body_redaction' | 'lead_deletion';
+      /** "Pelo menos" quando o teto foi ultrapassado — ver comentário em `retention.job.ts#findExpiredLeadCandidates`. */
+      candidateCount: number;
+      cap: number;
+    }
+  | {
+      kind: 'retention_run_completed';
+      messagesRedacted: number;
+      leadsDeleted: number;
+      leadsWithoutInteraction: number;
+      leadsWithInteraction: number;
     };
 
 /** Timeout de rede para o POST do alerta — curto de propósito, ver regra 2 no cabeçalho. */
@@ -248,6 +271,28 @@ function buildPayload(event: AlertEvent, occurredAt: string): Record<string, unk
         failureRate: event.failureRate,
         sampleSize: event.sampleSize,
         threshold: event.threshold,
+        occurredAt,
+      };
+    }
+    case 'retention_safety_cap_exceeded': {
+      const label = event.target === 'message_body_redaction' ? 'redação de conteúdo de mensagens' : 'exclusão de leads';
+      return {
+        text: `🚨 InnoProspect — retention.job: TETO DE SEGURANÇA ultrapassado em ${label} (${event.candidateCount}+ candidatos, limite: ${event.cap}). NENHUM dado foi apagado/redigido nesta rodada — verifique o predicado do job antes de rodar de novo (inclusive se isto veio de uma simulação).`,
+        type: 'retention_safety_cap_exceeded',
+        target: event.target,
+        candidateCount: event.candidateCount,
+        cap: event.cap,
+        occurredAt,
+      };
+    }
+    case 'retention_run_completed': {
+      return {
+        text: `🗑️ InnoProspect — retention.job (LGPD) aplicou a retenção: ${event.leadsDeleted} lead(s) apagado(s) fisicamente (${event.leadsWithoutInteraction} sem interação, ${event.leadsWithInteraction} com interação) e ${event.messagesRedacted} mensagem(ns) com conteúdo redigido.`,
+        type: 'retention_run_completed',
+        messagesRedacted: event.messagesRedacted,
+        leadsDeleted: event.leadsDeleted,
+        leadsWithoutInteraction: event.leadsWithoutInteraction,
+        leadsWithInteraction: event.leadsWithInteraction,
         occurredAt,
       };
     }

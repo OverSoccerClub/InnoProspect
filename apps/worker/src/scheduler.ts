@@ -16,6 +16,7 @@ import { createScrapeSearchProcessor, type ScrapeSearchJobData } from './jobs/sc
 import { createDispatchTickProcessor, defaultDispatchTickDeps } from './jobs/dispatch-tick.job.js';
 import { createHealthCheckProcessor, defaultHealthCheckDeps } from './jobs/health-check.job.js';
 import { createWarmupRollProcessor, defaultWarmupRollDeps } from './jobs/warmup-roll.job.js';
+import { createRetentionProcessor, defaultRetentionDeps } from './jobs/retention.job.js';
 import { resolveHealthCheckConfig } from './lib/health-check-config.js';
 import { logger } from './observability/logger.js';
 import { sendAlert } from './observability/alerts.js';
@@ -34,7 +35,7 @@ export type WorkerHandles = {
   dispatchTickQueue: Queue;
   /** 🆕 Fase 4.F.4 — o motor de disparo em si (`dispatch-tick.job.ts`). */
   dispatchTickWorker: Worker;
-  /** 🆕 Fase 4.F.5 — fila única para os 2 periódicos (`warmup-roll`/`health-check`, ARQUITETURA §6.9), diferenciados por `job.name`. */
+  /** 🆕 Fase 4.F.5 (+ Fase 5.3) — fila única para os 3 periódicos (`warmup-roll`/`health-check`/`retention`, ARQUITETURA §6.9/§7.5), diferenciados por `job.name`. */
   maintenanceQueue: Queue;
   maintenanceWorker: Worker;
   close: () => Promise<void>;
@@ -157,16 +158,23 @@ export function startWorkers(): WorkerHandles {
   const healthCheckConfig = resolveHealthCheckConfig(process.env);
   const healthCheckDeps = defaultHealthCheckDeps(maintenanceQueue);
   const warmupRollDeps = defaultWarmupRollDeps();
+  // 🆕 Fase 5.3 (ARQUITETURA §7.5) — `retention.job` usa a config default
+  // (lida de `process.env` a cada rodada dentro de `runRetention`, não
+  // congelada aqui no boot) para que `RETENTION_DRY_RUN` possa ser alterado
+  // num redeploy sem precisar reagendar o cron.
+  const retentionDeps = defaultRetentionDeps();
   const processHealthCheck = createHealthCheckProcessor(healthCheckDeps);
   const processWarmupRoll = createWarmupRollProcessor(warmupRollDeps);
+  const processRetention = createRetentionProcessor(retentionDeps);
 
   const maintenanceWorker = new Worker(
     QUEUES.maintenance,
     async (job) => {
       if (job.name === 'health-check') return processHealthCheck(job);
       if (job.name === 'warmup-roll') return processWarmupRoll(job);
+      if (job.name === 'retention') return processRetention(job);
       // Não deveria acontecer — só nós agendamos nesta fila, e só com estes
-      // 2 nomes. Loga e ignora em vez de lançar (um job desconhecido nunca
+      // 3 nomes. Loga e ignora em vez de lançar (um job desconhecido nunca
       // deveria travar o worker inteiro).
       logger.error({ jobId: job.id, jobName: job.name }, 'maintenance: job com nome desconhecido — ignorado');
     },
@@ -197,9 +205,29 @@ export function startWorkers(): WorkerHandles {
       logger.error({ err }, 'falha ao agendar o job repetível warmup-roll — warmupDay não vai avançar');
     });
 
+  // 🆕 Fase 5.3 (ARQUITETURA §7.5) — `retention`: 1x/dia, ~00:30 (20min DEPOIS
+  // do warmup-roll, de propósito: os dois só leem/escrevem tabelas
+  // diferentes, então não há corrida real entre eles, mas espaçar o boot dos
+  // dois jobs mais pesados do dia evita competir por conexão de Postgres no
+  // mesmo segundo). `RETENTION_DRY_RUN` (default `true`, `retention-
+  // config.ts`) decide se esta rodada AGENDADA de fato apaga algo — o cron
+  // sempre roda, o efeito é que muda.
+  void maintenanceQueue
+    .upsertJobScheduler('retention-scheduler', { pattern: '30 0 * * *', tz: appTimezone }, { name: 'retention' })
+    .catch((err: unknown) => {
+      logger.error({ err }, 'falha ao agendar o job repetível retention — retenção LGPD (§7.5) não vai rodar automaticamente');
+    });
+
   logger.info(
-    { queue: QUEUES.maintenance, healthCheckIntervalMs: healthCheckConfig.intervalMs, warmupRollCron: '10 0 * * *', timezone: appTimezone },
-    'periódicos de manutenção agendados (warmup-roll + health-check, ARQUITETURA §6.9)',
+    {
+      queue: QUEUES.maintenance,
+      healthCheckIntervalMs: healthCheckConfig.intervalMs,
+      warmupRollCron: '10 0 * * *',
+      retentionCron: '30 0 * * *',
+      retentionDryRun: process.env.RETENTION_DRY_RUN !== 'false',
+      timezone: appTimezone,
+    },
+    'periódicos de manutenção agendados (warmup-roll + health-check + retention, ARQUITETURA §6.9/§7.5)',
   );
 
   return {

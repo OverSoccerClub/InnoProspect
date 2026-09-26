@@ -30,6 +30,15 @@
  * ESCOPO da chamada (contagem via `expectedCount`, teto de itens) recusa a
  * chamada toda.
  *
+ * `POST /leads/:id/eliminate` (2026-09-26, Fase 5.3 — LGPD executável):
+ * `eliminateLeadData` implementa a ação `delete_lead_data` do §7.4 —
+ * exclusão física de Lead/Message/LeadActivity (cascade real do schema),
+ * mantendo só o `OptOut` (chave por telefone). Ver o comentário completo no
+ * corpo da função, incluindo uma DIVERGÊNCIA encontrada contra o texto da
+ * ARQUITETURA (§7.4 fala em "hash do telefone"; o mecanismo real do §6.7 é
+ * comparação em texto PLANO) — reportada no handoff, não decidida em
+ * silêncio.
+ *
  * `GET /leads` (2026-09-23, achado do dono em produção — resultados fora do
  * nicho buscado, ex.: Magazine Luiza numa busca de "escritório de
  * arquitetura"): `listLeads` trocou paginação por CURSOR por paginação
@@ -49,6 +58,7 @@ import type {
   BulkLeadsBody,
   BulkLeadsResponse,
   BulkLeadsSkippedItem,
+  EliminateLeadDataResponse,
   ExportLeadsQuery,
   LeadDetail,
   LeadExportColumn,
@@ -688,4 +698,93 @@ export async function bulkUpdateLeads(body: BulkLeadsBody, actorUserId: string):
     skipped,
     summary: { requested: ids.length, updated: updatedIds.length, skipped: skipped.length },
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /api/v1/leads/:id/eliminate — 🆕 Fase 5.3 (ARQUITETURA §7.3/§7.4,
+// direito de Eliminação, ação `delete_lead_data`).
+//
+// Apaga `Lead` — o cascade REAL do schema (`Message.leadId`/
+// `LeadActivity.leadId`/`CampaignTarget.leadId`, todos `onDelete: Cascade`)
+// leva as três tabelas junto DENTRO do mesmo `DELETE`, sem transação manual.
+// `OptOut.leadId` é `onDelete: SetNull` — nunca cascateia, é o que sustenta
+// a garantia central deste bloco.
+//
+// ⚠️ DIVERGÊNCIA ENCONTRADA CONTRA A ARQUITETURA — reportada no handoff do
+// Vega, NÃO decidida em silêncio: §7.4 descreve a retenção mínima como
+// "mantém apenas o HASH do telefone no OptOut". O schema real
+// (`OptOut.phoneE164`, `packages/db/prisma/schema.prisma`) e o mecanismo que
+// ele sustenta (§6.7 item 1: "SELECT indexado por phoneE164... a cada
+// mensagem, sem cache") são de PROPÓSITO em texto PLANO — é uma comparação
+// EXATA contra o telefone de um lead recoletado no futuro. Se este código
+// gravasse um HASH em vez do `phoneE164` de verdade, o SELECT do guard de
+// envio (`evaluateSendGuard`) NUNCA baterIA contra essa linha, e a proteção
+// que este próprio parágrafo do §7.4 existe para garantir ("sem isso, uma
+// busca futura recoletaria a mesma empresa") deixaria de funcionar
+// silenciosamente — o oposto do que a eliminação pretende. Por isso este
+// código mantém `phoneE164` em TEXTO PLANO (o valor que já funciona,
+// coerente com o resto do sistema), e não introduz um hash que quebraria a
+// própria garantia que o texto da ARQUITETURA promete. Se o dono quiser
+// hash de verdade, é uma mudança bem maior (trocar a comparação do guard
+// para hash em TODO lugar) — fora do escopo desta rodada, decisão dele.
+export async function eliminateLeadData(id: string, actorUserId: string): Promise<EliminateLeadDataResponse> {
+  const lead = await prisma.lead.findUnique({ where: { id } });
+  if (!lead) notFound('Lead não encontrado.');
+
+  // Contadas ANTES da exclusão — depois do `delete` a linha (e o que o
+  // cascade levou) já não existe para contar. Só para o operador confirmar
+  // o tamanho do que foi apagado na resposta; não decide nada.
+  const [deletedMessages, deletedActivities] = await Promise.all([
+    prisma.message.count({ where: { leadId: id } }),
+    prisma.leadActivity.count({ where: { leadId: id } }),
+  ]);
+
+  let optOutId: string | null = null;
+  let optOutCreated = false;
+
+  await prisma.$transaction(async (tx) => {
+    // Sem telefone, não há chave para um OptOut (ARQUITETURA §6.7 item 2: a
+    // chave É o telefone) — nada a preservar por este canal. Documentado
+    // como limitação conhecida, não como bug: o mesmo já vale para
+    // `createOptOut`/opt-out manual hoje (nenhum dos dois cria OptOut sem
+    // telefone).
+    if (lead.phoneE164) {
+      const existing = await tx.optOut.findUnique({ where: { phoneE164: lead.phoneE164 } });
+      if (existing) {
+        // Já descadastrado por outro caminho (resposta "sair", link público,
+        // manual) — a linha já protege o telefone; não sobrescreve nada.
+        optOutId = existing.id;
+      } else {
+        const created = await tx.optOut.create({
+          data: {
+            phoneE164: lead.phoneE164,
+            source: 'request',
+            reason: 'Eliminação de dados solicitada pelo titular (LGPD, ARQUITETURA §7.3/§7.4) — retenção mínima do telefone para impedir recoleta futura da mesma empresa.',
+          },
+        });
+        optOutId = created.id;
+        optOutCreated = true;
+      }
+    }
+
+    // Cascade real do schema — Message/LeadActivity/CampaignTarget somem
+    // JUNTO deste `delete`, dentro da mesma transação/DELETE. `OptOut` (bloco
+    // acima) nunca é alcançado por este cascade (SetNull, não Cascade).
+    await tx.lead.delete({ where: { id } });
+  });
+
+  // Nunca loga `phoneE164` em texto plano (convenção deste arquivo/serviço —
+  // ver `optouts.ts`, que também nunca loga o telefone) — o id já é
+  // suficiente para auditoria/correlação sem espalhar o dado que está sendo
+  // eliminado por mais lugares do que precisa.
+  logger.info('lead eliminado por solicitação do titular (LGPD, ação delete_lead_data)', {
+    leadId: id,
+    actorUserId,
+    deletedMessages,
+    deletedActivities,
+    optOutId,
+    optOutCreated,
+  });
+
+  return { ok: true, leadId: id, deletedMessages, deletedActivities, optOutId, optOutCreated };
 }

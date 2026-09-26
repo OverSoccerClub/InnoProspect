@@ -269,6 +269,30 @@ export const patchLeadBodySchema = z
 export type PatchLeadBody = z.infer<typeof patchLeadBodySchema>;
 
 // ─────────────────────────────────────────────────────────────────────────
+// POST /api/v1/leads/:id/eliminate — 🆕 Fase 5.3 (ARQUITETURA §7.3/§7.4,
+// direito de Eliminação, ação `delete_lead_data`). Admin-only, irreversível
+// — mesmo rigor de confirmação do `POST /api/v1/dispatch/queue/resume`
+// (`{ acknowledge: true }` literal, não um booleano qualquer: a tela não
+// pode mandar `{ acknowledge: false }` "por engano" e passar validação).
+// ─────────────────────────────────────────────────────────────────────────
+
+export const eliminateLeadDataBodySchema = z.object({ acknowledge: z.literal(true) });
+export type EliminateLeadDataBody = z.infer<typeof eliminateLeadDataBodySchema>;
+
+export const eliminateLeadDataResponseSchema = z.object({
+  ok: z.literal(true),
+  leadId: idSchema,
+  /** Quantas linhas de `Message`/`LeadActivity` foram levadas pelo cascade da exclusão do Lead — só para o operador confirmar o tamanho do que foi apagado, a própria linha já se foi. */
+  deletedMessages: z.number().int().min(0),
+  deletedActivities: z.number().int().min(0),
+  /** `null` quando o lead nunca teve telefone — não há `OptOut` possível (chave é `phoneE164`, ARQUITETURA §6.7 item 2), e portanto nenhuma proteção contra recoleta futura por este canal (limitação conhecida, documentada no handoff). */
+  optOutId: idSchema.nullable(),
+  /** `true` só quando este pedido CRIOU o `OptOut` — `false` quando o telefone já estava descadastrado antes (ex.: resposta "sair" anterior) e a linha existente foi apenas preservada. */
+  optOutCreated: z.boolean(),
+});
+export type EliminateLeadDataResponse = z.infer<typeof eliminateLeadDataResponseSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────
 // POST /api/v1/leads/bulk
 //
 // 🆕 Revisão de 2026-09-22 (uso próprio, sem multi-cliente): o rascunho

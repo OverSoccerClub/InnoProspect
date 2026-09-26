@@ -52,7 +52,11 @@ export default defineConfig({
   // rodar na imagem final (CI e `HEALTHCHECK` do Dockerfile), que não tem
   // `pnpm`/`tsx`/`src/`. Ver o cabeçalho de `selftest.ts` para o que cada
   // modo verifica e por quê os dois custam diferente de propósito.
-  entry: ['src/index.ts', 'src/scripts/backfill-off-niche.ts', 'src/selftest.ts'],
+  // 🆕 Fase 5.3 (ARQUITETURA §7.5) — `run-retention.ts` segue a MESMA regra
+  // do `backfill-off-niche.ts`: execução manual do job mais destrutivo do
+  // sistema precisa rodar na imagem final (`node dist/scripts/
+  // run-retention.js`), sem `pnpm`/`tsx`/`src/`.
+  entry: ['src/index.ts', 'src/scripts/backfill-off-niche.ts', 'src/scripts/run-retention.ts', 'src/selftest.ts'],
   format: ['esm'],
   target: 'node20',
   clean: true,

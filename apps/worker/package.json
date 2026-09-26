@@ -8,6 +8,7 @@
     "build": "tsup",
     "start": "node dist/index.js",
     "backfill:off-niche": "tsx src/scripts/backfill-off-niche.ts",
+    "retention": "tsx src/scripts/run-retention.ts",
     "selftest": "tsx src/selftest.ts",
     "selftest:ping": "tsx src/selftest.ts --ping",
     "lint": "eslint . --config ../../eslint.config.js",

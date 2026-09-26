@@ -20,3 +20,4 @@ export * from './whatsapp/jitter.js';
 export * from './whatsapp/send-policy.js';
 export * from './whatsapp/instance-selection.js';
 export * from './time/local-date-key.js';
+export * from './time/months-ago.js';

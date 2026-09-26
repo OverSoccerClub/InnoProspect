@@ -1084,6 +1084,17 @@ model Message {
   deliveredAt DateTime?
   readAt      DateTime?
 
+  /// 🆕 Fase 5.3 (ARQUITETURA §7.5, `apps/worker/src/jobs/retention.job.ts`)
+  /// — retenção de CONTEÚDO: 12 meses após `createdAt`, o job sobrescreve
+  /// `body` (string vazia) e grava este timestamp. `null` = corpo original
+  /// intacto. NUNCA apaga a LINHA (diferente da retenção de `Lead`, que é
+  /// exclusão física) — direção/status/timestamps/instanceId continuam
+  /// intactos, é isso que sustenta "mantém metadados agregados" (contadores
+  /// e funil não perdem histórico, só a CONVERSA em si). Também é a chave de
+  /// IDEMPOTÊNCIA do job: a query de candidatos filtra `contentRedactedAt:
+  /// null`, então uma mensagem já redigida nunca é reprocessada/realertada.
+  contentRedactedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

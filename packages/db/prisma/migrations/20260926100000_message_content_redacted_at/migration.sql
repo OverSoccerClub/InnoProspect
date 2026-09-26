@@ -1,0 +1,43 @@
+-- InnoProspect — Fase 5.3 (ARQUITETURA §7.5, LGPD executável: retenção).
+--
+-- Sustenta a retenção de CONTEÚDO de `Message`: 12 meses após `createdAt`,
+-- `apps/worker/src/jobs/retention.job.ts` sobrescreve `body` (string vazia)
+-- e grava `contentRedactedAt`. É a chave de IDEMPOTÊNCIA do job (a query de
+-- candidatos filtra `contentRedactedAt IS NULL`) — sem esta coluna não há
+-- como distinguir "corpo já redigido" de "corpo vazio por algum outro
+-- motivo", e o job reprocessaria/realertaria a mesma mensagem para sempre.
+--
+-- ⚠️ 100% ADITIVA: uma única coluna NULLABLE, SEM DEFAULT, SEM índice
+-- (nenhuma query filtra por ELA sozinha — sempre em conjunto com `createdAt`,
+-- que já tem índice via `@@index([leadId, createdAt])`/`@@index([instanceId,
+-- createdAt])`; o scan de candidatos do retention.job roda 1x/dia, não é hot
+-- path). Em Postgres >= 11, `ADD COLUMN` nullable sem DEFAULT é operação de
+-- METADADO (lock ACCESS EXCLUSIVE de milissegundos, independente do volume
+-- da tabela — mesmo raciocínio já usado em `20260924100000_
+-- instance_status_checked_at`). Toda linha existente nasce com `NULL`
+-- ("nunca redigida") — comportamento seguro e correto: nenhuma mensagem já
+-- gravada foi de fato redigida por este código antes de hoje.
+--
+-- ⚠️ NÃO aplicada contra um Postgres real (mesma limitação de sempre nesta
+-- máquina de desenvolvimento — memória `innoprospect-bloqueio-docker`).
+-- Escrita à mão seguindo o mesmo padrão das migrações anteriores da mesma
+-- família — é o primeiro `migrate deploy` real quem prova que este SQL bate
+-- com o datamodel atual.
+--
+-- ⚠️ COORDENAÇÃO: há OUTRA sessão em paralelo (worktree separado) corrigindo
+-- uma corrida em `apps/web/src/lib/services/webhook.ts` que pode gerar sua
+-- própria migração no mesmo `schema.prisma`. Nome desta pasta é descritivo
+-- (`message_content_redacted_at`) para o Atlas resolver ordem/conflito de
+-- timestamp na hora de juntar os dois ramos, se necessário — mesma lição já
+-- registrada na memória do Vega sobre colisão de timestamp de migração.
+--
+-- ── ROLLBACK ────────────────────────────────────────────────────────────
+-- Reversível a qualquer momento (coluna solta, sem FK/índice novo):
+--   ALTER TABLE "messages" DROP COLUMN "contentRedactedAt";
+-- Perda de dado no rollback: só o timestamp de "quando foi redigida" — o
+-- CONTEÚDO em si já teria sido apagado pelo job antes disso (irreversível
+-- por desenho, é retenção), então o rollback desta coluna não devolve nada
+-- que já não estivesse perdido.
+
+-- AlterTable
+ALTER TABLE "messages" ADD COLUMN     "contentRedactedAt" TIMESTAMP(3);
