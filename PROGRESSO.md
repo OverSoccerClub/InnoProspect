@@ -96,6 +96,58 @@ Pendente de olho humano: a geometria do selo de frescor no card de instância
 (390px). Não medida em navegador — o token do harness de demonstração venceu e
 não há E2E no repositório.
 
+## Construído em 25/09/2026 — a Fase 4 fecha em código
+
+O motor de disparo existe. Em ordem, e a ordem foi deliberada:
+
+- **`@inno/sending`** — o caminho de envio saiu do `apps/web` para um pacote
+  que os dois processos importam. `grep` de `.sendText(` em todo o repositório
+  fora de teste: **uma** ocorrência. O invariante "nada entre a leitura de
+  opt-out e o guard" sobreviveu à mudança de casa — foi ele, aliás, que
+  definiu onde o pacote começa e termina.
+- **O freio, antes do acelerador.** Pausa global persistida, com semântica
+  **invertida de propósito**: ausência da chave = PAUSADO. Redis limpo,
+  deploy novo, restart — tudo devolve o sistema ao estado seguro, nunca ao
+  estado disparando.
+- **Quatro peças puras no core** (`resolveSendPolicy`, `localDateKey`,
+  `resolveCampaignWindow`, `pickInstanceWeighted`). A terceira implementa o
+  invariante **A32**: configuração de campanha só **estreita** limite de
+  segurança, nunca alarga. Três campos de campanha estavam gravados, exibidos
+  na tela e lidos por ninguém na hora de enviar — o motor é o primeiro
+  consumidor deles.
+- **O tick** — claim por lease com `SKIP LOCKED` (sem status `sending`),
+  write-ahead protegido pelo índice único que amarra a mensagem ao alvo,
+  tradução exaustiva **em tipo** do veredito do guard, halts e conclusão de
+  campanha.
+- **Os periódicos** — `warmup-roll` (sem ele o `warmupDay` nunca avança e todo
+  número fica preso em 20/dia para sempre), a fatia do `health-check` que
+  **para**, e o `regressWarmupDay`, escrito e **sem chamador desde a Fase 3**,
+  finalmente ligado.
+- **A tela do freio**, que a 4.F.3 prometia e não tinha entregue — o Atlas
+  aceitou aquela fase sem conferir esse pedaço, e a Íris achou auditando.
+
+**A decisão que mais importa, e o porquê dela:** timeout da Evolution não é
+falha, é *"pode ter chegado"*. Então o alvo vira falha **terminal** e nunca é
+retentado, e a cota **não** volta. Reagendar é a única forma de mandar a mesma
+abordagem duas vezes para a mesma pessoa; devolver cota que talvez saiu é
+furar o aquecimento sem ninguém ver. Como isso abre a porta para uma Evolution
+agonizante queimar cota às cegas, há um contador separado: 3 incertos seguidos
+tiram o número da rotação, 5 param a campanha.
+
+**Decisão de canal, do dono (25/09):** manter a Evolution (não-oficial) em vez
+de migrar para a API oficial. Consequência que precisa estar escrita: a API
+oficial exige opt-in do destinatário, e prospecção fria em número coletado do
+Maps é exatamente o que ela proíbe. Logo, **as mitigações deste motor
+substituem a proteção que a API oficial daria** — aquecimento, jitter,
+micro-pausa, janela, cooldown, descadastro e kill switch não são capricho de
+engenharia. Uma delas pela metade é o número do dono sendo banido.
+
+**O que os 862 testes NÃO provam** (auditoria da Íris, `ACEITE-FASE-4.md`):
+claim concorrente, a violação do índice único como garantia anti-duplicata e a
+atomicidade das transações estão provados **na forma**, contra banco falso.
+Nada rodou contra Postgres, Redis ou Evolution reais. O aceite de verdade é o
+roteiro daquele arquivo, executado com dois números.
+
 ## O que existe mas nunca foi exercitado de verdade
 
 - **Restore de backup.** Configurado, nunca restaurado.
@@ -104,10 +156,10 @@ não há E2E no repositório.
 
 ## O que não existe
 
-- **Fase 4 — campanhas e motor de disparo.** Contrato pronto
-  (`campaign.contract.ts`, 244 linhas) e `campaign-targets.ts` já em produção,
-  mas o schema de cadência (3 colunas em `WhatsAppInstance`, 2 em
-  `CampaignInstance`) e o motor não existem.
+- ~~Fase 4 — campanhas e motor de disparo.~~ **Construída em 25/09** (ver a
+  seção acima). O que continua não existindo dela: nada de código. O que falta
+  é **execução**: o aceite com Evolution real (`ACEITE-FASE-4.md`) e a revisão
+  do Órion (4.H).
 - **Alertas ligados.** `ALERT_WEBHOOK_URL` está vazia: o módulo de alerta está
   escrito e testado, e morto por falta de uma variável. Pior: `apps/web` não
   emite alerta nenhum — instância caindo, Evolution fora e campanha parada são
@@ -119,9 +171,15 @@ não há E2E no repositório.
 
 ## Riscos conhecidos, em ordem
 
-1. **Ninguém é avisado quando quebra.** Todo incidente desta semana foi
-   descoberto pelo dono olhando log ou tela. Isso é aceitável enquanto nada
-   age sozinho — e deixa de ser no minuto em que o motor de disparo existir.
+1. 🔴 **Ninguém é avisado quando quebra — e a condição que tornava isso
+   tolerável ACABOU.** Este item dizia, até 24/09, que o silêncio era
+   aceitável "enquanto nada age sozinho, e deixa de ser no minuto em que o
+   motor de disparo existir". O motor existe desde 25/09. O sistema agora
+   manda mensagem sozinho, degrada instância sozinho e **para campanha
+   sozinho** — e `ALERT_WEBHOOK_URL` continua vazia, então todos esses eventos
+   acontecem sem ninguém ficar sabendo. É a menor tarefa em aberto do projeto
+   e a de maior retorno; passou a ser o risco número um por mérito próprio,
+   não por falta de concorrência.
 2. **`RawCapture` acumula sem prazo.** O schema documenta um `retention.job`
    que nunca foi escrito. Recomendação da Nova: **dropar a tabela** (zero
    referências no código; ela foi desenhada para depurar exatamente a falha de
@@ -164,8 +222,18 @@ existe hoje — não há freio nenhum no envio manual.
 Entrega valor mesmo se o motor nunca sair: montar público, ver as exclusões
 discriminadas por motivo, disparar com cadência.
 
-### Bloco 4 — O motor (4.F → 4.G → 4.H)
-Primeira campanha real com **20-30 alvos em um número**, não 50 em dois.
+### Bloco 4 — O motor (4.F ✅ → 4.G → 4.H)
+**4.F está construída** (25/09, ver a seção do marco). Restam as duas pernas
+que não são código:
+- **4.G** — executar `ACEITE-FASE-4.md` com Evolution real e 2 números. Um dos
+  6 itens é 🔴 critério de bloqueio de release (opt-out honrado durante a
+  execução). Dois itens exigem acesso a shell/rede: forçar timeout precisa de
+  um proxy com atraso entre o worker e UMA instância de teste — o timeout do
+  cliente HTTP é fixo no código, não há variável que o exponha.
+- **4.H** — revisão do Órion. Sem achado `high`/`critical` aberto.
+
+Só então a primeira campanha real, com **20-30 alvos em um número**, não 50 em
+dois.
 
 ### Bloco 5 — Camada de tendência (Fase 5, `ARQUITETURA.md §8.9`)
 Ideia do dono (23/09): usar o Google Trends para escolher **em que UF**
