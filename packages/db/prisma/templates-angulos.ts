@@ -24,11 +24,20 @@
  * dele do lado — de propósito, porque decidir que dois textos são "a mesma
  * coisa" é julgamento seu, não de um `===`. Rode `list` antes e olhe.
  *
- * USO (dentro do container, a partir de packages/db):
- *   node ../../node_modules/.bin/tsx prisma/templates-angulos.ts list
- *   node ../../node_modules/.bin/tsx prisma/templates-angulos.ts dump   # textos COMPLETOS
- *   node ../../node_modules/.bin/tsx prisma/templates-angulos.ts        # plan (não escreve)
- *   node ../../node_modules/.bin/tsx prisma/templates-angulos.ts apply
+ * USO (dentro do container, working dir `/app`):
+ *   node node_modules/tsx/dist/cli.mjs packages/db/prisma/templates-angulos.ts list
+ *   node node_modules/tsx/dist/cli.mjs packages/db/prisma/templates-angulos.ts dump   # textos COMPLETOS
+ *   node node_modules/tsx/dist/cli.mjs packages/db/prisma/templates-angulos.ts        # plan (não escreve)
+ *   node node_modules/tsx/dist/cli.mjs packages/db/prisma/templates-angulos.ts apply
+ *
+ * ⚠️ NÃO use `node node_modules/.bin/tsx`: o `.bin/tsx` é um shell script
+ * wrapper, e o `node` tenta interpretá-lo como JavaScript — morre com
+ * `SyntaxError: missing ) after argument list` na primeira linha. O caminho
+ * abaixo aponta para o entry real (`dist/cli.mjs`). Está documentado no
+ * `DEPLOY.md §"Opção B"` desde sempre; o que estava errado eram os
+ * cabeçalhos destes scripts, que mandavam o caminho quebrado (corrigido em
+ * 2026-09-26, depois de o dono bater nisso ao rodar o dump de templates).
+
  *
  * SOBRE A COLUNA `angle`
  * Ela ainda NÃO existe (é migração da Fase 6.1, §8.11.5). O vínculo

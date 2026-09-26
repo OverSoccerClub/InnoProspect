@@ -13,9 +13,18 @@
  * existem. O efeito colateral é que, sem esta ferramenta, não dá para
  * distinguir "não rodei o seed" de "errei a senha".
  *
- * USO (dentro do container, a partir de packages/db):
- *   node ../../node_modules/.bin/tsx prisma/admin.ts list
- *   node ../../node_modules/.bin/tsx prisma/admin.ts set-password <email> [senha]
+ * USO (dentro do container, working dir `/app`):
+ *   node node_modules/tsx/dist/cli.mjs packages/db/prisma/admin.ts list
+ *   node node_modules/tsx/dist/cli.mjs packages/db/prisma/admin.ts set-password <email> [senha]
+ *
+ * ⚠️ NÃO use `node node_modules/.bin/tsx`: o `.bin/tsx` é um shell script
+ * wrapper, e o `node` tenta interpretá-lo como JavaScript — morre com
+ * `SyntaxError: missing ) after argument list` na primeira linha. O caminho
+ * abaixo aponta para o entry real (`dist/cli.mjs`). Está documentado no
+ * `DEPLOY.md §"Opção B"` desde sempre; o que estava errado eram os
+ * cabeçalhos destes scripts, que mandavam o caminho quebrado (corrigido em
+ * 2026-09-26, depois de o dono bater nisso ao rodar o dump de templates).
+
  *
  * Sem `senha`, gera uma forte e mostra UMA vez.
  */
@@ -38,7 +47,7 @@ async function list() {
   if (users.length === 0) {
     console.log('\n⚠ Nenhum usuário no banco.');
     console.log('  O seed provavelmente não rodou. Rode:');
-    console.log('    node ../../node_modules/.bin/tsx prisma/seed.ts\n');
+    console.log('    node node_modules/tsx/dist/cli.mjs packages/db/prisma/seed.ts\n');
     return;
   }
 
