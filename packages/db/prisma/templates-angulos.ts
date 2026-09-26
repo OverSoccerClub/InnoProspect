@@ -26,6 +26,7 @@
  *
  * USO (dentro do container, a partir de packages/db):
  *   node ../../node_modules/.bin/tsx prisma/templates-angulos.ts list
+ *   node ../../node_modules/.bin/tsx prisma/templates-angulos.ts dump   # textos COMPLETOS
  *   node ../../node_modules/.bin/tsx prisma/templates-angulos.ts        # plan (não escreve)
  *   node ../../node_modules/.bin/tsx prisma/templates-angulos.ts apply
  *
@@ -200,6 +201,43 @@ async function listar(): Promise<void> {
   }
 }
 
+/**
+ * Despeja o TEXTO COMPLETO de cada template, com delimitadores, para poder
+ * ser copiado inteiro e revisado fora do container.
+ *
+ * Por que existe separado de `list`: o `list` responde "o que eu tenho?" e
+ * cabe numa tela; este responde "o que está escrito?" e não cabe. Misturar
+ * os dois faria a listagem virar um muro de texto justamente quando ela
+ * serve para bater o olho.
+ *
+ * ⚠️ A saída contém o texto das mensagens que você envia — não é segredo,
+ * mas é conteúdo seu. Ela NÃO contém credencial nenhuma.
+ */
+async function despejar(): Promise<void> {
+  const existentes = await prisma.messageTemplate.findMany({
+    orderBy: { name: 'asc' },
+    select: { name: true, body: true, isActive: true, variablesUsed: true },
+  });
+
+  if (existentes.length === 0) {
+    console.log('Nenhum template no banco.');
+    return;
+  }
+
+  console.log(`# ${existentes.length} template(s)
+`);
+  for (const t of existentes) {
+    console.log('='.repeat(72));
+    console.log(`NOME:      ${t.name}`);
+    console.log(`ATIVO:     ${t.isActive ? 'sim' : 'não'}`);
+    console.log(`VARIÁVEIS: ${t.variablesUsed.join(', ') || '(nenhuma)'}`);
+    console.log('-'.repeat(72));
+    console.log(t.body);
+    console.log('');
+  }
+  console.log('='.repeat(72));
+}
+
 async function planejarOuAplicar(aplicar: boolean): Promise<void> {
   for (const t of TEMPLATES) conferirOuExplodir(t);
 
@@ -264,6 +302,9 @@ async function main(): Promise<void> {
     case 'list':
       await listar();
       return;
+    case 'dump':
+      await despejar();
+      return;
     case 'plan':
       await planejarOuAplicar(false);
       return;
@@ -271,7 +312,7 @@ async function main(): Promise<void> {
       await planejarOuAplicar(true);
       return;
     default:
-      console.error(`Comando desconhecido: "${comando}". Use: list | plan | apply`);
+      console.error(`Comando desconhecido: "${comando}". Use: list | dump | plan | apply`);
       process.exitCode = 1;
   }
 }
