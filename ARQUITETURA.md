@@ -1,8 +1,32 @@
 # InnoProspect — Documento de Arquitetura
 
-> Versão 1.4 · Autora: Nova (arquitetura) · Data: 2026-09-26 (v1.3: 2026-09-24 · v1.2: 2026-09-22 · v1.1: 2026-08-03 · v1.0: 2026-07-30)
+> Versão 1.5 · Autora: Nova (arquitetura) · Data: 2026-09-26 (v1.4: 2026-09-26 · v1.3: 2026-09-24 · v1.2: 2026-09-22 · v1.1: 2026-08-03 · v1.0: 2026-07-30)
 > Status: **fechado para implementação** nas partes marcadas como CONTRATO.
 > Alterações em seções CONTRATO exigem aviso ao Atlas antes de codificar (Vega/Lyra dependem delas).
+
+### O que mudou na v1.5 — "o laço de cinco etapas: classificar quem, e depois ler o que voltou"
+
+O dono descreveu o fluxo que quer (busca → classifica os mais promissores → campanha para eles →
+filtra quem tem interesse → continuar ou não). O Atlas apontou que ele parava cedo demais, o dono
+concordou, e o escopo aprovado ficou com **cinco etapas**. Esta revisão **estende a §8.11** (v1.4)
+com as três etapas novas — ②, ③ e ④. Nada da v1.4 é revogado.
+
+| # | Mudança | Seção | Tipo |
+|---|---|---|---|
+| 1 | **Classificar os leads não é refinamento: é a consequência da cota.** Um número no dia 1 faz 20 mensagens/dia — com 200 alvos são dez dias úteis. Quando só dá para falar com 20 pessoas hoje, **quem** se escolhe é o jogo inteiro | **§8.11.11, §8.11.12 (novas)** | 🔒 CONTRATO novo |
+| 2 | 🔒 **O ranking é a HIPÓTESE; a resposta é a EVIDÊNCIA.** Tudo que coletamos mede **encaixe**, nada mede **intenção** — uma clínica 4.8 sem site pode ter decidido não ter site | **§8.11.11** | enquadramento travado |
+| 3 | **Elegibilidade corta antes, score ordena depois** (A39). O que o portão recusa terminalmente (G4 → `LEAD_NOT_MOBILE` → `skipped/landline`) não deveria ter entrado no recorte | **§8.11.12** | 🔒 decisão travada |
+| 4 | **Score explicável por componente, com perfil de pesos imutável e versionado** (A40) — "sem site +30 · nota 4.8 +15" e não "55". O dono precisa poder **discordar ajustando os pesos** | **§8.11.12.1** | 🔒 CONTRATO novo |
+| 5 | 🔴 **Campanhas separadas por ângulo NÃO rodam em paralelo — serializam** (A48). O motor itera `campaign.findMany({ orderBy: startedAt asc })` sobre uma cota que é **do número**: a mais antiga consome o dia inteiro, e a comparação entre ângulos vira comparação entre semanas | **§8.11.13 (nova)** | achado no código |
+| 6 | **Ler e classificar a RESPOSTA** — a etapa que faltava, e o uso de IA mais seguro do sistema: o modelo **lê** em vez de escrever, não inventa fato sobre o negócio de ninguém e **nunca chega no celular de ninguém** | **§8.11.14 (nova)** | 🔒 CONTRATO novo |
+| 7 | 🔴 **`discarded` é irreversível** (`checkStatusTransition`: "não é possível sair de 'discarded'", para qualquer ator). Logo **nada descarta lead sozinho**: classificar é automático, mover o funil não é (A44) | **§8.11.14.1** | achado no código |
+| 8 | **Dois vieses de seleção, não um** (A47): explorar **público** (o score prevê resposta?) e explorar **ângulo** (qual mensagem converte?) são fatias disjuntas, com perguntas diferentes e marcas diferentes | **§8.11.15 (nova)** | 🔒 decisão travada |
+| 9 | **A escada ganha o degrau N4a — "monta e não dispara"**. Decisão do dono: classificar e montar são automáticos, **apertar o disparo continua humano**, até a medição mostrar que a autonomia foi conquistada | **§8.11.13, §8.11.4** | 🔒 escada revisada |
+| 10 | **LGPD: classificar resposta é transmitir texto escrito por um terceiro.** Diferente de mandar `rating`/`categoria`. Começa **sem modelo** (regra pura); se ligar, sai minimizado e sem identidade (A46) | **§8.11.14.4** | avaliação + recomendação |
+
+**A regra que esta revisão acrescenta:** *capacidade escassa transforma priorização em arquitetura.*
+Enquanto a cota couber no público, ordenar é enfeite; a partir do momento em que não cabe — e ela
+nunca vai caber, porque a escassez é anti-ban — **a ordem da fila é o produto**.
 
 ### O que mudou na v1.4 — "medir antes de gerar, e autonomia como escada com guarda-corpo"
 
@@ -3273,7 +3297,7 @@ Quem desenhar para bandit contínuo aqui está dimensionando para um sistema que
 
 | Peça | Mora em | Existe hoje? | Natureza |
 |---|---|---|---|
-| Segmentação (filtro de público) | `leadFilterSchema` + `POST /campaigns` | **Sim** (falta `minReviewCount`) | reuso |
+| Segmentação (filtro de público) | `leadFilterSchema` + `POST /campaigns` | **Sim** (falta `minReviewCount`) | reuso — ⚠️ **detalhada e substituída na §8.11.11**: esta linha descreve o *universo*, não o *recorte* |
 | **Cálculo do ângulo** | `packages/core/src/approach/angles.ts` | Não | **função pura, testável sem rede** |
 | Biblioteca de ângulos (texto base por ângulo) | `MessageTemplate` + coluna `angle` | Parcial | dado, não código |
 | **Redação** (opcional, por cima do ângulo) | `packages/ai` (porta + adaptador) | Não | I/O externo, **substituível por no-op** |
@@ -3424,6 +3448,11 @@ model ApproachOutcome {
 enum ApproachSource { template  ai  manual }
 ```
 
+> ⚠️ **v1.5 — este model ganha cinco campos**, e eles precisam entrar na **mesma migração** (não
+> adianta gravar desfecho sem saber com que score e com que fatia o alvo entrou): `replyCategory`,
+> `replyClassifiedBy`, `score`, `scoringProfileId`, `exploreKind`. Contrato e porquês na §8.11.14.3 e
+> na §8.11.15.
+
 **Decisões de desenho, com o porquê de cada uma:**
 
 | Decisão | Por quê |
@@ -3498,7 +3527,13 @@ código a reverter.
 | **N3** — escolha por desempenho | Máquina escolhe **qual ângulo** usar por alvo, dentro de um público que o humano montou | Só ângulos já aprovados em N2; **piso de amostra** por ângulo antes de considerar qualquer um vencedor; **fração mínima de exploração** (senão o laço congela no primeiro ângulo que teve sorte); sem dado suficiente → **rodízio uniforme**, nunca "o melhor até agora" | O sistema passa a reforçar o próprio viés. O piso e a exploração são o antídoto |
 | **N4** — público autônomo | Máquina **monta o público e agenda** a campanha; humano tem veto | Ver os seis abaixo — todos, não "os principais" | É o degrau que pode custar o número em escala. O modelo de segurança inteiro foi desenhado supondo humano no público |
 
-**Os seis guarda-corpos de N4 (nenhum é opcional):**
+> ⚠️ **Revisado na v1.5 (§8.11.13):** o N4 desta tabela foi **partido em dois** — **N4a**, a máquina
+> monta o público e a campanha nasce `draft` (humano aperta o disparo), e **N4b**, a máquina monta
+> **e** dispara com janela de veto. Os seis guarda-corpos abaixo (A37) passam a se referir ao
+> **N4b**; o N4a exige três deles (envelope, exclusões duras e teto de rascunhos não revisados).
+> **Decisão do dono: para em N4a** — classificar e montar são automáticos, apertar o botão não.
+
+**Os seis guarda-corpos de N4b (nenhum é opcional):**
 
 1. **Envelope declarado pelo humano**, persistido: UFs permitidas, categorias permitidas, tamanho
    máximo de campanha, nº máximo de campanhas por dia. **Fora do envelope a máquina recusa, não
@@ -3632,6 +3667,10 @@ que um café em qualquer modelo. A variável é **risco de alucinação e capaci
 
 #### 8.11.7 Plano faseado — na ordem que entrega valor cedo
 
+> ⚠️ **Revisado na v1.5:** a tabela abaixo continua valendo, mas **ganhou duas fases** (6.1R e 6.2R)
+> e duas mudaram de escopo (6.1 absorve o score; 6.5 vira 6.5a/6.5b). A versão vigente do plano está
+> na **§8.11.16** — é a que Cronos e Vega devem seguir.
+
 A §8.10 recomendava começar pelo assistente na ficha do lead. **Depois de ver o pedido de autonomia,
 discordo da ordem, não da ideia.** O assistente continua sendo o primeiro uso de IA; mas a primeira
 coisa que o dono consegue **usar** não é IA nenhuma — é saber o que já está acontecendo, e mandar a
@@ -3692,6 +3731,10 @@ Cinco partes do pedido caem exatamente nessa armadilha:
 | R-IA-6 | **N4 queima a base** sem disparar nenhum limite de anti-ban | baixa, **alta se N4 chegar cedo** | 🔴 ativo destruído, e silenciosamente | Orçamento diário de contatos frios (teto de dono diferente da cota por número) |
 | R-IA-7 | Provedor fora do ar / chave vencida / teto estourado | média | campanha travada | IA é conselho (§8.10): cai no texto base do ângulo, grava `source='template'`, contador visível |
 
+**Continua na §8.11.16** com os riscos R-IA-8 a R-IA-13, que vêm das etapas ②, ③ e ④ (profecia
+auto-realizável do ranking, texto de terceiro saindo da infra, descarte irreversível, recorte maior
+que a cota, campanhas por ângulo serializando e resposta sumindo em silêncio).
+
 ---
 
 #### 8.11.10 Decisões que dependem do dono
@@ -3705,6 +3748,696 @@ Cinco partes do pedido caem exatamente nessa armadilha:
 | D-IA-5 | **Teto de gasto mensal com IA** | Tecnicamente irrelevante (unidades de dólares); serve como freio de sanidade contra laço acidental |
 | D-IA-6 | **`ApproachOutcome` sobrevive a um pedido de eliminação LGPD?** Minha leitura: **sim** — não guarda telefone, nome nem `leadId` após o `SetNull` | Há um resíduo teórico (cidade + categoria + bucket pode ser raro em município pequeno). Avalio o risco como baixo e o benefício como estrutural, mas quem assume é o controlador |
 | D-IA-7 | **`offNiche` sai das campanhas frias, ou só da geração?** Recomendo sair das campanhas | Colide com a decisão travada "marcar, nunca descartar" — que era sobre **coleta e listagem**. Estender para "não abordar" é decisão nova, dele |
+| **D-IA-8** 🆕 | **Os pesos do score v1** (tabela da §8.11.12.1). Proponho `no_website +30`, `reputation +15`, `high_volume +10`, `fresh_data +10`, `niche_match +10`, `has_traction +5`, `never_contacted +10`, `stale_data −10`, `off_niche −25`, `no_rating −5` | A **existência** dos componentes é arquitetura; o **valor** de cada um é julgamento comercial de quem vende. Meus números são chute honesto e explícito, feitos para serem discordados — é para isso que o perfil é versionado |
+| **D-IA-9** 🆕 | **O modo e o tamanho do recorte padrão.** Proponho `capacity` com **5 dias úteis** | É a pergunta "quantos leads eu quero olhar por semana?", e só ele sabe. 5 dias é o horizonte em que ainda dá para ler as respostas que voltam antes de montar a próxima |
+| **D-IA-10** 🆕 | **Classificar resposta com modelo externo — sim ou não?** Recomendo **decidir depois**, com o número de `needs_human` da fase 6.1R na mão | É materialmente diferente de D-IA-1: ali sai dado comercial público; aqui sai **texto escrito por uma pessoa**, que pode conter qualquer coisa. Decisão do controlador, e só vale a pena se a triagem manual estiver de fato doendo (§8.11.14.4) |
+| **D-IA-11** 🆕 | **Parar em N4a (monta e não dispara) ou seguir para N4b?** Ele já decidiu N4a; isto é só a confirmação de que N4b continua fora até a medição justificar | Já tomada por ele e honrada no desenho. Registrada aqui porque N4b muda a natureza do sistema e não deve entrar por inércia (§8.11.13) |
+| **D-IA-12** 🆕 | **Aceita gastar ~10% da cota com leads que o score reprovou** (exploração de público)? | É cota escassa gasta de propósito em quem achamos pior. Se ele recusar, a consequência fica registrada: o score v1 vira opinião permanente e a v2 não tem como nascer (§8.11.15) |
+| **D-IA-13** 🆕 | **As categorias de desfecho da etapa ④** — a lista da §8.11.14.1 é partida, não chegada | O vocabulário é aberto justamente porque a lista certa aparece depois de ele ler cem respostas reais. O que é arquitetura é o mapeamento para o funil (A44), não os nomes |
+| **D-IA-14** 🆕 | **Lead com resposta `not_interested`/`wrong_person` sai das campanhas frias seguintes?** Recomendo **sim**, como exclusão (`negativeReply`), não como penalidade de score | É primo de D-IA-7 e da mesma família: "marcar, nunca descartar" foi decidido para coleta e listagem. Insistir com quem já disse não é onde o risco de denúncia mora, mas quem assume é ele |
+
+---
+
+#### 8.11.11 🆕 v1.5 — O fluxo de cinco etapas: o enquadramento que muda o resto
+
+**Origem:** o dono descreveu o fluxo que quer, com as palavras dele — *"um sistema que faz a busca por
+determinado nicho, classifica automaticamente os mais promissores leads, selecionando os melhores, e
+depois faz uma campanha especificamente voltada para eles, (…) para filtrar quem realmente tem
+interesse, para darmos continuidade ou não com esses leads"*. O Atlas apontou que o fluxo parava cedo
+demais e o dono concordou. O escopo aprovado tem **cinco** etapas:
+
+```
+① busca  →  ② CLASSIFICAÇÃO  →  ③ CAMPANHA montada para o recorte
+                                    →  ④ RESPOSTA lida e classificada  →  ⑤ continuar ou não
+```
+
+As etapas ②, ③ e ④ são novas. A ④ é a que fecha o laço: sem ela, o sistema automatiza o trabalho
+**barato** (mandar) e devolve o **caro** (ler e decidir) na mão do dono, exatamente onde o volume dói.
+
+**Três teses que este desenho precisa honrar — elas não são preâmbulo, são o que decide os
+contratos abaixo.**
+
+**1. Ranquear não é refinamento; é obrigatório, e o motivo é a cota.** A `WARMUP_TABLE`
+(`packages/core/src/whatsapp/warmup.ts`, lida em produção) dá **20 mensagens/dia** a um número no dia
+1, 40 no dia 3, 70 no dia 5 — 300 só a partir do dia 22. Com um número novo, uma campanha de 200
+alvos leva **dez dias úteis**. Quando só dá para falar com 20 pessoas hoje, **quem** se escolhe é o
+jogo inteiro. A classificação não existe para "melhorar a conversão": existe porque **a capacidade é
+escassa por desenho** — e a escassez é anti-ban, ou seja, não vai embora comprando servidor.
+
+**2. A pontuação mede ENCAIXE, não INTENÇÃO.** Tudo que coletamos (§8.11.2) diz *"este negócio
+parece precisar do que você vende"*. **Nada** do que coletamos diz que ele tem orçamento, prioridade
+ou vontade agora. Uma clínica 4.8 sem site pode ter **decidido** não ter site. Por isso, escrito com
+estas palavras e repetido na tela:
+
+> 🔒 **O ranking é a HIPÓTESE. A resposta é a EVIDÊNCIA.**
+> A etapa ② ordena palpites; só a etapa ④ produz fato. Chamar o topo da lista de "os melhores leads"
+> antes de qualquer resposta é prometer o que o dado não sustenta — e é assim que um ranking
+> plausível vira crença imune a correção.
+
+**3. Classificar a RESPOSTA é o uso de IA mais seguro e mais valioso deste sistema.** Comparado a
+gerar a abordagem, a diferença não é de grau:
+
+| | IA que **escreve** (§8.11.2, N1-N2) | IA que **lê** (etapa ④) |
+|---|---|---|
+| O que ela faz | produz afirmação sobre o negócio de um terceiro | interpreta uma frase que o terceiro escreveu |
+| Pode inventar fato? | sim — é o risco R-IA-1, e toda a §8.11.2 existe para contê-lo | **não há fato a inventar**: a entrada é o texto, a saída é uma categoria de lista fechada |
+| Chega no celular de alguém? | **sim** | **nunca** — a saída não é enviada a ninguém |
+| Erro custa o quê? | credibilidade na primeira frase, denúncia, ban | um item classificado errado numa caixa que o humano revisa |
+| Responde a pergunta do dono? | indiretamente | **diretamente**: "continuar ou não com esse lead" |
+
+Se houvesse **um só** lugar para colocar IA neste produto, seria este. É por isso que a etapa ④ ganha
+contrato próprio (§8.11.14) e entra no plano **antes** do assistente de redação em lote.
+
+**Atualização da tabela de peças da §8.11.1** — a linha "Segmentação (filtro de público) · reuso"
+estava incompleta: ela descreve o **universo**, não o **recorte**. Substituir por:
+
+| Peça | Mora em | Existe hoje? | Natureza |
+|---|---|---|---|
+| Filtro do universo (nicho, cidade, UF) | `leadFilterSchema` + `POST /campaigns` | **Sim** (falta `minReviewCount`) | reuso |
+| **Elegibilidade** (6 exclusões + contagem por motivo) | `campaigns.ts#classifyAudience` | **Sim, e já devolve os números** | reuso — **nada de score aqui** (A39) |
+| **Pontuação e recorte** | `packages/core/src/approach/score.ts` (puro) | Não | função pura, mesma passagem do ângulo (A42) |
+| Perfil de pesos versionado | `ScoringProfile` (Postgres) | Não | dado, não código |
+| Ordem de envio dentro do recorte | materialização em `campaigns.ts` | Parcial (`scheduledFor`) | regra pura (A48) |
+| **Triagem da resposta por regra** | `packages/core/src/inbox/classify.ts` (puro) | Parcial (só `detectOptOut`) | função pura |
+| **Classificação assistida da resposta** | `packages/ai` + job `classify-reply` | Não | I/O externo, **substituível por no-op** (A45) |
+| Caixa de entrada / decisão de funil | `apps/web` (tela) + `PATCH /leads/:id` | Parcial | **humano decide** (A44) |
+
+---
+
+#### 8.11.12 🔒 Etapa ② — classificação e recorte (CONTRATO — Cronos e Vega implementam)
+
+**O que já existe e não será reescrito.** `classifyAudience` (`apps/web/src/lib/services/campaigns.ts`)
+já retira do público, **em ordem e contando cada lead em um motivo só**: sem telefone, `phoneType !==
+'mobile'`, opt-out, telefone duplicado, contatado nos últimos N dias, e pendente em outra campanha não
+terminal. E já devolve `audience.excluded` com os seis contadores, de modo que
+`totalMatched = eligible + Σ excluded`. **Isto é elegibilidade, e está certo.**
+
+**O que muda é a ORDEM, e é aqui que mora o erro caro.**
+
+> 🔒 **A39 — elegibilidade corta antes; o score só ordena depois, e nunca exclui.**
+> Ranquear o universo e depois cortar os 200 melhores entrega um recorte que a elegibilidade
+> esvazia: sobram 120, e — pior que o número — **os 80 que faltam não são substituídos pelos 201º a
+> 280º**, que eram elegíveis e ficaram de fora. O portão de envio confirma o motivo: G4
+> (`send-guard.ts`, `phone.type !== 'mobile'` → `LEAD_NOT_MOBILE`) manda o alvo para
+> `skipped/landline`, que é **terminal** (§6.8.5). **Regra geral: o que o portão vai recusar
+> terminalmente não deveria ter entrado no recorte.** Celular, opt-out e contato recente são
+> **elegibilidade**; nota, avaliações e ausência de site são **ranking**. Nenhum critério de
+> elegibilidade vale pontos, e nenhum ponto vira exclusão.
+
+Pipeline da montagem, na ordem exata:
+
+```
+filtro (universo)  →  classifyAudience (elegibilidade, já existe)
+                   →  scoreAndAngle (puro, uma passagem)      ← NOVO
+                   →  recorte (quantos cabem)                  ← NOVO
+                   →  ordem de envio (intercalada por ângulo)  ← NOVO (A48)
+                   →  materialização dos alvos (já existe, A27)
+```
+
+**Uma nova exclusão, vinda da etapa ④:** `negativeReply` — lead cuja última resposta foi classificada
+`not_interested` ou `wrong_person`. É consulta, **não coluna nova no `Lead`** (o dado já está em
+`ReplyClassification`, §8.11.14), e entra como sétimo motivo em `campaignAudienceExcludedSchema`.
+Motivo de ser exclusão e não penalidade de score: quem já disse "não" e continua na lista é o caso em
+que insistir custa denúncia, e penalidade só empurra para baixo — não impede.
+
+##### 8.11.12.1 A pontuação: explicável por componente, ou não é pontuação
+
+> 🔒 **A40 — score sem decomposição não existe.** Todo score persistido guarda os **componentes que o
+> formaram** e o **`scoringProfileId`** que os pesou. A tela mostra "sem site +30 · nota 4.8 e 180
+> avaliações +15 · dado fresco +10 = 55", nunca "55". Dois motivos, e o segundo é o que decide: o dono
+> precisa **confiar** ("por que este e não aquele?") e precisa poder **discordar ajustando os pesos**,
+> em vez de brigar com a máquina. Um número opaco não admite discordância — só obediência ou rejeição.
+
+```ts
+// packages/core/src/approach/score.ts — puro, sem I/O, testável com fixture
+export type ScoreComponent = { key: string; label: string; points: number };
+export type LeadScore = {
+  score: number;                 // 0..100, clamp
+  components: ScoreComponent[];  // Σ points (antes do clamp) === rawScore
+  rawScore: number;
+};
+export type ScoredLead = LeadScore & { angle: ApproachAngle; citableFacts: ApproachFact[] };
+
+/** ÚNICA passagem: ângulo, fatos citáveis e score saem juntos (A42). */
+export function scoreAndAngle(lead: ScorableLead, weights: ScoringWeights, now: Date): ScoredLead;
+```
+
+> 🔒 **A42 — ângulo e score saem da MESMA passagem.** Um lead bem pontuado *porque* tem nota alta e
+> não tem site **é** o `reputation_no_website` do catálogo da §8.11.2. Calcular os dois em funções
+> separadas garante duas coisas: que eles divergem (o topo do ranking recebendo o ângulo `generic`) e
+> que alguém escreve o mesmo predicado duas vezes. Este projeto já pagou esse padrão quatro vezes — a
+> última, três cópias manuais da chave do dia civil. **Uma função, uma entrada, dois campos na saída.**
+
+**Catálogo de componentes v1** (os pesos são chute honesto e são do dono — D-IA-8; a **existência** dos
+componentes é arquitetura, o **valor** não é):
+
+| `key` | Predicado | Pontos (default) | Por quê |
+|---|---|---|---|
+| `no_website` | `website == null` | **+30** | o ângulo mais forte do catálogo §8.11.2 |
+| `reputation` | `rating >= 4.5 && reviewCount >= 30` | +15 | negócio que funciona tem com o que pagar |
+| `high_volume` | `reviewCount >= 100` | +10 | movimento = dor de atendimento manual |
+| `has_traction` | `reviewCount >= 10` | +5 | existe de verdade, não é ficha morta |
+| `fresh_data` | `lastSeenAt <= 60 dias` | +10 | mesmo corte que libera citar números (§8.11.2 regra 3) |
+| `niche_match` | `offNiche == false` | +10 | a `category` é confiável neste lead |
+| `never_contacted` | nenhuma `Message` outbound | +10 | primeiro contato rende mais que reinsistência |
+| `stale_data` | `lastSeenAt > 180 dias` | **−10** | pode ter fechado |
+| `off_niche` | `offNiche == true` | **−25** | ângulo forçado a `generic` (§8.11.2) → abordagem mais fraca |
+| `no_rating` | `rating == null` | −5 | invisível no Maps, e não sabemos por quê |
+
+**O que NÃO pontua, por decisão:** `phoneType` (é A39), opt-out (é A39), cidade/UF (é escolha
+comercial do filtro, não qualidade do lead), e `name` (é razão social com ruído, §8.11.2 regra 4).
+
+**De onde vem o critério — os dois, e separados de propósito:**
+
+| Camada | Quem define | Escopo | Onde mora |
+|---|---|---|---|
+| **Filtro** — *quem entra no universo* | o dono, **por campanha** | nicho, cidade, UF, faixa de avaliações | `leadFilterSchema` (já existe) |
+| **Perfil de pesos** — *como se ordena dentro dele* | o dono, **uma vez, reusável** | os componentes acima | `ScoringProfile` (novo) |
+
+Juntar os dois obrigaria a redescrever "o que é um lead bom" em cada campanha, e tornaria duas
+campanhas **incomparáveis** sem ninguém perceber. Separados, o `scoringProfileId` é o que autoriza
+comparar o score de janeiro com o de março.
+
+```prisma
+/// Perfil de pesos da pontuação de leads (ARQUITETURA §8.11.12). IMUTÁVEL:
+/// editar pesos CRIA uma versão nova, nunca altera a linha existente — o
+/// score guardado no alvo aponta para o perfil que o produziu, e um perfil
+/// mutável faria a explicação de ontem ser reescrita com os pesos de hoje
+/// (mesma razão de `Campaign.renderedTemplateSnapshot` existir).
+model ScoringProfile {
+  id        String   @id @default(cuid(2))
+  name      String
+  version   Int
+  /// `ScoringWeights` — validado por Zod em `@inno/contracts` na leitura.
+  weights   Json
+  notes     String?
+  createdAt DateTime @default(now())
+
+  createdById String?
+  createdBy   User?   @relation("ScoringProfileAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  campaignTargets CampaignTarget[]
+
+  @@unique([name, version])
+  @@map("scoring_profiles")
+}
+```
+
+##### 8.11.12.2 Quando roda, e por que não é no fim do scraping
+
+**Roda na montagem da campanha** (na pré-visualização e no `POST /campaigns`), sobre o conjunto **já
+elegível**, em memória — e o resultado é **snapshotado no alvo**.
+
+| Alternativa | Por que não |
+|---|---|
+| Calcular no fim do scraping e persistir em `Lead.score` | `rating`, `reviewCount`, `website` e `category` são `MACHINE_UPDATABLE_FIELDS`: mudam a cada re-coleta. O score persistido no lead **envelhece em silêncio** e exige recálculo em todo upsert — e um recálculo que ninguém chama é a quinta função-sem-chamador deste projeto |
+| Calcular sempre na hora e **não** persistir | Nada explica, seis meses depois, por que aquele lead entrou na campanha — e dois recortes feitos em datas diferentes deixam de ser comparáveis, porque os pesos podem ter mudado no meio |
+| **Calcular na montagem + snapshot no alvo** ✅ | O score é fresco quando decide, e **congelado** quando é auditado. Mesma decisão já tomada para o telefone (`CampaignTarget.phoneE164`) e para o texto (`renderedTemplateSnapshot`) |
+
+**Limite honesto de escala, porque o código é assim hoje:** `loadCandidateLeads` faz `findMany` **sem
+`take`** — carrega o universo inteiro do filtro em memória, e o ranking precisa disso para ordenar.
+Com centenas ou poucos milhares de candidatos (a realidade de uso próprio, A23) é irrelevante; com
+200 mil não é. Portanto: **`SCORING_MAX_CANDIDATES` (default 20.000)** — acima disso a rota recusa com
+`422 AUDIENCE_TOO_BROAD_TO_RANK` e pede um filtro mais estreito. Recusar é melhor que ranquear 200 mil
+linhas no Node e descobrir isso pelo timeout. `loadCandidateLeads` precisa passar a selecionar também
+`website, category, rating, reviewCount, offNiche, lastSeenAt, uf, cityId` — hoje traz só
+`id, phoneE164, phoneType, createdAt`.
+
+##### 8.11.12.3 Quantos entram: a conta da cota, na tela, antes de criar
+
+> 🔒 **A41 — o recorte é dimensionado pela CAPACIDADE, não pelo tamanho do filtro.** Montar uma
+> campanha de 500 quando o número faz 20/dia produz uma campanha de **25 dias úteis** — cinco semanas
+> em que os alvos 300 a 500 esperam sem que ninguém tenha decidido isso. A conta (`alvos ÷ cota/dia =
+> dias`) aparece **na montagem**, não é descoberta depois. O default não é "todos".
+
+O contrato **já tem metade disso**: `campaignEstimateSchema` devolve `{ days, messagesPerDay,
+finishesAround }`, e `computeEstimate` já soma a cota efetiva de cada instância escolhida hoje. O que
+falta é (a) o recorte que usa esse número e (b) ver a conta **antes** de materializar os alvos — hoje
+o `POST` já cria tudo (A27), então "criar para ver" custa uma campanha descartada.
+
+```ts
+// packages/contracts/src/campaign.contract.ts — NOVO
+export const audienceSelectionSchema = z.discriminatedUnion('mode', [
+  /** default — "o que cabe em N dias úteis de cota". `days` default 5. */
+  z.object({ mode: z.literal('capacity'), days: z.number().int().min(1).max(30).default(5) }),
+  z.object({ mode: z.literal('topN'), n: z.number().int().min(1) }),
+  z.object({ mode: z.literal('minScore'), min: z.number().int().min(0).max(100) }),
+  /** explícito, nunca default — exige `acknowledge: true` quando days > 10. */
+  z.object({ mode: z.literal('all'), acknowledge: z.boolean().optional() }),
+]);
+
+export const audienceRankedSchema = z.object({
+  scoringProfileId: idSchema,
+  selected: z.number().int().min(0),
+  leftOut: z.number().int().min(0),        // elegíveis que não couberam
+  scoreRange: z.object({ min: z.number(), max: z.number() }),
+  explore: z.object({ count: z.number().int().min(0), pct: z.number() }), // §8.11.15
+  byAngle: z.array(z.object({ angle: z.string(), count: z.number().int(), avgScore: z.number() })),
+});
+```
+
+| Rota | Corpo/resposta | Observação |
+|---|---|---|
+| `POST /api/v1/campaigns/preview` | `{ audience, selection, scoringProfileId?, settings?, instanceIds }` → `{ audience: {...}, ranked, estimate, sample[] }` | **Dry-run: não cria nada.** É a tela onde o dono vê "412 elegíveis · cabem 100 em 5 dias · sobram 312" antes de decidir. `sample[]` = 10 alvos do topo com score decomposto |
+| `POST /api/v1/campaigns` | ganha `selection` e `scoringProfileId` opcionais | Sem `selection`, comportamento atual (`all`) — **compatível**, mas a tela sempre manda `selection` |
+
+E a resposta de criação passa a devolver `ranked`, além do `audience`/`estimate` que já devolve.
+`computeEstimate` passa a receber o tamanho **do recorte**, não o de `eligible` — hoje recebe
+`classification.eligible.length`, o que sobrestima os dias assim que o recorte existir.
+
+**Sobre `minScore`:** é o modo mais perigoso dos três, porque um corte de "≥60" pode devolver 3 ou
+3.000 e o dono não tem como saber qual antes. Por isso ele **só existe atrás do `preview`**, que
+mostra a contagem. Recomendação de default: `capacity` com 5 dias — uma semana útil de trabalho, que
+é o horizonte em que o dono consegue de fato olhar as respostas que voltam.
+
+##### 8.11.12.4 v1 é heurística. v2 aprende. E "ranking inteligente" não é nenhuma das duas
+
+Dito explicitamente, porque **"ranking inteligente" é a expressão que vira caixa-preta** se ninguém
+escrever o contrário:
+
+- **v1 (fase 6.1): heurística explicável.** Pesos escritos por uma pessoa, componentes visíveis,
+  perfil versionado. Não aprende nada. É uma opinião organizada — e é honesta sobre isso.
+- **v2 (depois de `ApproachOutcome` ter dado):** o job estratégico semanal (§8.11.6, modelo caro sobre
+  **agregado**, A38) lê a tabela de desfecho e **propõe** um perfil novo: *"leads com `no_website`
+  responderam 3,1× mais; `high_volume` não separou nada; sugiro 40/0"*. O dono lê, discorda ou aceita,
+  e a aceitação **cria uma versão nova** do perfil.
+- **O que NUNCA acontece: ajuste automático de pesos.** Dois motivos, e os dois são deste projeto, não
+  genéricos. (1) Com dezenas a centenas de respostas (A23), a diferença entre 3,1× e 1,0× é ruído —
+  o mesmo argumento do piso de amostra da §8.11.3. (2) Pesos que mudam sozinhos **invalidam toda
+  comparação histórica em silêncio**: o score de março deixa de significar o que significava em
+  janeiro, e ninguém recebe aviso. O perfil imutável e versionado é o que impede isso.
+
+---
+
+#### 8.11.13 🔒 Etapa ③ — a campanha montada para o recorte (CONTRATO)
+
+**A pergunta:** se os 200 do recorte têm quatro ângulos diferentes, mandar uma mensagem única joga
+fora a razão de ter classificado. Então: **quatro campanhas (uma por ângulo)** ou **uma campanha com
+ângulo por alvo**?
+
+> 🔒 **A48 — um recorte é UMA campanha, com ângulo por alvo e ordem intercalada entre ângulos.**
+
+**O argumento que decide não é de ergonomia; é do motor, e está no código.** `dispatch-tick.job.ts`
+busca `campaign.findMany({ where: { status: 'running' }, orderBy: { startedAt: 'asc' } })` e processa
+uma campanha por vez, em laço, até a **cota da instância** se esgotar — e a cota é lida de
+`InstanceDailyStat.sentToday` (`loadInstanceGateInfo`), ou seja, é **do número**, compartilhada por
+todas as campanhas. Consequências, nesta ordem:
+
+1. **Campanhas paralelas não somam capacidade.** Quatro campanhas sobre o mesmo número continuam
+   fazendo 20 mensagens/dia no total.
+2. **Elas não se intercalam: serializam.** A mais antiga (`startedAt asc`) consome a cota do dia
+   inteira antes de a segunda receber qualquer coisa.
+3. **E aí a medição morre.** O ângulo A sai nos dias 1-3, com `warmupDay` 5 e nos horários da manhã;
+   o ângulo B sai nos dias 4-6, com `warmupDay` 8 e em outros horários. A comparação entre ângulos
+   vira comparação entre **semanas diferentes** — exatamente os confundidores que a §8.11.3 gravou em
+   `ApproachOutcome` (`instanceId`, `warmupDay`, `hourOfDay`) para poder controlar. Separar em
+   campanhas **cria** o confundidor que o resto da fase existe para eliminar.
+4. **E o `estimate` de cada campanha mentiria**: `computeEstimate` calcula os dias como se aquela
+   campanha tivesse a cota inteira. Quatro campanhas mostrando "3 dias" cada, que na prática levam 12.
+
+**Ordem de envio dentro da campanha — round-robin entre ângulos, score desc dentro de cada ângulo.**
+Não é detalhe: ordenar o recorte só por score desc faz os primeiros dias saírem com um ou dois ângulos
+só (os que pontuam mais alto) — e se a campanha for `halted` no dia 2 (§6.6, acontece), mediu-se um
+ângulo e nenhum outro. Intercalar dá a cada ângulo a mesma distribuição de dias, horas, instâncias e
+`warmupDay`, que é a condição para a comparação ser honesta. O "melhor primeiro" continua valendo —
+**dentro** de cada ângulo.
+
+**O custo aceito, e como pagá-lo:** numa campanha só, o dono não consegue pausar **um** ângulo com a
+pausa que existe (que é da campanha). Ação nova: `POST /api/v1/campaigns/:id/angles/:angle/suspend` →
+`updateMany` dos alvos `pending` daquele ângulo para `status='skipped', skipReason='angle_suspended'`.
+É **terminal** e é assim de propósito: não toco no `claimNextCampaignTarget`, que é hot path auditado
+(o `ORDER BY "scheduledFor"` sem `NULLS FIRST` está lá por uma razão de planner documentada, e
+"estacionar" alvo com `scheduledFor` nulo quebraria a invariante "nunca é NULL a partir do `start`").
+Se o dono mudar de ideia, os leads voltam numa campanha nova — ação normal, e rara.
+
+**Duas consequências de contrato, ambas obrigatórias:**
+
+1. **`Campaign.templateId` continua obrigatório, e passa a significar "o template base do ângulo de
+   fallback"** (`generic`). O texto que sai é `target.renderedBody` quando existe (regra já fixada na
+   §8.11.5); `renderedTemplateSnapshot` vira o caminho de fallback, não o caminho principal.
+2. 🔴 **A validação de nota de descadastro no `start` precisa cobrir TODOS os corpos.** Hoje
+   `startCampaign` chama `hasOptOutNotice(fixedPart)` sobre **o template da campanha** e devolve
+   `409 MISSING_OPTOUT_NOTICE`. Com ângulo por alvo, um template de ângulo sem a nota passaria por ali
+   e só seria barrado no envio, alvo a alvo, pelo G10 — cada um virando `failed`, um por um, com a
+   campanha parecendo quebrada. O `start` valida **cada `renderedBody` distinto** (ou cada template de
+   ângulo presente no recorte) e lista no erro **quais** ângulos falharam.
+
+**Onde isso cai na escada — e por que a escada ganha um degrau.** Montar o público automaticamente é
+N4 na tabela da §8.11.4, mas **montar e não disparar** é outra coisa: o autor que N4 acrescenta é
+"escolhe quem recebe"; "aperta o botão" continua sendo o humano. Os dois juntos é que fazem o ator
+autônomo de segundo grau que justifica os seis guarda-corpos. Então a §8.11.4 passa a ter:
+
+| Nível | Quem escreve o texto | Quem monta o público | **Quem aperta o disparo** | Guarda-corpos |
+|---|---|---|---|---|
+| N0 | humano | humano | humano | os que já existem |
+| N1 | humano + assistente | humano | humano | §8.11.4 |
+| N2 | máquina (revisão por ângulo) | humano | humano | §8.11.4 |
+| N3 | máquina (escolhe o ângulo) | humano | humano | §8.11.4 |
+| **N4a** 🆕 | máquina | **máquina** — a campanha nasce `draft` | **humano** | envelope declarado · exclusões duras · teto de rascunhos não revisados |
+| **N4b** | máquina | máquina | **máquina**, com janela de veto | **os seis de A37**, nenhum opcional |
+
+**Decisão do dono, já tomada, que esta arquitetura honra: para em N4a.** Classificar e montar são
+automáticos; **apertar o disparo continua humano**, porque hoje "os melhores" é palpite com zero
+retorno de dado (tese 2 da §8.11.11). No dia em que a medição mostrar "o ângulo X converte 3×", a
+autonomia **conquista** a confiança em vez de tomá-la emprestada. A37 passa a se referir ao **N4b**;
+o N4a tem três dos seis, e não inclui a janela de veto nem o `ALERT_WEBHOOK_URL` obrigatório — porque
+sem disparo automático, o pior caso de uma noite mal dormida é uma campanha `draft` esquisita na tela.
+
+---
+
+#### 8.11.14 🔒 Etapa ④ — ler e classificar a resposta (CONTRATO — a peça nova)
+
+**O que existe hoje, verificado no código.** O funil `LeadStatus` é
+`new → validated → contacted → responded → negotiating → won`, mais `discarded` alcançável de qualquer
+ponto (`packages/core/src/leads/status.ts`). `contacted` e `responded` são `SYSTEM_ONLY_STATUSES`; o
+webhook seta `responded` quando chega qualquer inbound. De `responded` em diante **não há automação
+nenhuma**: existe caminho manual (ficha do lead e ação em massa, ambos por `checkStatusTransition` com
+ator `'human'`), e **nada lê o conteúdo da resposta**. O sistema automatiza mandar e devolve ler na mão.
+
+**Dois fatos do código que decidem o desenho desta etapa:**
+
+1. 🔴 **`discarded` é IRREVERSÍVEL.** `checkStatusTransition` responde `não é possível sair de
+   'discarded'` para **qualquer** destino e **qualquer** ator — nem o humano desfaz. E `to ===
+   'discarded'` é liberado **antes** da checagem de ator, ou seja, uma regra automática *pode*
+   descartar. Pode, e não vai: descartar por palpite de modelo é apagar um lead para sempre sem volta.
+2. **Já existe um classificador determinístico, e ele é autoritativo.** `findOptOutTrigger`
+   (`packages/core/src/optout/detect.ts`) casa uma lista fechada de 16 gatilhos, propositalmente
+   permissiva ("na dúvida, bloqueia"). Note que **`sem interesse` já está na lista** — ou seja, parte
+   do que o dono chamaria de "não tem interesse" hoje **já é opt-out duro**, com bloqueio permanente
+   do telefone. A categoria `not_interested` da etapa ④ só existe para o que a regra **não** pegou.
+
+##### 8.11.14.1 As categorias de desfecho
+
+Vocabulário **aberto** (`String` validada por Zod), pelo mesmo motivo de `LeadActivity.type` e de
+`angle`: categoria nova não pode exigir migração, e esta lista vai mudar com a experiência do dono.
+
+| `category` | O que é | Quem detecta | Move o funil? | Sugestão exibida |
+|---|---|---|---|---|
+| `opt_out` | pediu para sair | **regra**, autoritativa | **nunca** `responded`; alvo → `skipped/opted_out` | nenhuma — já está feito |
+| `interested` | quer saber mais, marcar conversa | modelo ou humano | não | "mover para `negotiating`" |
+| `pricing` | pediu preço/proposta | modelo ou humano | não | "mover para `negotiating`" |
+| `not_now` | interesse futuro ("me chama em março") | modelo ou humano | não | "lembrete + manter em `responded`" |
+| `wrong_person` | não é o responsável / número trocado | modelo ou humano | não | "descartar" — **sempre com clique** |
+| `not_interested` | recusa **sem** pedir para sair | modelo ou humano | não | "descartar" — **sempre com clique** |
+| `noise` | figurinha, "ok", engano, áudio, vCard | regra + modelo | não | nenhuma |
+| `needs_human` | não classificável, IA fora do ar, confiança baixa | **fallback** | não | "precisa de olho humano" |
+
+**Mapeamento para o funil, e por que ele é quase todo vazio:**
+
+> 🔒 **A44 — classificar é automático; mover o funil não é.** Nenhuma classificação de resposta
+> escreve `LeadStatus` além do `responded` que o webhook já escreve. `negotiating` e `won` exigem
+> clique humano (o sistema não sabe se houve negociação — sabe que houve *uma frase*), e **`discarded`
+> automático é proibido** porque a máquina de estados não tem volta de lá. O ator da sugestão é
+> `'system'` (`LeadActivityActor.system`), nunca `'human'`: a sugestão vira `LeadActivity`
+> `type='reply_classified'` na timeline do lead, e a transição continua saindo do `PATCH /leads/:id`
+> com ator `'human'` — que é o que já funciona hoje.
+
+Corolário técnico: `checkStatusTransition('responded','won')` é **ilegal** mesmo para humano (o funil
+avança de um em um). Uma tela que ofereça "marcar como ganho" a partir de `responded` precisa fazer
+dois passos, ou o `PATCH` devolve `422 INVALID_STATUS_TRANSITION`. Isso não é novo, mas fica aqui
+porque a caixa de entrada é justamente onde alguém vai tentar.
+
+##### 8.11.14.2 O caso "pediu para sair" — o defeito anterior que atravessa esta etapa
+
+🔴 **Confirmado no código, de novo e com a linha:** em `handleInboundMessage`
+(`apps/web/src/lib/services/webhook.ts`), a ordem é (a) `lead.status → 'responded'`, (b) `activeTarget`
+com status em `sent|delivered|read` → `advanceCampaignTargetStatus(..., 'responded')`, e **só depois**
+(c) `if (event.isOptOutRequest) registerOptOutFromInbound(...)`. E `registerOptOutFromInbound` chama
+`skipPendingCampaignTargetsForPhone`, que — pelo nome e pelo efeito — só alcança alvos **`pending`**.
+O alvo que acabou de ir para `responded` **fica lá**. Responder "SAIR" conta como resposta, hoje.
+
+**O conserto é de ORDEM, não de mecanismo** — e isso é bom notícia para o Vega.
+`advanceCampaignTargetStatus` já aceita levar um alvo de **qualquer** estado não-terminal direto para
+`skipped` (só estado terminal é que não reabre). O que não dá para desfazer é o **contador**: passar
+por `responded` incrementa `Campaign.respondedCount`, e o `skipped` depois incrementa
+`skippedCount` — o alvo conta **duas vezes**, e o `respondedCount` fica permanentemente inflado pelos
+descadastros. Por isso a correção não é "skipar depois": é **registrar o opt-out antes**, e nunca
+deixar o alvo tocar `responded`.
+
+**Como a etapa ④ trata isso: ela não trata — ela depende do conserto, e o conserto é da fase 6.0.**
+Essa separação é deliberada. A etapa ④ precisa funcionar com zero IA (A45), e o opt-out é regra pura
+que roda antes de qualquer classificação. Se a correção morasse aqui, ela chegaria junto com o
+modelo — e o laço de aprendizado da §8.11.3 seria ligado antes dela.
+
+Ordem correta no inbound, depois do conserto (é o contrato do 6.0, repetido aqui porque a etapa ④ se
+encaixa exatamente nos dois ramos):
+
+```
+inbound → parser (regra) → isOptOutRequest?
+  ├── SIM  → registerOptOut PRIMEIRO
+  │          alvo ativo → skipped/opted_out   (não `responded`)
+  │          lead.status NÃO avança para `responded`
+  │          Campaign.respondedCount NÃO incrementa
+  │          ApproachOutcome: optedOut=true, replied=false          (A35)
+  │          ReplyClassification: category='opt_out', by='rule'
+  │          ⛔ nenhuma chamada de modelo. O texto NÃO sai da infra.
+  └── NÃO  → fluxo atual (`responded`) + ApproachOutcome.replied=true
+             + ReplyClassification nasce `needs_human` e o job classifica
+```
+
+> 🔒 **A43 — a regra de opt-out é autoritativa e unidirecional.** A classificação pode **acrescentar**
+> um `opt_out` que a regra não pegou ("por favor não me mande mais nada disso" sem gatilho literal);
+> **nunca pode revogar** um que a regra pegou. Não há caminho, nem de humano, para "isto não era um
+> pedido de saída" — porque o custo dos dois erros é assimétrico (§6.7: falso positivo custa 1 lead,
+> falso negativo custa uma denúncia), e porque um modelo capaz de desfazer opt-out é um modelo capaz
+> de esvaziar a proteção inteira num dia ruim.
+
+**E o laço de aprendizado:** um sinal de desfecho ligado a `responded` sem esse conserto **aprende a
+premiar a abordagem que mais irrita** — é o R-IA-2, e a etapa ④ o agrava, porque agora não é só uma
+métrica errada na tela: é uma categoria (`opt_out`) que existiria misturada com `interested` dentro do
+mesmo balde de "respondeu". A dependência é dura: **6.1R não começa antes de 6.0 estar em produção.**
+
+##### 8.11.14.3 Onde a classificação roda — e por que não no webhook
+
+**Nunca dentro da transação do webhook.** O webhook precisa ser rápido, não pode falhar porque um
+provedor externo está fora, e já faz um `$transaction` que toca `Message`, `Lead`, `CampaignTarget`,
+`OptOut`, `LeadActivity` e `InstanceDailyStat`. Chamada de rede lá dentro é transação longa segurando
+locks em tabela quente.
+
+```
+webhook (síncrono, regra pura)  →  cria ReplyClassification { category: 'needs_human', by: 'pending' }
+                                →  enfileira job `classify-reply` (BullMQ)
+job classify-reply (assíncrono) →  passada 1: REGRA (palavras-chave: "quanto custa", "qual valor",
+                                     "quem fala", "não sou eu", "manda mais", "ok", "obrigado")
+                                →  passada 2 (opcional): MODELO, só sobre o que a regra não resolveu
+                                →  atualiza ReplyClassification + ApproachOutcome.replyCategory
+```
+
+> 🔒 **A45 — resposta não classificada é "precisa de olho humano", nunca "ruído".** O estado
+> **inicial** da linha é `needs_human` — não é o estado de erro, é o default, e a classificação só o
+> melhora. Se o job nunca rodar, se o provedor cair, se o teto de gasto estourar ou se a confiança
+> vier baixa, a resposta aparece na caixa marcada para revisão e **nada se perde**. Modo degradado com
+> sinal mais barulhento que o normal (regra 4 das lições de plano faseado): o contador de
+> `needs_human` fica visível na tela, porque "a IA está fora há três dias" precisa parecer diferente
+> de "ninguém respondeu".
+
+```prisma
+/// Classificação de uma resposta recebida (ARQUITETURA §8.11.14). NÃO guarda
+/// texto: aponta para a `Message`, que já tem `body` (retenção de 12 meses,
+/// §7.5). Cascade com a Message/Lead — o SINAL de aprendizado que precisa
+/// sobreviver à eliminação LGPD é `ApproachOutcome.replyCategory`, anônimo.
+model ReplyClassification {
+  id        String  @id @default(cuid(2))
+
+  messageId String  @unique
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// Vocabulário ABERTO, validado por Zod (como `angle` e `LeadActivity.type`).
+  category     String
+  /// `pending` | `rule` | `model` | `human` — quem produziu a categoria ATUAL.
+  classifiedBy String
+  /// 0..1, só quando `classifiedBy = 'model'`. Abaixo do piso → `needs_human`.
+  confidence   Float?
+  modelId       String?
+  promptVersion String?
+
+  /// Transição de funil SUGERIDA — nunca aplicada por este registro (A44).
+  suggestedStatus String?
+  /// Preenchido quando o humano revisa: confirma, corrige a categoria, ou ignora.
+  reviewedAt      DateTime?
+  reviewedById    String?
+  reviewedBy      User?     @relation("ReplyReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  /// Categoria que o humano disse ser a certa, quando diferente. É o único
+  /// conjunto de treino honesto que este sistema vai ter — não sobrescrever
+  /// `category`, senão o erro do modelo some e nunca é medido.
+  humanCategory   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// A caixa de entrada: "o que precisa de olho humano, mais recente primeiro".
+  @@index([category, createdAt])
+  @@index([reviewedAt, createdAt])
+  @@map("reply_classifications")
+}
+```
+
+**`ApproachOutcome` ganha três campos** (anônimos, sobrevivem à eliminação — é o sinal do laço):
+
+```prisma
+  replyCategory     String?    // categoria consolidada (humana vence a do modelo)
+  replyClassifiedBy String?    // rule | model | human
+  score             Int?       // §8.11.12 — o score do alvo no momento do envio
+  scoringProfileId  String?    // SetNull — sem ele o score não é comparável
+  exploreKind       String?    // null | 'audience' | 'angle'  (§8.11.15)
+```
+
+**Rotas:**
+
+| Rota | Resposta | Observação |
+|---|---|---|
+| `GET /api/v1/inbox` | filtros: `category`, `needsReview`, período → lista paginada com lead, trecho e sugestão | É a tela da etapa ⑤ ("continuar ou não") |
+| `PATCH /api/v1/inbox/:id` | `{ category?, reviewed: true }` | Correção humana. Grava `humanCategory`, **não** sobrescreve `category` |
+| `POST /api/v1/inbox/:id/apply` | `{ status }` → delega ao `PATCH /leads/:id` | Atalho de UI; a regra de transição continua sendo a de sempre, com ator `'human'` |
+
+Erros novos: `REPLY_CLASSIFICATION_UNAVAILABLE`, `SCORING_PROFILE_NOT_FOUND`,
+`AUDIENCE_TOO_BROAD_TO_RANK`.
+
+##### 8.11.14.4 LGPD: classificar resposta é mandar texto de terceiro para fora
+
+Esta é a diferença material entre a etapa ④ e tudo que a §8.11 tinha até aqui. Mandar
+`rating`/`categoria`/`cidade` para um operador externo é mandar **dado comercial público que a própria
+empresa publicou** (§7.1). Mandar a resposta é mandar **texto livre escrito por uma pessoa**, que pode
+conter nome próprio, e-mail, telefone pessoal, dado de saúde ("preciso remarcar minha consulta"), e o
+que mais a pessoa tiver decidido escrever. Não é a mesma decisão, e não deve ser tomada junto.
+
+**Fato atenuante, verificado:** o texto **já é persistido** em `Message.body` (o webhook grava todo
+inbound) com retenção de 12 meses (§7.5). Classificar não cria armazenamento novo de texto — o
+`ReplyClassification` de propósito **não guarda trecho nenhum**, só aponta. O que muda é a
+**transmissão a um operador externo**.
+
+**Escada de opções, da mais segura para a menos:**
+
+| Opção | O texto sai? | Cobertura esperada | Veredito |
+|---|---|---|---|
+| **1. Só regra** (palavras-chave, como `detectOptOut` já faz) | **não** | alta nos casos frequentes: preço, "quem fala", "ok", agradecimento, "não sou eu" | ✅ **é por onde começa** (fase 6.1R) |
+| **2. Regra + modelo sobre texto MINIMIZADO** | sim, redigido | quase total | ✅ recomendado **se e quando** o `needs_human` incomodar |
+| 3. Modelo sobre o texto cru, com identificação do lead | sim, inteiro | total | ❌ desnecessário: a categoria não depende de saber **quem** escreveu |
+
+> 🔒 **A46 — texto de terceiro só sai da infra minimizado e sem identidade.** Se a classificação por
+> modelo for ligada: (a) sai o texto **redigido** — sequências de 4+ dígitos, e-mails e URLs
+> substituídos por marcadores, em função pura testável em `@inno/core`; (b) **não** vão junto nome,
+> telefone, `leadId`, cidade nem empresa — a categoria não precisa deles; (c) o modelo devolve
+> **categoria + confiança**, nunca texto livre; (d) nada é enviado quando a regra já resolveu — e
+> **nunca** no ramo `opt_out`; (e) provedor configurado sem retenção e sem treino sobre o enviado, e
+> registrado no ROPA (`docs/lgpd.md`, §7.5) como operador, com a finalidade escrita: *triagem de
+> resposta recebida*.
+
+**Medir antes de ligar.** A recomendação operacional é a mesma do resto desta fase: rodar 6.1R (só
+regra) e **contar** quantas respostas ficam em `needs_human`. Se forem poucas — e com dezenas de
+respostas por semana, é o cenário provável — o modelo é custo, risco e um operador a mais no ROPA para
+resolver um problema que não existe. A decisão fica com o dono (D-IA-10), com o número na mão.
+
+---
+
+#### 8.11.15 Os dois vieses de seleção — e eles não se confundem
+
+Se só abordarmos os "melhores", nunca saberemos se os "piores" respondiam — e o perfil de pesos v2,
+treinado nesse dado, **confirma o preconceito da v1 para sempre**. Isso tem nome (restrição de
+amplitude: o preditor só é observado na faixa em que ele mesmo selecionou) e tem uma única cura
+barata: mandar, de propósito, para alguns que o score reprovou.
+
+**São DOIS problemas diferentes, com duas fatias diferentes:**
+
+| | Exploração de **PÚBLICO** | Exploração de **ÂNGULO** |
+|---|---|---|
+| Pergunta | *o score prevê resposta?* | *qual abordagem converte mais?* |
+| O que varia | **quem recebe** | **o que se diz** |
+| Como é escolhido | sorteio **uniforme** entre os elegíveis **fora** do recorte | alvo já do recorte, recebe um ângulo que não é o vencedor |
+| Quando existe | **desde o dia um** (fase 6.1) | só no **N3** (§8.11.4) |
+| Marca | `exploreKind = 'audience'` | `exploreKind = 'angle'` |
+| Sem ela | o score nunca é validável; a v2 herda o viés da v1 | o laço congela no primeiro ângulo que teve sorte |
+
+> 🔒 **A47 — as duas fatias são disjuntas: um envio tem no máximo um `exploreKind`.** Um alvo de
+> exploração de público usa **sempre o ângulo canônico** do lead (o calculado), nunca um experimental;
+> um alvo de exploração de ângulo vem **sempre** do recorte por score. Cruzar as duas produz um envio
+> cujo resultado ruim não é atribuível: foi o público errado ou a mensagem errada? Sem separação não
+> há resposta, e o dado fica inutilizável para as duas perguntas ao mesmo tempo.
+
+**Como a fatia de público é medida — e é aqui que ela paga o preço dela.** A pergunta "o score prevê
+resposta?" é respondida **dentro da fatia aleatória**, e só lá: é o único conjunto em que a seleção
+não decidiu quem entrou, e portanto o único em que a relação entre `score` e `replied` é lida sem o
+próprio score no meio. Comparar "topo × exploração" diretamente mistura o efeito do score com o efeito
+de ser topo. Por isso `ApproachOutcome.score` é gravado **cru**, não em bucket (ao contrário de
+`rating`): a pergunta precisa do contínuo, e o número é derivado nosso — não identifica ninguém.
+
+**Dimensionamento, com o custo dito em voz alta:** default **10% do recorte**, arredondado para cima,
+**mínimo 5 alvos**, e **zero** quando o recorte tem menos de 20 (fatia minúscula não responde nada e
+gasta cota escassa). Sim, isso significa gastar 10% da cota com leads que acreditamos ser piores. É o
+preço de saber se acreditamos certo — e ele é pago **uma vez**, enquanto o preço de não pagar é um
+ranking que nunca pode ser questionado. A fatia **aparece na tela da montagem**
+(`ranked.explore.count`), porque um recorte com 10% de "não escolhidos por pontuação" precisa ser uma
+decisão do dono, não uma surpresa. Se ele recusar (D-IA-12), a consequência é explícita e fica
+registrada: o score v1 permanece uma opinião, para sempre, e a v2 não tem como nascer.
+
+**Nada disso relaxa portão nenhum.** Alvo de exploração passa por G1-G11, cota, janela, gate e lease
+igual a qualquer outro. Exploração escolhe **quem/o quê**, nunca **se pode**.
+
+---
+
+#### 8.11.16 O que muda no plano faseado, e o que passa a ser configuração
+
+**Plano (substitui a tabela da §8.11.7 — as fases 6.0 a 6.5 continuam com o mesmo número e o mesmo
+conteúdo; entram duas novas e duas ganham escopo):**
+
+| Fase | Entrega | Depende de | O que o dono passa a conseguir fazer |
+|---|---|---|---|
+| **6.0** 🔴 **Medir** | inalterada — `ApproachOutcome`, escrita em `@inno/sending`, webhook, **separar `replied` de `optedOut`**, corrida do `respondedCount`, `minReviewCount` | nada | Ver taxa de resposta e de descadastro por nicho, cidade e horário |
+| **6.1** **Ângulos + SCORE** (sem IA) | **escopo ampliado**: `angles.ts` **e** `score.ts` na mesma passagem (A42) · `ScoringProfile` · `CampaignTarget.renderedBody`/`approachAngle`/`score`/`scoreComponents`/`scoringProfileId`/`exploreKind` · `POST /campaigns/preview` · `selection` · ordem intercalada (A48) · fatia de exploração de público | 6.0 | **As etapas ② e ③ inteiras.** Recorte do tamanho da cota, cada lead com a abordagem do que ele é, e a conta dos dias na tela antes de criar |
+| **6.1R** 🆕 **Triagem da resposta por regra** (sem IA) | `packages/core/src/inbox/classify.ts` · `ReplyClassification` · job `classify-reply` (só passada 1) · `GET /inbox` · sugestão de funil sem aplicar (A44) | **6.0** (o conserto do "SAIR") | **A etapa ④ funcionando com zero IA.** As respostas chegam separadas por tipo, e "precisa de olho humano" é uma lista, não a caixa inteira |
+| **6.2** **Assistente (N1)** | inalterada — `packages/ai` + validadores + `POST /leads/:id/approach` | 6.1 | Gerar a abordagem de um lead, ler, ajustar, enviar |
+| **6.2R** 🆕 **Classificação assistida da resposta** | passada 2 do job · redação/minimização (A46) · confiança mínima · teto de gasto | 6.2 **e** o número de `needs_human` de 6.1R justificar | Menos triagem manual — **se** a medição mostrar que dói |
+| **6.3** **Lote com revisão (N2)** | inalterada | 6.2 + ≥1 campanha medida | Campanha inteira escrita pela máquina, liberada pelo humano |
+| **6.4** **Escolha por desempenho (N3)** | inalterada + exploração de **ângulo** (A47) | 6.3 + piso de amostra | A máquina para de usar o que não funciona |
+| **6.5a** 🆕 **Monta o público (N4a)** | envelope · exclusões duras · teto de rascunhos · campanha nasce `draft` | 6.4 | **A máquina propõe o recorte; o dono aperta o botão.** É onde o dono decidiu parar |
+| **6.5b** **Dispara sozinha (N4b)** | janela de veto · orçamento diário · uma-em-voo · 🔴 `ALERT_WEBHOOK_URL` ligada | 6.5a + medição que justifique | A máquina roda campanhas; o dono veta |
+
+**Ordem que importa:** 6.1R vem **antes** de 6.2 de propósito. Ele não usa IA, fecha o laço que o dono
+pediu ("filtrar quem tem interesse") e produz o número que decide se 6.2R vale a pena. Construir o
+redator antes do leitor é o mesmo erro de ordem que a §8.11.7 já corrigiu uma vez.
+
+**Onde a configuração mora — correção à §8.11.4.** Aquela seção disse "mesmo lugar e mesma semântica
+da pausa global do §4.10". Conferi: a pausa global mora no **Redis** (`lib/dispatch-state.ts`;
+"ausência da chave = pausado", e Redis limpo devolve o sistema ao estado seguro). Isso está certo para
+**a pausa** e não deve ser mexido. Mas não serve para o que a etapa ② precisa guardar: um Redis limpo
+apagaria o envelope de autonomia e o ponteiro do perfil de pesos padrão **sem aviso**, e a campanha
+seguinte sairia ordenada por outro critério sem ninguém ter mudado nada.
+
+```prisma
+/// Configuração persistida do sistema (ARQUITETURA §8.11.16). Saco de
+/// chave→JSON de propósito: são poucas chaves, todas validadas por Zod em
+/// `@inno/contracts` NA LEITURA, e `parse` que falha resolve para o valor
+/// MAIS SEGURO (nível de autonomia → `n0`), nunca para o default otimista.
+/// ⚠️ A pausa global do disparo NÃO migra para cá: ela é Redis por desenho
+/// (§6.8.9), e "Redis limpo = pausado" é a propriedade, não o efeito colateral.
+model AppSetting {
+  key   String @id           // 'autonomy.level' | 'autonomy.envelope'
+                             // 'scoring.defaultProfileId' | 'ai.monthlyBudgetCents'
+                             // 'inbox.minConfidence' | 'explore.audiencePct'
+  value Json
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+  updatedBy   User?    @relation("AppSettingAuthor", fields: [updatedById], references: [id], onDelete: SetNull)
+  @@map("app_settings")
+}
+```
+
+`PUT /api/v1/settings/autonomy` (§8.11.5) passa a escrever aqui; chave ausente continua valendo **N0**
+(A36, intacto).
+
+**Riscos novos, acrescentados à tabela da §8.11.9:**
+
+| # | Risco | Prob. | Impacto | Mitigação |
+|---|---|---|---|---|
+| R-IA-8 | **O ranking vira profecia auto-realizável** — só o topo é abordado, o score nunca é testado, a v2 confirma a v1 | **alta sem mitigação** | o sistema fica confiante e errado para sempre | Fatia de exploração de **público** desde a fase 6.1, medida separada da de ângulo (A47) |
+| R-IA-9 | **Texto escrito por terceiro sai da infra** para um operador externo | média | 🔴 base legal do §7.1 é o ativo mais frágil do produto | Regra primeiro (6.1R); modelo só sobre texto minimizado, sem identidade, com finalidade no ROPA (A46) |
+| R-IA-10 | **Lead descartado por engano de classificação** | baixa | 🔴 `discarded` é **irreversível** na máquina de estados — nem humano volta | Nada move o funil sozinho; `discarded` exige clique (A44) |
+| R-IA-11 | **Recorte montado maior que a cota** — campanha de 25 dias que ninguém decidiu | **alta hoje** | alvos do fim esperam cinco semanas; a medição envelhece junto | Recorte por capacidade + a conta no `preview` (A41) |
+| R-IA-12 | **Campanhas por ângulo serializam** e a comparação vira "semana A × semana B" | certa, se separadas | o confundidor que a §8.11.3 existe para eliminar entra pela porta da frente | Uma campanha, ângulo por alvo, ordem intercalada (A48) |
+| R-IA-13 | **Resposta some em silêncio** quando o classificador está fora | média | o dono acha que ninguém respondeu | `needs_human` é o estado inicial, não o de erro; contador visível (A45) |
 
 ---
 
@@ -3881,3 +4614,13 @@ ALERT_WEBHOOK_URL=                  # opcional: Slack/Discord/Telegram
 | **A36** | 🆕 **Nível de autonomia é configuração persistida lida em runtime; ausente = N0** (mesma assimetria da pausa global, A31). Subir de degrau acrescenta um autor e **não altera nada à direita de `executeSendAttempt`** — portão, gate, cota, janela e lease são os mesmos em qualquer nível. É isso que permite descer de degrau sem reverter código | **§8.11.4** |
 | **A37** | 🆕 **Autonomia de público (N4) exige os seis guarda-corpos, nenhum opcional**: envelope declarado (fora dele a máquina RECUSA, não pede), orçamento diário de contatos frios independente da cota por número, janela de veto antes de disparar, uma só campanha autônoma em voo, exclusões duras não-configuráveis e **canal de alerta ligado** | **§8.11.4** |
 | **A38** | 🆕 **O modelo caro nunca vê dado de lead; vê agregado.** Redação de volume roda em modelo barato sobre os fatos de um lead; raciocínio de estratégia roda raramente sobre a tabela de desfecho anônima. Corta custo, latência e superfície LGPD na mesma decisão | **§8.11.6** |
+| **A39** | 🆕 **Elegibilidade corta antes; o score só ordena depois, e nunca exclui.** Celular, opt-out e contato recente são elegibilidade (o portão G4 já recusa terminalmente); nota, avaliações e ausência de site são ranking. Ranquear antes de filtrar entrega um recorte que a elegibilidade esvazia — e os que faltam **não** são repostos pelos seguintes da fila | **§8.11.12** |
+| **A40** | 🆕 **Score sem decomposição não existe.** Todo score persistido guarda os componentes e o `scoringProfileId` que os pesou; o perfil de pesos é **imutável e versionado** (editar cria versão). O dono precisa poder discordar **ajustando os pesos**, e um número opaco não admite discordância | **§8.11.12.1** |
+| **A41** | 🆕 **O recorte é dimensionado pela CAPACIDADE, não pelo tamanho do filtro.** A conta `alvos ÷ cota/dia = dias` aparece na montagem, num `preview` que não cria nada. O default não é "todos" | **§8.11.12.3** |
+| **A42** | 🆕 **Ângulo e score saem da MESMA passagem.** Uma função pura, uma entrada, os dois na saída — calcular em lugares separados garante que divergem e que o mesmo predicado é escrito duas vezes | **§8.11.12.1** |
+| **A43** | 🆕 **A regra de opt-out é autoritativa e unidirecional.** A classificação pode acrescentar um `opt_out` que a regra não pegou; **nunca** revogar um que ela pegou — nem por humano. Falso positivo custa 1 lead, falso negativo custa uma denúncia | **§8.11.14.2** |
+| **A44** | 🆕 **Classificar é automático; mover o funil não é.** Nada além do `responded` que o webhook já escreve. `negotiating`/`won` exigem clique humano, e **`discarded` automático é proibido** — a máquina de estados não tem volta de `discarded`, nem para humano | **§8.11.14.1** |
+| **A45** | 🆕 **Resposta não classificada é "precisa de olho humano", nunca "ruído".** `needs_human` é o estado **inicial** da linha, não o de erro: provedor fora, teto estourado ou confiança baixa deixam a resposta visível na caixa, com contador barulhento | **§8.11.14.3** |
+| **A46** | 🆕 **Texto de terceiro só sai da infra minimizado e sem identidade.** Redação de dígitos/e-mail/URL em função pura, sem nome/telefone/`leadId`/cidade junto, modelo devolvendo só categoria e confiança, nada enviado no ramo `opt_out`, operador no ROPA | **§8.11.14.4** |
+| **A47** | 🆕 **Exploração de PÚBLICO e de ÂNGULO são fatias disjuntas** — um envio tem no máximo um `exploreKind`. Sem público explorado desde o dia um, o score nunca é validável e a v2 confirma o preconceito da v1; cruzar as duas produz resultado não atribuível | **§8.11.15** |
+| **A48** | 🆕 **Um recorte é UMA campanha, com ângulo por alvo e ordem intercalada entre ângulos.** O motor processa campanhas por `startedAt asc` sobre a cota **do número**: campanhas por ângulo não rodam em paralelo, serializam — e a comparação entre ângulos vira comparação entre semanas, com `warmupDay` e horário diferentes | **§8.11.13** |

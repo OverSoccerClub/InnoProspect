@@ -10,3 +10,4 @@
 - [Fase 4: campanhas e motor](decision_fase4_motor.md) — cadência é do número, lease sem status `sending`, incerto nunca retentado, alvos no POST.
 - [Onde o envio mora (4.F)](decision_onde_o_envio_mora.md) — `packages/sending`, HTTP entre apps descartado, motor nasce pausado, config de campanha só estreita.
 - [Fase 6: prospecção autônoma](decision_fase6_prospeccao_autonoma.md) — ângulo calculado vs. frase gerada, medir antes de gerar, escada N0-N4, e por que a IA não é o produto.
+- [Fase 6: o laço de cinco etapas](decision_fase6_cinco_etapas.md) — a cota é a origem do ranking, hipótese vs. evidência, campanhas por ângulo serializam, `discarded` não tem volta, dois vieses.
