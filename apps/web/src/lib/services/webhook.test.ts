@@ -10,7 +10,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import type { WhatsAppInstance } from '@inno/db';
-import { getFakeDbState, resetFakeDb, type FakeCampaign, type FakeCampaignTarget, type FakeEvolutionServer, type FakeLead } from '@/test/fake-db';
+import {
+  getFakeDbState,
+  resetFakeDb,
+  type FakeCampaign,
+  type FakeCampaignTarget,
+  type FakeEvolutionServer,
+  type FakeLead,
+} from '@/test/fake-db';
 
 // Factory ASSÍNCRONA com `import()` dinâmico DENTRO dela — de propósito, não
 // estilo. `vi.mock` é hoisted para o topo do arquivo pelo Vitest, ANTES dos
@@ -151,6 +158,75 @@ describe('processEvolutionWebhookEvent — message_received', () => {
     expect(state.campaigns[0]!.deliveredCount).toBe(1); // não contou de novo
     expect(state.campaigns[0]!.readCount).toBe(1);
     expect(state.campaigns[0]!.respondedCount).toBe(1);
+  });
+
+  it('🆕 2026-09-26: primeira resposta do dia soma InstanceDailyStat.respondedCount da instância (achado do dono: o card ficava travado em 0)', async () => {
+    resetFakeDb({
+      leads: [lead({ id: 'lead-1', phoneE164: '+5511987654321', status: 'contacted' })],
+    });
+
+    await processEvolutionWebhookEvent(
+      instance,
+      messagesUpsertPayload({ id: 'MSG-1', remoteJid: '5511987654321@s.whatsapp.net', text: 'Oi, tenho interesse' }),
+    );
+
+    const stat = getFakeDbState().instanceDailyStats.find((s) => s.instanceId === 'inst-1');
+    expect(stat?.respondedCount).toBe(1);
+  });
+
+  it('idempotência do contador: reenviar o MESMO evento não soma respondedCount uma segunda vez', async () => {
+    resetFakeDb({
+      leads: [lead({ id: 'lead-1', phoneE164: '+5511987654321', status: 'contacted' })],
+    });
+    const payload = messagesUpsertPayload({ id: 'MSG-1', remoteJid: '5511987654321@s.whatsapp.net', text: 'Oi, tenho interesse' });
+
+    await processEvolutionWebhookEvent(instance, payload);
+    await processEvolutionWebhookEvent(instance, payload); // reenvio (retry real da Evolution)
+
+    const stat = getFakeDbState().instanceDailyStats.find((s) => s.instanceId === 'inst-1');
+    expect(stat?.respondedCount).toBe(1);
+  });
+
+  it('lead tagarela (2 mensagens DIFERENTES no MESMO dia) soma respondedCount só 1x — mede engajamento do lead, não volume de mensagens', async () => {
+    resetFakeDb({
+      leads: [lead({ id: 'lead-1', phoneE164: '+5511987654321', status: 'contacted' })],
+    });
+    // `messageTimestamp` FIXO das outras fixtures (1735689600) cai bem na
+    // virada de meia-noite em `America/Sao_Paulo` (limite exclusivo do dia)
+    // — deslocado 10h para trás aqui só para as DUAS mensagens caírem
+    // inequivocamente dentro do MESMO dia civil, sem depender da borda.
+    const buildPayload = (id: string, text: string, messageTimestamp: number) => ({
+      event: 'messages.upsert',
+      instance: 'vendas-01',
+      data: {
+        key: { id, remoteJid: '5511987654321@s.whatsapp.net', fromMe: false },
+        message: { conversation: text },
+        pushName: 'Lead de teste',
+        messageTimestamp,
+      },
+    });
+
+    await processEvolutionWebhookEvent(instance, buildPayload('MSG-1', 'Oi', 1735689600 - 36000));
+    await processEvolutionWebhookEvent(instance, buildPayload('MSG-2', 'Alô, alguém aí?', 1735689600 - 32400));
+
+    const state = getFakeDbState();
+    expect(state.messages).toHaveLength(2); // as duas mensagens SÃO gravadas
+    const stat = state.instanceDailyStats.find((s) => s.instanceId === 'inst-1');
+    expect(stat?.respondedCount).toBe(1); // mas o contador de engajamento não dobra
+  });
+
+  it('resposta de lead SEM alvo de campanha ativo ainda soma respondedCount — a métrica é da instância, não do funil de uma campanha', async () => {
+    resetFakeDb({
+      leads: [lead({ id: 'lead-1', phoneE164: '+5511987654321', status: 'new' })], // nenhum CampaignTarget seedado
+    });
+
+    await processEvolutionWebhookEvent(
+      instance,
+      messagesUpsertPayload({ id: 'MSG-1', remoteJid: '5511987654321@s.whatsapp.net', text: 'Oi, quero saber mais' }),
+    );
+
+    const stat = getFakeDbState().instanceDailyStats.find((s) => s.instanceId === 'inst-1');
+    expect(stat?.respondedCount).toBe(1);
   });
 
   it('mensagem inbound sem Lead correspondente não lança — só é ignorada', async () => {

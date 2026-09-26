@@ -42,6 +42,17 @@ export interface FakeMessage {
   errorCode: string | null;
 }
 
+/** 🆕 2026-09-26 — `lib/services/webhook.ts#recordInstanceResponseIfFirstToday` (fecha o buraco do "respondidas hoje" sempre zero). Mesma granularidade de produção: `date` é a chave do DIA civil (`localDateKey`), não um timestamp qualquer. */
+export interface FakeInstanceDailyStat {
+  id: string;
+  instanceId: string;
+  date: Date;
+  sentCount: number;
+  failedCount: number;
+  respondedCount: number;
+  blockedCount: number;
+}
+
 export interface FakeCampaignTarget {
   id: string;
   campaignId: string;
@@ -153,6 +164,7 @@ export interface FakeDbSeed {
   whatsAppInstances?: FakeWhatsAppInstance[];
   users?: FakeUser[];
   evolutionServers?: FakeEvolutionServer[];
+  instanceDailyStats?: FakeInstanceDailyStat[];
 }
 
 const store = {
@@ -165,6 +177,7 @@ const store = {
   leadActivities: [] as FakeLeadActivity[],
   users: [] as FakeUser[],
   evolutionServers: [] as FakeEvolutionServer[],
+  instanceDailyStats: [] as FakeInstanceDailyStat[],
 };
 
 let nextId = 1;
@@ -183,6 +196,7 @@ export function resetFakeDb(seed: FakeDbSeed = {}): void {
   store.leadActivities = [];
   store.users = seed.users ? [...seed.users] : [];
   store.evolutionServers = seed.evolutionServers ? [...seed.evolutionServers] : [];
+  store.instanceDailyStats = seed.instanceDailyStats ? [...seed.instanceDailyStats] : [];
   nextId = 1;
 }
 
@@ -297,6 +311,26 @@ export const fakePrismaClient = {
       }
       return store.messages.find((m) => m.id === where.id) ?? null;
     }),
+    // 🆕 2026-09-26 — `lib/services/webhook.ts#recordInstanceResponseIfFirstToday`
+    // ("já respondeu hoje?"). Só o filtro que este chamador de fato usa.
+    findFirst: vi.fn(
+      async ({
+        where,
+      }: {
+        where: { leadId: string; instanceId: string; direction: string; createdAt: { gte: Date; lt: Date } };
+      }) => {
+        return (
+          store.messages.find(
+            (m) =>
+              m.leadId === where.leadId &&
+              m.instanceId === where.instanceId &&
+              m.direction === where.direction &&
+              m.createdAt.getTime() >= where.createdAt.gte.getTime() &&
+              m.createdAt.getTime() < where.createdAt.lt.getTime(),
+          ) ?? null
+        );
+      },
+    ),
     update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
       const message = store.messages.find((m) => m.id === where.id);
       if (!message) throwNotFoundInFake('message');
@@ -469,10 +503,60 @@ export const fakePrismaClient = {
     ),
   },
 
-  /** 🆕 Reconciliação de status (2026-09-24) — `listWhatsAppInstances`. Nenhum teste desta rodada precisa de estatística diária real; `[]` faz `todayStat` cair em `null` (comportamento já coberto pelo `?? 0` em `toInstanceItem`). */
+  /**
+   * 🆕 Reconciliação de status (2026-09-24) — `listWhatsAppInstances`.
+   * `findMany`/`findUnique` continuam roteados pelo SEED (`instanceDailyStats`)
+   * — `[]`/`null` por padrão faz `todayStat` cair em `null` (comportamento já
+   * coberto pelo `?? 0` em `toInstanceItem`), mas testes que seedam a linha
+   * do dia agora a encontram de verdade.
+   *
+   * 🆕 2026-09-26 — `upsert` para `lib/services/webhook.ts#
+   * recordInstanceResponseIfFirstToday` (o contador de "respondidas hoje").
+   * Compara `date` por valor (`getTime()`), não por referência — mesma
+   * granularidade do Postgres real (`@db.Date`, comparação por VALOR).
+   */
   instanceDailyStat: {
-    findMany: vi.fn(async () => []),
-    findUnique: vi.fn(async () => null),
+    findMany: vi.fn(async ({ where }: { where?: { instanceId?: { in: string[] }; date?: Date } } = {}) => {
+      let rows = store.instanceDailyStats;
+      if (where?.instanceId?.in) rows = rows.filter((s) => where.instanceId!.in.includes(s.instanceId));
+      if (where?.date !== undefined) rows = rows.filter((s) => s.date.getTime() === where.date!.getTime());
+      return rows.map((s) => ({ ...s }));
+    }),
+    findUnique: vi.fn(async ({ where }: { where: { instanceId_date: { instanceId: string; date: Date } } }) => {
+      const found = store.instanceDailyStats.find(
+        (s) => s.instanceId === where.instanceId_date.instanceId && s.date.getTime() === where.instanceId_date.date.getTime(),
+      );
+      return found ? { ...found } : null;
+    }),
+    upsert: vi.fn(
+      async ({
+        where,
+        create,
+        update,
+      }: {
+        where: { instanceId_date: { instanceId: string; date: Date } };
+        create: Partial<FakeInstanceDailyStat> & { instanceId: string; date: Date };
+        update: Record<string, unknown>;
+      }) => {
+        const existing = store.instanceDailyStats.find(
+          (s) => s.instanceId === where.instanceId_date.instanceId && s.date.getTime() === where.instanceId_date.date.getTime(),
+        );
+        if (existing) {
+          applyIncrementsOrSets(existing as unknown as Record<string, unknown>, update);
+          return { ...existing };
+        }
+        const created: FakeInstanceDailyStat = {
+          id: genId('daily-stat'),
+          sentCount: 0,
+          failedCount: 0,
+          respondedCount: 0,
+          blockedCount: 0,
+          ...create,
+        };
+        store.instanceDailyStats.push(created);
+        return { ...created };
+      },
+    ),
   },
 
   evolutionServer: {

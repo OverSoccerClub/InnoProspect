@@ -169,6 +169,28 @@ export const instanceDailyStatSchema = z.object({
   sentCount: z.number().int().min(0),
   failedCount: z.number().int().min(0),
   respondedCount: z.number().int().min(0),
+  /**
+   * ⚠️ SEMPRE `0` HOJE — não há fonte de verdade para este número.
+   *
+   * Achado em 26/09 junto com o conserto do `respondedCount` (que tinha o
+   * mesmo sintoma e foi corrigido). A diferença é que `respondedCount` tinha
+   * um gatilho disponível e sem ninguém ligado nele; `blockedCount` não tem
+   * gatilho nenhum: a Evolution API **não emite evento de bloqueio** (o
+   * `@inno/messaging` não conhece nenhum — conferido por grep), e o WhatsApp
+   * não nos avisa quando um contato bloqueia o número. Incrementar isto
+   * exigiria inventar o dado, não ligar um fio.
+   *
+   * Por que não foi REMOVIDO: nada no frontend consome este campo hoje
+   * (nenhum `.tsx` o renderiza), então ele não mente para ninguém na tela —
+   * e a coluna no banco é onde o dado ENTRARIA se um sinal de bloqueio
+   * passar a existir. Removê-lo custaria migração sem ganhar nada.
+   *
+   * 🔒 Não construa tela em cima deste campo sem antes ligar uma fonte.
+   * "0 bloqueios" exibido é uma afirmação que o sistema não pode fazer — é a
+   * mesma classe de defeito que já custou três correções nesta semana (o
+   * "conectado" que não reconciliava, os três campos de campanha lidos por
+   * ninguém, e o `respondedCount`).
+   */
   blockedCount: z.number().int().min(0),
 });
 export type InstanceDailyStat = z.infer<typeof instanceDailyStatSchema>;

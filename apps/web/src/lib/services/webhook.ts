@@ -14,7 +14,7 @@ import {
   type InboundMessageEvent,
   type MessageStatusEvent,
 } from '@inno/messaging';
-import { checkStatusTransition, toE164 } from '@inno/core';
+import { checkStatusTransition, localDateKey, toE164 } from '@inno/core';
 import { advanceCampaignTargetStatus, skipPendingCampaignTargetsForPhone } from '@/lib/services/campaign-targets';
 import { applyInstanceConnectionTransition } from '@/lib/services/instance-connection';
 import { decryptEvolutionApiKey } from '@inno/sending';
@@ -187,6 +187,71 @@ async function registerOptOutFromInbound(
   }
 }
 
+/**
+ * 🆕 Correção 2026-09-26 (achado do dono: o card de instância jurava "0
+ * respondidas hoje" pra sempre — `InstanceDailyStat.respondedCount` nunca
+ * era escrito em lugar nenhum, só `sentCount`/`failedCount` em
+ * `packages/sending/src/send-one.ts`). Decisões desta rodada, pedidas
+ * explicitamente para eu tomar:
+ *
+ * 1. **O que conta como "respondida":** no máximo 1 incremento por (lead,
+ *    instância, DIA) — um lead tagarela que manda 5 mensagens no mesmo dia
+ *    conta 1, não 5 (quem olha o card quer medir ENGAJAMENTO do número, não
+ *    volume de mensagens). Isto é uma regra DIFERENTE da de
+ *    `Campaign.respondedCount` (`advanceCampaignTargetStatus`, funil que só
+ *    avança e nunca reconta o MESMO alvo) — aqui a chave é lead+dia, não
+ *    "primeira vez que ESTE alvo de campanha chegou a `responded`", porque a
+ *    métrica é da INSTÂNCIA: o mesmo lead pode responder de novo em outro
+ *    dia (ou fora de qualquer campanha) e isso É um novo dado de engajamento.
+ * 2. **"Dia" de qual fuso:** `localDateKey` (`@inno/core`, `APP_TIMEZONE`) do
+ *    TIMESTAMP do evento (`event.timestamp` — quando a resposta chegou),
+ *    não do instante em que este webhook foi processado. Mesma granularidade
+ *    que `Message.createdAt` já grava para esta mesma mensagem.
+ * 3. **Resposta de quem não é alvo de campanha:** conta igual — a métrica é
+ *    da instância (engajamento do número), não do funil de uma campanha
+ *    específica. Por isso este helper não depende de `activeTarget`.
+ * 4. **Idempotência:** o chamador só invoca esta função quando a Message
+ *    ainda NÃO existia (checagem PRÉ-upsert por `providerMessageId`, feita
+ *    em `handleInboundMessage` ANTES de qualquer escrita — mesmo padrão de
+ *    "checa antes de agir" de `registerOptOutFromInbound`). Reenvio do MESMO
+ *    evento (retry real da Evolution) nunca chega a chamar isto de novo.
+ * 5. **Linha do dia pode não existir ainda** (`InstanceDailyStat` só nasce no
+ *    primeiro ENVIO) — `upsert`, e o `create` não deixa os outros contadores
+ *    indefinidos: eles nascem no `@default(0)` do schema, mesmo padrão do
+ *    write-ahead de `send-one.ts` (`create: { ..., sentCount: 1 }`).
+ *
+ * Fora de escopo, de propósito: as heurísticas de shadow-ban por taxa de
+ * RESPOSTA (ARQUITETURA §6.6) — Fase 5/6, sem histórico suficiente ainda
+ * (`[[convention-periodicos-warmup-fase4f5]]`). Esta função só fecha o
+ * buraco de DADO que as impediria de funcionar mesmo quando chegar a vez
+ * delas; não implementa a heurística em si.
+ */
+async function recordInstanceResponseIfFirstToday(
+  tx: Prisma.TransactionClient,
+  instanceId: string,
+  leadId: string,
+  eventTimestampIso: string,
+): Promise<void> {
+  const tz = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
+  const dayStart = localDateKey(new Date(eventTimestampIso), tz);
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+  // Chamado ANTES do `message.upsert` deste evento (ver `handleInboundMessage`)
+  // — a mensagem de hoje ainda não está gravada, então nenhuma exclusão por
+  // `providerMessageId` é necessária aqui: qualquer inbound encontrado já é
+  // uma resposta ANTERIOR de verdade deste lead nesta instância, hoje.
+  const respondedEarlierToday = await tx.message.findFirst({
+    where: { leadId, instanceId, direction: 'inbound', createdAt: { gte: dayStart, lt: dayEnd } },
+  });
+  if (respondedEarlierToday) return;
+
+  await tx.instanceDailyStat.upsert({
+    where: { instanceId_date: { instanceId, date: dayStart } },
+    create: { instanceId, date: dayStart, respondedCount: 1 },
+    update: { respondedCount: { increment: 1 } },
+  });
+}
+
 async function handleInboundMessage(instance: WhatsAppInstance, event: InboundMessageEvent): Promise<void> {
   const phoneE164 = jidToE164(event.fromJid);
 
@@ -204,6 +269,15 @@ async function handleInboundMessage(instance: WhatsAppInstance, event: InboundMe
         instanceId: instance.id,
       });
     } else {
+      // Checagem PRÉ-upsert (ANTES de qualquer escrita) — decide se este
+      // evento é NOVO, e é o que sustenta a idempotência de
+      // `recordInstanceResponseIfFirstToday` abaixo (ver comentário dela,
+      // item 4): reenvio do MESMO `providerMessageId` não conta 2x.
+      const existingMessage = await tx.message.findUnique({ where: { providerMessageId: event.providerMessageId } });
+      if (!existingMessage) {
+        await recordInstanceResponseIfFirstToday(tx, instance.id, lead.id, event.timestamp);
+      }
+
       // Idempotência por `providerMessageId` (ARQUITETURA §4.8) — upsert, não
       // `findFirst` + `create` separado (corrida entre reenvios concorrentes).
       await tx.message.upsert({
